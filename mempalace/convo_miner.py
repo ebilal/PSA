@@ -286,7 +286,7 @@ def mine_convos(
     print(f"  Palace:  {palace_path}")
     if dry_run:
         print("  DRY RUN — nothing will be filed")
-    print(f"{'─' * 55}\n")
+    print(f"{'-' * 55}\n")
 
     collection = get_collection(palace_path) if not dry_run else None
 
