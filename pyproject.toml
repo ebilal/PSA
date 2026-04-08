@@ -25,8 +25,9 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "chromadb>=0.5.0,<0.7",
     "pyyaml>=6.0",
+    "sentence-transformers>=2.2",
+    "numpy>=1.21",
 ]
 
 [project.urls]
@@ -38,8 +39,18 @@ Repository = "https://github.com/milla-jovovich/psa"
 psa = "psa:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0"]
+# PSA atlas and pipeline (core PSA feature set)
+atlas = ["scikit-learn>=1.0", "faiss-cpu>=1.7"]
+# Selector training
+training = ["torch>=2.0", "sentence-transformers>=2.2"]
+# Legacy palace migration from ChromaDB
+migration = ["chromadb>=0.5.0,<0.7"]
+# Legacy palace raw storage (backward compat)
+palace = ["chromadb>=0.5.0,<0.7"]
+# Spell checking
 spellcheck = ["autocorrect>=2.0"]
+# Development and testing
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "chromadb>=0.5.0,<0.7"]
 
 [dependency-groups]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0"]

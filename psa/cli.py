@@ -45,32 +45,32 @@ from .config import MempalaceConfig
 
 
 def cmd_init(args):
+    """Set up PSA for a directory — creates config and mines initial memories."""
     import json
     from pathlib import Path
-    from .entity_detector import scan_for_detection, detect_entities, confirm_entities
-    from .room_detector_local import detect_rooms_local
 
-    # Pass 1: auto-detect people and projects from file content
-    print(f"\n  Scanning for entities in: {args.dir}")
-    files = scan_for_detection(args.dir)
-    if files:
-        print(f"  Reading {len(files)} files...")
-        detected = detect_entities(files)
-        total = len(detected["people"]) + len(detected["projects"]) + len(detected["uncertain"])
-        if total > 0:
-            confirmed = confirm_entities(detected, yes=getattr(args, "yes", False))
-            # Save confirmed entities to <project>/entities.json for the miner
-            if confirmed["people"] or confirmed["projects"]:
-                entities_path = Path(args.dir).expanduser().resolve() / "entities.json"
-                with open(entities_path, "w") as f:
-                    json.dump(confirmed, f, indent=2)
-                print(f"  Entities saved: {entities_path}")
-        else:
-            print("  No entities detected — proceeding with directory-based rooms.")
+    project_dir = str(Path(args.dir).expanduser().resolve())
+    print(f"\n  Setting up PSA for: {project_dir}")
 
-    # Pass 2: detect rooms from folder structure
-    detect_rooms_local(project_dir=args.dir, yes=getattr(args, "yes", False))
-    MempalaceConfig().init()
+    # Initialize config directory
+    cfg = MempalaceConfig()
+    cfg.init()
+    print(f"  Config ready at {cfg._config_dir}")
+
+    # Optionally mine the directory now
+    if not getattr(args, "skip_mine", False):
+        from .miner import mine
+        print(f"\n  Mining {project_dir}...")
+        mine(
+            project_dir=project_dir,
+            palace_path=cfg.palace_path,
+            agent="psa",
+            limit=0,
+            dry_run=False,
+            respect_gitignore=True,
+            include_ignored=[],
+        )
+    print("\n  Done. Run 'psa atlas build' to build the PSA atlas.")
 
 
 def cmd_mine(args):
@@ -107,33 +107,82 @@ def cmd_mine(args):
 
 
 def cmd_search(args):
-    from .searcher import search, SearchError
+    """Search — PSA pipeline by default, raw ChromaDB as fallback."""
+    cfg = MempalaceConfig()
+    query = args.query
+    n_results = args.results
 
-    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    # Try PSA pipeline first (psa_mode=primary)
+    tenant_id = cfg.tenant_id
+    try:
+        from .pipeline import PSAPipeline
+        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, token_budget=cfg.token_budget)
+        result = pipeline.query(query)
+        print(f"\n── PSA Search: {query!r} ──\n")
+        print(result.text or "(no context found)")
+        print(f"\n[{len(result.selected_anchors)} anchors selected, "
+              f"{result.token_count} tokens, "
+              f"{result.timing.total_ms:.0f}ms]")
+        return
+    except FileNotFoundError:
+        pass  # no atlas yet — fall through to raw search
+    except Exception:
+        pass  # pipeline error — fall through to raw search
+
+    # Fallback: raw ChromaDB search
+    from .searcher import search, SearchError
+    palace_path = os.path.expanduser(args.palace) if args.palace else cfg.palace_path
     try:
         search(
-            query=args.query,
+            query=query,
             palace_path=palace_path,
-            wing=args.wing,
-            room=args.room,
-            n_results=args.results,
+            wing=getattr(args, "wing", None),
+            room=getattr(args, "room", None),
+            n_results=n_results,
         )
     except SearchError:
         sys.exit(1)
 
 
 def cmd_wakeup(args):
-    """Show L0 (identity) + L1 (essential story) — the wake-up context."""
-    from .layers import MemoryStack
+    """Show PSA atlas status as session wake-up context."""
+    cfg = MempalaceConfig()
+    tenant_id = cfg.tenant_id
 
-    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
-    stack = MemoryStack(palace_path=palace_path)
+    try:
+        from .tenant import TenantManager
+        from .atlas import AtlasManager
+        from .memory_object import MemoryStore
 
-    text = stack.wake_up(wing=args.wing)
-    tokens = len(text) // 4
-    print(f"Wake-up text (~{tokens} tokens):")
-    print("=" * 50)
-    print(text)
+        tm = TenantManager()
+        tenant = tm.get_or_create(tenant_id)
+        store = MemoryStore(db_path=tenant.memory_db_path)
+        mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+        atlas = mgr.get_atlas()
+
+        if atlas is None:
+            print(f"No PSA atlas built. Run 'psa atlas build' first.")
+            print(f"(For legacy wake-up: PSA_MODE=off psa legacy wake-up)")
+            return
+
+        total = sum(
+            len(store.query_by_anchor(tenant_id=tenant_id, anchor_id=c.anchor_id, limit=100_000))
+            for c in atlas.cards
+        )
+        learned = sum(1 for c in atlas.cards if not c.is_novelty)
+        novelty = sum(1 for c in atlas.cards if c.is_novelty)
+        print(f"\n── PSA Session Wake-Up (tenant: {tenant_id}) ──")
+        print(f"  Atlas v{atlas.version}: {len(atlas.cards)} anchors "
+              f"({learned} learned, {novelty} novelty)")
+        print(f"  Memories indexed: {total}")
+        print(f"\nTop anchors by memory count:")
+        sorted_cards = sorted(atlas.cards, key=lambda c: c.memory_count, reverse=True)
+        for card in sorted_cards[:5]:
+            print(f"  [{card.anchor_id}] {card.name} — {card.meaning[:60]}")
+        print(f"\nUse 'psa search <query>' to retrieve memories.")
+    except Exception as e:
+        print(f"PSA wake-up failed: {e}")
+        print("Run 'psa atlas build' first.")
 
 
 def cmd_split(args):
@@ -409,6 +458,38 @@ def cmd_migrate(args):
         sys.exit(1)
 
 
+def cmd_legacy(args):
+    """Route to a legacy palace command."""
+    action = getattr(args, "legacy_action", None)
+    if not action:
+        print("Usage: psa legacy {compress,wake-up}")
+        print("Note: set PSA_MODE=off for full legacy mode.")
+        return
+    if action == "compress":
+        cmd_compress(args)
+    elif action == "wake-up":
+        _legacy_wakeup(args)
+    else:
+        print(f"Unknown legacy action: {action}")
+
+
+def _legacy_wakeup(args):
+    """Legacy L0+L1 wake-up via MemoryStack (requires layers.py)."""
+    try:
+        from .layers import MemoryStack
+        palace_path = os.path.expanduser(args.palace) if getattr(args, "palace", None) else MempalaceConfig().palace_path
+        stack = MemoryStack(palace_path=palace_path)
+        text = stack.wake_up(wing=getattr(args, "wing", None))
+        tokens = len(text) // 4
+        print(f"Wake-up text (~{tokens} tokens):")
+        print("=" * 50)
+        print(text)
+    except ImportError:
+        print("Legacy wake-up requires the MemoryStack layer (layers.py). "
+              "This file has been removed in PSA primary mode.")
+        print("Use 'psa wake-up' for PSA atlas wake-up context.")
+
+
 def cmd_hook(args):
     """Run hook logic: reads JSON from stdin, outputs JSON to stdout."""
     from .hooks_cli import run_hook
@@ -609,21 +690,22 @@ def main():
     p_search.add_argument("--room", default=None, help="Limit to one room")
     p_search.add_argument("--results", type=int, default=5, help="Number of results")
 
-    # compress
-    p_compress = sub.add_parser(
-        "compress", help="Compress drawers using AAAK Dialect (~30x reduction)"
-    )
-    p_compress.add_argument("--wing", default=None, help="Wing to compress (default: all wings)")
-    p_compress.add_argument(
-        "--dry-run", action="store_true", help="Preview compression without storing"
-    )
-    p_compress.add_argument(
-        "--config", default=None, help="Entity config JSON (e.g. entities.json)"
-    )
-
     # wake-up
-    p_wakeup = sub.add_parser("wake-up", help="Show L0 + L1 wake-up context (~600-900 tokens)")
-    p_wakeup.add_argument("--wing", default=None, help="Wake-up for a specific project/wing")
+    p_wakeup = sub.add_parser("wake-up", help="Show PSA atlas session wake-up context")
+    p_wakeup.add_argument("--wing", default=None, help="(legacy, ignored in PSA mode)")
+
+    # legacy — wraps old palace commands for backward compatibility
+    p_legacy = sub.add_parser(
+        "legacy",
+        help="Run a legacy palace command (compress, wake-up). Set PSA_MODE=off for full legacy mode.",
+    )
+    legacy_sub = p_legacy.add_subparsers(dest="legacy_action")
+    p_l_compress = legacy_sub.add_parser("compress", help="Compress drawers using AAAK Dialect")
+    p_l_compress.add_argument("--wing", default=None)
+    p_l_compress.add_argument("--dry-run", action="store_true")
+    p_l_compress.add_argument("--config", default=None)
+    p_l_wakeup = legacy_sub.add_parser("wake-up", help="Show L0 + L1 wake-up context")
+    p_l_wakeup.add_argument("--wing", default=None)
 
     # split
     p_split = sub.add_parser(
@@ -733,6 +815,13 @@ def main():
         cmd_atlas(args)
         return
 
+    if args.command == "legacy":
+        if not getattr(args, "legacy_action", None):
+            p_legacy.print_help()
+            return
+        cmd_legacy(args)
+        return
+
     if args.command == "hook":
         if not getattr(args, "hook_action", None):
             p_hook.print_help()
@@ -754,7 +843,6 @@ def main():
         "mine": cmd_mine,
         "split": cmd_split,
         "search": cmd_search,
-        "compress": cmd_compress,
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,

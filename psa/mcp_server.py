@@ -36,7 +36,6 @@ from datetime import datetime
 from .config import MempalaceConfig
 from .version import __version__
 from .searcher import search_memories
-from .palace_graph import traverse, find_tunnels, graph_stats
 import chromadb
 
 from .knowledge_graph import KnowledgeGraph
@@ -255,30 +254,6 @@ def tool_check_duplicate(content: str, threshold: float = 0.9):
 def tool_get_aaak_spec():
     """Return the AAAK dialect specification."""
     return {"aaak_spec": AAAK_SPEC}
-
-
-def tool_traverse_graph(start_room: str, max_hops: int = 2):
-    """Walk the palace graph from a room. Find connected ideas across wings."""
-    col = _get_collection()
-    if not col:
-        return _no_palace()
-    return traverse(start_room, col=col, max_hops=max_hops)
-
-
-def tool_find_tunnels(wing_a: str = None, wing_b: str = None):
-    """Find rooms that bridge two wings — the hallways connecting domains."""
-    col = _get_collection()
-    if not col:
-        return _no_palace()
-    return find_tunnels(wing_a, wing_b, col=col)
-
-
-def tool_graph_stats():
-    """Palace graph overview: nodes, tunnels, edges, connectivity."""
-    col = _get_collection()
-    if not col:
-        return _no_palace()
-    return graph_stats(col=col)
 
 
 # ==================== WRITE TOOLS ====================
@@ -767,40 +742,6 @@ TOOLS = {
         "description": "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_kg_stats,
-    },
-    "psa_traverse": {
-        "description": "Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "start_room": {
-                    "type": "string",
-                    "description": "Room to start from (e.g. 'chromadb-setup', 'riley-school')",
-                },
-                "max_hops": {
-                    "type": "integer",
-                    "description": "How many connections to follow (default: 2)",
-                },
-            },
-            "required": ["start_room"],
-        },
-        "handler": tool_traverse_graph,
-    },
-    "psa_find_tunnels": {
-        "description": "Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "wing_a": {"type": "string", "description": "First wing (optional)"},
-                "wing_b": {"type": "string", "description": "Second wing (optional)"},
-            },
-        },
-        "handler": tool_find_tunnels,
-    },
-    "psa_graph_stats": {
-        "description": "Palace graph overview: total rooms, tunnel connections, edges between wings.",
-        "input_schema": {"type": "object", "properties": {}},
-        "handler": tool_graph_stats,
     },
     "psa_search": {
         "description": "Semantic search. Returns verbatim drawer content with similarity scores.",

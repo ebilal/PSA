@@ -401,6 +401,7 @@ def mine_convos(
 
 def _mine_convos_psa(convo_dir: str, files: list):
     """Run PSA consolidation over conversation files (dual-path, additive)."""
+    from pathlib import Path
     try:
         from .config import MempalaceConfig
         from .consolidation import ConsolidationPipeline
@@ -425,7 +426,6 @@ def _mine_convos_psa(convo_dir: str, files: list):
             text = filepath.read_text(encoding="utf-8", errors="replace")
         except (OSError, AttributeError):
             try:
-                from pathlib import Path
                 text = Path(str(filepath)).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue

@@ -18,7 +18,7 @@ DEFAULT_ATLAS_SIZE = 256          # 224 learned + 32 novelty anchors (V1 fixed)
 DEFAULT_TOKEN_BUDGET = 6000       # packed context token budget
 DEFAULT_SELECTOR_THRESHOLD = 0.3  # minimum selector score to include an anchor
 DEFAULT_TENANT_ID = "default"
-DEFAULT_PSA_MODE = "off"          # "off" | "side-by-side" | "primary"
+DEFAULT_PSA_MODE = "primary"       # "off" | "side-by-side" | "primary"
 
 DEFAULT_TOPIC_WINGS = [
     "emotions",
@@ -178,9 +178,9 @@ class MempalaceConfig:
         """
         PSA operating mode.
 
-        "off"          — existing raw ChromaDB search only (default)
+        "primary"      — PSA is the primary search path (default)
         "side-by-side" — PSA runs alongside raw; results from both available
-        "primary"      — PSA is the primary search path
+        "off"          — existing raw ChromaDB search only (legacy fallback)
         """
         return (
             os.environ.get("PSA_MODE")
