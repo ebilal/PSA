@@ -105,7 +105,7 @@ pip install "psa[atlas,training]"  # full stack
 Or install from source:
 
 ```bash
-git clone https://github.com/milla-jovovich/psa
+git clone https://github.com/ebilal/PSA
 cd psa
 pip install -e ".[atlas,training,dev]"
 ```
@@ -398,10 +398,10 @@ claude mcp add psa -- python -m psa.mcp_server
 
 <!-- Link Definitions -->
 [version-shield]: https://img.shields.io/badge/version-4.0.0-4dc9f6?style=flat-square&labelColor=0a0e14
-[release-link]: https://github.com/milla-jovovich/psa/releases
+[release-link]: https://github.com/ebilal/PSA/releases
 [python-shield]: https://img.shields.io/badge/python-3.9+-7dd8f8?style=flat-square&labelColor=0a0e14&logo=python&logoColor=7dd8f8
 [python-link]: https://www.python.org/
 [license-shield]: https://img.shields.io/badge/license-MIT-b0e8ff?style=flat-square&labelColor=0a0e14
-[license-link]: https://github.com/milla-jovovich/psa/blob/main/LICENSE
+[license-link]: https://github.com/ebilal/PSA/blob/main/LICENSE
 [discord-shield]: https://img.shields.io/badge/discord-join-5865F2?style=flat-square&labelColor=0a0e14&logo=discord&logoColor=5865F2
 [discord-link]: https://discord.com/invite/ycTQQCu6kn
