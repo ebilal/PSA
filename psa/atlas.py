@@ -1,0 +1,541 @@
+"""
+atlas.py — PSA Atlas: fixed V1 sizing, mini-batch spherical k-means, versioning.
+
+The Atlas is a two-level index over the tenant's memory space:
+  - 224 "learned" anchors from spherical k-means clustering
+  - 32  "novelty" anchors reserved for low-density / high-distance memories
+
+V1 design decisions (from the plan):
+  - Atlas size is FIXED at 256 (224 + 32). No adaptive sizing.
+  - If the corpus is too small for a meaningful 256-anchor atlas, build is
+    blocked until the minimum corpus size is met.
+  - Stability check: run k-means with 3 seeds; reject proposals where
+    cluster assignment variance across seeds > STABILITY_THRESHOLD.
+
+Minimum corpus gate:
+  - Fewer than MIN_MEMORIES_FOR_ATLAS non-duplicate memories with embeddings
+    → raise AtlasCorpusTooSmall; the tenant stays on the baseline path.
+"""
+
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+from .anchor import AnchorCard, AnchorIndex
+from .memory_object import MemoryObject, MemoryStore
+
+logger = logging.getLogger("psa.atlas")
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+V1_LEARNED_ANCHORS = 224
+V1_NOVELTY_ANCHORS = 32
+V1_TOTAL_ANCHORS = V1_LEARNED_ANCHORS + V1_NOVELTY_ANCHORS  # 256
+
+N_SEEDS = 3               # number of k-means seeds for stability check
+MAX_ITERATIONS = 200      # maximum k-means iterations per seed
+CONVERGENCE_TOL = 1e-4    # centroid shift threshold for convergence
+STABILITY_THRESHOLD = 0.15  # max allowed fraction of reassigned memories across seeds
+NOVELTY_DISTANCE_THRESHOLD = 0.3  # cosine distance to nearest learned anchor → novelty
+
+MIN_MEMORIES_FOR_ATLAS = 500  # hard minimum for a 256-anchor atlas
+
+
+# ── Exceptions ────────────────────────────────────────────────────────────────
+
+
+class AtlasCorpusTooSmall(Exception):
+    """Raised when the tenant has fewer memories than MIN_MEMORIES_FOR_ATLAS."""
+
+
+class AtlasUnstable(Exception):
+    """Raised when k-means is unstable across seeds (cluster assignments diverge)."""
+
+
+# ── Atlas dataclass ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class AtlasStats:
+    n_memories: int
+    n_anchors_learned: int
+    n_anchors_novelty: int
+    mean_cluster_size: float
+    min_cluster_size: int
+    max_cluster_size: int
+    stability_score: float  # fraction of memories with consistent assignment across seeds
+    built_at: str
+
+
+@dataclass
+class Atlas:
+    """A versioned PSA atlas for a single tenant."""
+
+    version: int
+    tenant_id: str
+    anchor_index: AnchorIndex
+    stats: AtlasStats
+    anchor_dir: str  # absolute path where this atlas is stored
+    cards: List[AnchorCard] = field(default_factory=list)
+
+    def assign_memory(
+        self, memory: MemoryObject
+    ) -> Tuple[int, Optional[int], float]:
+        """
+        Assign a memory object to anchor(s).
+
+        Returns (primary_anchor_id, secondary_anchor_id_or_None, confidence).
+        """
+        if memory.embedding is None:
+            raise ValueError(f"Memory {memory.memory_object_id} has no embedding.")
+        results = self.anchor_index.search(memory.embedding, top_k=3)
+        if not results:
+            return -1, None, 0.0
+        primary_id, primary_score = results[0]
+        secondary_id = results[1][0] if len(results) > 1 else None
+        return primary_id, secondary_id, float(primary_score)
+
+    def save(self):
+        """Persist the atlas (anchor cards + index) to disk."""
+        os.makedirs(self.anchor_dir, exist_ok=True)
+        self.anchor_index.save(self.anchor_dir)
+        meta = {
+            "version": self.version,
+            "tenant_id": self.tenant_id,
+            "stats": {
+                "n_memories": self.stats.n_memories,
+                "n_anchors_learned": self.stats.n_anchors_learned,
+                "n_anchors_novelty": self.stats.n_anchors_novelty,
+                "mean_cluster_size": self.stats.mean_cluster_size,
+                "min_cluster_size": self.stats.min_cluster_size,
+                "max_cluster_size": self.stats.max_cluster_size,
+                "stability_score": self.stats.stability_score,
+                "built_at": self.stats.built_at,
+            },
+        }
+        with open(os.path.join(self.anchor_dir, "atlas_meta.json"), "w") as f:
+            json.dump(meta, f, indent=2)
+
+    @classmethod
+    def load(cls, anchor_dir: str) -> "Atlas":
+        """Load an atlas from disk."""
+        meta_path = os.path.join(anchor_dir, "atlas_meta.json")
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(f"No atlas_meta.json at {anchor_dir}")
+        with open(meta_path) as f:
+            meta = json.load(f)
+        # Dim is inferred from saved centroids in AnchorIndex.load
+        anchor_index = AnchorIndex.load(anchor_dir)
+        stats = AtlasStats(**meta["stats"])
+        return cls(
+            version=meta["version"],
+            tenant_id=meta["tenant_id"],
+            anchor_index=anchor_index,
+            stats=stats,
+            anchor_dir=anchor_dir,
+            cards=anchor_index._cards,
+        )
+
+
+# ── Spherical k-means ─────────────────────────────────────────────────────────
+
+
+def _l2_normalize_rows(X: np.ndarray) -> np.ndarray:
+    """L2-normalize each row of a matrix in place (returns normalized copy)."""
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return X / norms
+
+
+def _spherical_kmeans(
+    embeddings: np.ndarray,
+    k: int,
+    seed: int,
+    max_iterations: int = MAX_ITERATIONS,
+    tol: float = CONVERGENCE_TOL,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Mini-batch spherical k-means on L2-normalized embeddings.
+
+    Parameters
+    ----------
+    embeddings: (n_samples, dim) float32, already L2-normalized
+    k: number of clusters
+    seed: random seed for centroid initialization
+    max_iterations: maximum iterations
+    tol: centroid shift threshold for early stopping
+
+    Returns
+    -------
+    centroids: (k, dim) float32, L2-normalized cluster centroids
+    assignments: (n_samples,) int32 cluster assignment for each sample
+    """
+    rng = np.random.default_rng(seed)
+    n_samples, dim = embeddings.shape
+
+    # k-means++ initialization on the sphere
+    init_idx = [rng.integers(n_samples)]
+    for _ in range(k - 1):
+        sims = embeddings @ embeddings[init_idx].T  # (n, len(init_idx))
+        max_sims = sims.max(axis=1)
+        probs = 1.0 - max_sims  # distance proxy: 1 - max_cosine
+        probs = np.maximum(probs, 0)
+        total = probs.sum()
+        if total == 0:
+            probs = np.ones(n_samples) / n_samples
+        else:
+            probs /= total
+        init_idx.append(rng.choice(n_samples, p=probs))
+
+    centroids = embeddings[init_idx].copy()
+    centroids = _l2_normalize_rows(centroids)
+
+    assignments = np.zeros(n_samples, dtype=np.int32)
+
+    for _iter in range(max_iterations):
+        # Assignment step: each sample → nearest centroid (max cosine sim)
+        sims = embeddings @ centroids.T  # (n_samples, k)
+        new_assignments = sims.argmax(axis=1).astype(np.int32)
+
+        # Update step: new centroid = mean of assigned samples, then L2-normalize
+        new_centroids = np.zeros_like(centroids)
+        for ki in range(k):
+            mask = new_assignments == ki
+            if mask.sum() == 0:
+                # Empty cluster: reinitialize to a random sample
+                new_centroids[ki] = embeddings[rng.integers(n_samples)]
+            else:
+                new_centroids[ki] = embeddings[mask].mean(axis=0)
+        new_centroids = _l2_normalize_rows(new_centroids)
+
+        # Convergence check
+        shift = np.linalg.norm(new_centroids - centroids, axis=1).max()
+        centroids = new_centroids
+        assignments = new_assignments
+
+        if shift < tol:
+            logger.debug("k-means converged at iteration %d (shift=%.6f)", _iter + 1, shift)
+            break
+
+    return centroids, assignments
+
+
+def _stability_score(assignments_list: List[np.ndarray], n_samples: int) -> float:
+    """
+    Compute cross-seed stability: fraction of samples with identical
+    assignment cluster (by centroid position) across all seeds.
+
+    Since cluster labels may be permuted between seeds, we use pairwise
+    agreement: two samples that are in the same cluster in seed 0 should
+    also be in the same cluster in seed 1.
+    """
+    if len(assignments_list) < 2:
+        return 1.0
+
+    # Use seed 0 as reference; compare pair-wise agreement with each other seed
+    ref = assignments_list[0]
+    agreements = []
+    for other in assignments_list[1:]:
+        # For each sample i, check if all samples assigned with it in ref
+        # are also together in other
+        same_in_ref = ref[:, None] == ref[None, :]  # (n, n) bool
+        same_in_other = other[:, None] == other[None, :]
+        agreement = (same_in_ref == same_in_other).mean()
+        agreements.append(agreement)
+    return float(np.mean(agreements))
+
+
+# ── Card generation (stub — full Qwen-based generation in Phase 3) ────────────
+
+
+def _generate_stub_card(
+    anchor_id: int,
+    centroid: List[float],
+    sample_memories: List[MemoryObject],
+    is_novelty: bool = False,
+) -> AnchorCard:
+    """
+    Generate a placeholder AnchorCard from cluster samples.
+
+    Full semantic card generation (via Qwen) is a Phase 3 deliverable.
+    This stub creates a card from memory titles so the atlas is usable
+    immediately after Phase 2.
+    """
+    if is_novelty:
+        name = f"novelty_{anchor_id}"
+        meaning = "Low-density or high-distance memories not fitting learned clusters."
+        include_terms = []
+        exclude_terms = []
+        prototypes = []
+        near_but_different = []
+    else:
+        titles = [m.title for m in sample_memories[:5]]
+        memory_types = list({m.memory_type.value for m in sample_memories[:10]})
+        name = f"cluster_{anchor_id}"
+        meaning = (
+            f"A cluster of {len(sample_memories)} memories. "
+            f"Representative: {'; '.join(titles[:3])}."
+        )
+        include_terms = []
+        exclude_terms = []
+        prototypes = titles[:5]
+        near_but_different = []
+
+    return AnchorCard(
+        anchor_id=anchor_id,
+        name=name,
+        meaning=meaning,
+        memory_types=[m.memory_type.value for m in sample_memories[:5]] if not is_novelty else [],
+        include_terms=include_terms,
+        exclude_terms=exclude_terms,
+        prototype_examples=prototypes,
+        near_but_different=near_but_different,
+        centroid=centroid,
+        memory_count=len(sample_memories),
+        is_novelty=is_novelty,
+    )
+
+
+# ── AtlasBuilder ──────────────────────────────────────────────────────────────
+
+
+class AtlasBuilder:
+    """
+    Builds a fixed V1 atlas (224 learned + 32 novelty anchors) from a
+    tenant's memory embeddings.
+
+    Usage::
+
+        store = MemoryStore(...)
+        builder = AtlasBuilder(store=store, tenant_id="default")
+        atlas = builder.build_atlas(version=1, output_dir="~/.psa/tenants/default/atlas_v1")
+    """
+
+    def __init__(self, store: MemoryStore, tenant_id: str):
+        self.store = store
+        self.tenant_id = tenant_id
+
+    def build_atlas(self, version: int = 1, output_dir: Optional[str] = None) -> Atlas:
+        """
+        Build a V1 atlas from the tenant's embedded memories.
+
+        Raises
+        ------
+        AtlasCorpusTooSmall
+            If the tenant has fewer than MIN_MEMORIES_FOR_ATLAS memories.
+        AtlasUnstable
+            If k-means clusters are unstable across seeds.
+        """
+        # Step 1: Collect embeddings
+        memories = self.store.get_all_with_embeddings(self.tenant_id)
+
+        if len(memories) < MIN_MEMORIES_FOR_ATLAS:
+            raise AtlasCorpusTooSmall(
+                f"Tenant '{self.tenant_id}' has {len(memories)} embedded memories "
+                f"(minimum {MIN_MEMORIES_FOR_ATLAS} required for a {V1_TOTAL_ANCHORS}-anchor atlas). "
+                f"Continue ingesting memories and retry."
+            )
+
+        logger.info(
+            "Building atlas v%d for tenant '%s' from %d memories",
+            version,
+            self.tenant_id,
+            len(memories),
+        )
+
+        embeddings = np.array([m.embedding for m in memories], dtype=np.float32)
+        embeddings = _l2_normalize_rows(embeddings)
+
+        # Step 2: Run spherical k-means with N_SEEDS seeds, check stability
+        k = V1_LEARNED_ANCHORS
+        all_assignments: List[np.ndarray] = []
+        all_centroids: List[np.ndarray] = []
+
+        for seed in range(N_SEEDS):
+            logger.info("k-means seed %d/%d (k=%d)...", seed + 1, N_SEEDS, k)
+            centroids, assignments = _spherical_kmeans(embeddings, k=k, seed=seed)
+            all_centroids.append(centroids)
+            all_assignments.append(assignments)
+
+        stability = _stability_score(all_assignments, len(memories))
+        logger.info("Atlas stability score: %.3f", stability)
+
+        if stability < (1.0 - STABILITY_THRESHOLD):
+            raise AtlasUnstable(
+                f"Atlas for tenant '{self.tenant_id}' is unstable across {N_SEEDS} seeds "
+                f"(stability={stability:.3f}, threshold={1.0 - STABILITY_THRESHOLD:.3f}). "
+                f"This usually indicates insufficient or highly heterogeneous training data. "
+                f"Investigate data quality before proceeding."
+            )
+
+        # Use seed 0 assignments (all seeds were stable enough)
+        centroids = all_centroids[0]
+        assignments = all_assignments[0]
+
+        # Step 3: Build AnchorCards for learned clusters
+        cards: List[AnchorCard] = []
+        cluster_memories: dict = {}  # anchor_id → list of MemoryObjects
+        for idx, (mem, cluster_id) in enumerate(zip(memories, assignments)):
+            cluster_memories.setdefault(int(cluster_id), []).append(mem)
+
+        for cluster_id in range(k):
+            cluster_mems = cluster_memories.get(cluster_id, [])
+            centroid_list = centroids[cluster_id].tolist()
+            card = _generate_stub_card(
+                anchor_id=cluster_id,
+                centroid=centroid_list,
+                sample_memories=cluster_mems,
+            )
+            card.memory_count = len(cluster_mems)
+            cards.append(card)
+
+        # Step 4: Reserve novelty anchors (high-distance regions)
+        # Novelty centroids are placed at the "most distant" points from learned clusters
+        # For V1: use the N memories with the lowest max-cosine-sim to any learned centroid
+        all_sims = embeddings @ centroids.T  # (n_memories, k)
+        max_sims = all_sims.max(axis=1)  # highest similarity to any learned cluster
+        novelty_indices = np.argsort(max_sims)[:V1_NOVELTY_ANCHORS]  # lowest → farthest out
+
+        novelty_centroids = embeddings[novelty_indices]
+        novelty_centroids = _l2_normalize_rows(novelty_centroids)
+
+        for i, (ni, nc) in enumerate(zip(novelty_indices, novelty_centroids)):
+            anchor_id = k + i  # 224, 225, ..., 255
+            card = _generate_stub_card(
+                anchor_id=anchor_id,
+                centroid=nc.tolist(),
+                sample_memories=[memories[ni]],
+                is_novelty=True,
+            )
+            cards.append(card)
+
+        # Step 5: Build AnchorIndex (dim inferred from centroid data in build())
+        anchor_index = AnchorIndex(dim=embeddings.shape[1])
+        anchor_index.build(cards)
+
+        # Step 6: Compute stats
+        cluster_sizes = [len(cluster_memories.get(i, [])) for i in range(k)]
+        stats = AtlasStats(
+            n_memories=len(memories),
+            n_anchors_learned=k,
+            n_anchors_novelty=V1_NOVELTY_ANCHORS,
+            mean_cluster_size=float(np.mean(cluster_sizes)) if cluster_sizes else 0.0,
+            min_cluster_size=int(np.min(cluster_sizes)) if cluster_sizes else 0,
+            max_cluster_size=int(np.max(cluster_sizes)) if cluster_sizes else 0,
+            stability_score=stability,
+            built_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        # Step 7: Update anchor assignments in memory store
+        logger.info("Updating anchor assignments in memory store...")
+        learned_sims = embeddings @ centroids.T  # (n, k)
+        for idx, (mem, cluster_id) in enumerate(zip(memories, assignments)):
+            # Top-2 learned anchor sims
+            row_sims = learned_sims[idx]
+            top2 = np.argsort(row_sims)[::-1][:2]
+            primary_id = int(top2[0])
+            secondary_id = int(top2[1]) if len(top2) > 1 else None
+            confidence = float(row_sims[top2[0]])
+            self.store.update_anchor_assignment(
+                memory_object_id=mem.memory_object_id,
+                primary_anchor_id=primary_id,
+                secondary_anchor_ids=[secondary_id] if secondary_id is not None else [],
+                confidence=confidence,
+            )
+
+        # Step 8: Persist atlas
+        if output_dir is None:
+            output_dir = os.path.join(
+                os.path.expanduser(f"~/.psa/tenants/{self.tenant_id}"),
+                f"atlas_v{version}",
+            )
+        atlas = Atlas(
+            version=version,
+            tenant_id=self.tenant_id,
+            anchor_index=anchor_index,
+            stats=stats,
+            anchor_dir=output_dir,
+            cards=cards,
+        )
+        atlas.save()
+
+        logger.info(
+            "Atlas v%d built: %d learned + %d novelty anchors, stability=%.3f",
+            version,
+            k,
+            V1_NOVELTY_ANCHORS,
+            stability,
+        )
+        return atlas
+
+
+# ── AtlasManager ─────────────────────────────────────────────────────────────
+
+
+class AtlasManager:
+    """
+    Manages atlas versions for a tenant.
+
+    Conventions:
+    - Atlas directories: ~/.psa/tenants/{tenant_id}/atlas_v{version}/
+    - Latest is the highest version number
+    """
+
+    def __init__(self, tenant_dir: str, tenant_id: str):
+        self.tenant_dir = tenant_dir
+        self.tenant_id = tenant_id
+
+    def _atlas_dir(self, version: int) -> str:
+        return os.path.join(self.tenant_dir, f"atlas_v{version}")
+
+    def latest_version(self) -> Optional[int]:
+        """Return the highest atlas version number, or None if no atlas exists."""
+        if not os.path.isdir(self.tenant_dir):
+            return None
+        versions = []
+        for entry in os.listdir(self.tenant_dir):
+            if entry.startswith("atlas_v") and os.path.isdir(
+                os.path.join(self.tenant_dir, entry)
+            ):
+                try:
+                    v = int(entry[len("atlas_v"):])
+                    meta = os.path.join(self.tenant_dir, entry, "atlas_meta.json")
+                    if os.path.exists(meta):
+                        versions.append(v)
+                except ValueError:
+                    pass
+        return max(versions) if versions else None
+
+    def get_atlas(self, version: Optional[int] = None) -> Optional[Atlas]:
+        """Load an atlas by version (default: latest)."""
+        v = version or self.latest_version()
+        if v is None:
+            return None
+        atlas_dir = self._atlas_dir(v)
+        if not os.path.exists(atlas_dir):
+            return None
+        try:
+            return Atlas.load(atlas_dir)
+        except Exception as e:
+            logger.warning("Failed to load atlas v%d: %s", v, e)
+            return None
+
+    def rebuild(self, store: MemoryStore) -> Atlas:
+        """Build a new atlas version (latest + 1)."""
+        current = self.latest_version() or 0
+        new_version = current + 1
+        output_dir = self._atlas_dir(new_version)
+        builder = AtlasBuilder(store=store, tenant_id=self.tenant_id)
+        return builder.build_atlas(version=new_version, output_dir=output_dir)
+
+    def get_or_build(self, store: MemoryStore) -> Atlas:
+        """Return the latest atlas or build one if none exists."""
+        atlas = self.get_atlas()
+        if atlas is not None:
+            return atlas
+        return self.rebuild(store)
