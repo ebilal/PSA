@@ -83,6 +83,15 @@ class TenantManager:
             root_dir=str(root),
             metadata=metadata or {},
         )
+        # Persist tenant metadata
+        meta_path = root / "tenant.json"
+        if not meta_path.exists():
+            import json
+            meta_path.write_text(json.dumps({
+                "tenant_id": tenant.tenant_id,
+                "display_name": tenant.display_name,
+                "created_at": tenant.created_at,
+            }))
         return tenant
 
     def get(self, tenant_id: str) -> Optional[Tenant]:
@@ -91,10 +100,22 @@ class TenantManager:
         root = self._tenant_root(tenant_id)
         if not root.exists():
             return None
+        # Load persisted metadata if available
+        meta_path = root / "tenant.json"
+        display_name = tenant_id
+        created_at = ""
+        if meta_path.exists():
+            import json
+            try:
+                meta = json.loads(meta_path.read_text())
+                display_name = meta.get("display_name", tenant_id)
+                created_at = meta.get("created_at", "")
+            except (json.JSONDecodeError, OSError):
+                pass
         return Tenant(
             tenant_id=tenant_id,
-            display_name=tenant_id,
-            created_at="",  # not persisted to disk, only used at runtime
+            display_name=display_name,
+            created_at=created_at,
             root_dir=str(root),
         )
 

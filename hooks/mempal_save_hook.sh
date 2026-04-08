@@ -130,7 +130,7 @@ if [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] && [ "$EXCHANGE_COUNT" -gt 0 ]; then
     if [ -n "$PSA_DIR" ] && [ -d "$PSA_DIR" ]; then
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         REPO_DIR="$(dirname "$SCRIPT_DIR")"
-        python3 -m psa mine "$PSA_DIR" >> "$STATE_DIR/hook.log" 2>&1 &
+        uv run --project "$REPO_DIR" psa mine "$PSA_DIR" >> "$STATE_DIR/hook.log" 2>&1 &
     fi
 
     # Block the AI and tell it to save

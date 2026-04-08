@@ -225,29 +225,43 @@ def _spherical_kmeans(
     return centroids, assignments
 
 
-def _stability_score(assignments_list: List[np.ndarray], n_samples: int) -> float:
+def _stability_score(assignments_list: List[np.ndarray], n_samples: int = 2000) -> float:
     """
-    Compute cross-seed stability: fraction of samples with identical
-    assignment cluster (by centroid position) across all seeds.
+    Compute cross-seed stability via adjusted Rand index (ARI).
 
-    Since cluster labels may be permuted between seeds, we use pairwise
-    agreement: two samples that are in the same cluster in seed 0 should
-    also be in the same cluster in seed 1.
+    ARI is permutation-invariant and runs in O(n*k) space, so it scales
+    to large corpora without the O(n^2) cost of pairwise agreement matrices.
+
+    For corpora larger than n_samples, we subsample to keep this fast.
     """
     if len(assignments_list) < 2:
         return 1.0
 
-    # Use seed 0 as reference; compare pair-wise agreement with each other seed
+    try:
+        from sklearn.metrics import adjusted_rand_score
+    except ImportError:
+        # Fallback: sample-based pairwise agreement (O(n_samples^2))
+        n = len(assignments_list[0])
+        if n > n_samples:
+            rng = np.random.RandomState(42)
+            idx = rng.choice(n, n_samples, replace=False)
+            assignments_list = [a[idx] for a in assignments_list]
+
+        ref = assignments_list[0]
+        agreements = []
+        for other in assignments_list[1:]:
+            same_in_ref = ref[:, None] == ref[None, :]
+            same_in_other = other[:, None] == other[None, :]
+            agreement = (same_in_ref == same_in_other).mean()
+            agreements.append(agreement)
+        return float(np.mean(agreements))
+
     ref = assignments_list[0]
-    agreements = []
+    scores = []
     for other in assignments_list[1:]:
-        # For each sample i, check if all samples assigned with it in ref
-        # are also together in other
-        same_in_ref = ref[:, None] == ref[None, :]  # (n, n) bool
-        same_in_other = other[:, None] == other[None, :]
-        agreement = (same_in_ref == same_in_other).mean()
-        agreements.append(agreement)
-    return float(np.mean(agreements))
+        scores.append(adjusted_rand_score(ref, other))
+    # ARI is in [-1, 1]; map to [0, 1] for compatibility with stability threshold
+    return float((np.mean(scores) + 1.0) / 2.0)
 
 
 # ── Card generation (stub — full Qwen-based generation in Phase 3) ────────────
@@ -431,22 +445,23 @@ class AtlasBuilder:
             built_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        # Step 7: Update anchor assignments in memory store
+        # Step 7: Update anchor assignments in memory store (single transaction)
         logger.info("Updating anchor assignments in memory store...")
         learned_sims = embeddings @ centroids.T  # (n, k)
+        updates = []
         for idx, (mem, cluster_id) in enumerate(zip(memories, assignments)):
-            # Top-2 learned anchor sims
             row_sims = learned_sims[idx]
             top2 = np.argsort(row_sims)[::-1][:2]
             primary_id = int(top2[0])
             secondary_id = int(top2[1]) if len(top2) > 1 else None
             confidence = float(row_sims[top2[0]])
-            self.store.update_anchor_assignment(
-                memory_object_id=mem.memory_object_id,
-                primary_anchor_id=primary_id,
-                secondary_anchor_ids=[secondary_id] if secondary_id is not None else [],
-                confidence=confidence,
-            )
+            updates.append({
+                "memory_object_id": mem.memory_object_id,
+                "primary_anchor_id": primary_id,
+                "secondary_anchor_ids": [secondary_id] if secondary_id is not None else [],
+                "confidence": confidence,
+            })
+        self.store.batch_update_anchor_assignments(updates)
 
         # Step 8: Persist atlas
         if output_dir is None:

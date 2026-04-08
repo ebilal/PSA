@@ -155,6 +155,7 @@ class PSAPipeline:
             query=query,
             embedding_model=self.embedding_model,
             top_k=top_k_candidates,
+            query_vec=query_vec,
         )
         timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 

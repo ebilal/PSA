@@ -37,7 +37,6 @@ EPOCHS = 3
 MAX_SEQ_LEN = 320
 WARMUP_RATIO = 0.1
 MARGIN_LOSS_WEIGHT = 0.2
-EARLY_STOP_PATIENCE = 2  # evaluations without improvement before stopping
 
 
 # ── Training record ───────────────────────────────────────────────────────────
@@ -252,7 +251,7 @@ class SelectorTrainer:
             logger.info("Val task success: %.3f", val_score)
 
         # Compute threshold tau (Youden's J on val positives/negatives)
-        tau = self._compute_threshold(model, val_data_path) if val_data_path else 0.3
+        tau = self._compute_threshold(model, val_data_path) if val_data_path and os.path.exists(val_data_path) else 0.3
 
         # Query family summary
         family_mix: Dict[str, int] = {}

@@ -221,7 +221,8 @@ def tool_check_duplicate(content: str, threshold: float = 0.9):
         if results["ids"] and results["ids"][0]:
             for i, drawer_id in enumerate(results["ids"][0]):
                 dist = results["distances"][0][i]
-                similarity = round(1 - dist, 3)
+                # ChromaDB default is L2; cosine distance is in [0,2]; clamp to [0,1]
+                similarity = round(max(0.0, 1 - dist), 3)
                 if similarity >= threshold:
                     meta = results["metadatas"][0][i]
                     doc = results["documents"][0][i]
@@ -267,7 +268,7 @@ def tool_add_drawer(
             "matches": dup["matches"],
         }
 
-    drawer_id = f"drawer_{wing}_{room}_{hashlib.md5((content[:100] + datetime.now().isoformat()).encode()).hexdigest()[:16]}"
+    drawer_id = f"drawer_{wing}_{room}_{hashlib.md5((content[:100] + datetime.now().isoformat()).encode(), usedforsecurity=False).hexdigest()[:16]}"
 
     try:
         col.add(
@@ -464,8 +465,12 @@ def tool_psa_atlas_health(tenant_id: str = "default"):
     return report.to_dict()
 
 
+_rebuild_lock_path = None  # unused, kept for clarity
+
+
 def tool_psa_rebuild_atlas(tenant_id: str = "default"):
     """Trigger atlas rebuild for the tenant (may take several minutes)."""
+    import fcntl
     from .tenant import TenantManager
     from .atlas import AtlasManager
     from .memory_object import MemoryStore
@@ -474,6 +479,13 @@ def tool_psa_rebuild_atlas(tenant_id: str = "default"):
     tenant = tm.get_or_create(tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
     mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+
+    lock_path = os.path.join(tenant.root_dir, ".atlas_rebuild.lock")
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        return {"status": "error", "error": "Atlas rebuild already in progress for this tenant."}
 
     try:
         atlas = mgr.rebuild(store)
@@ -485,6 +497,9 @@ def tool_psa_rebuild_atlas(tenant_id: str = "default"):
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 # ==================== MCP PROTOCOL ====================

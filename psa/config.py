@@ -168,10 +168,17 @@ class MempalaceConfig:
     @property
     def tenant_id(self):
         """Active tenant identifier."""
-        return (
+        import re
+        tid = (
             os.environ.get("PSA_TENANT_ID")
             or self._file_config.get("tenant_id", DEFAULT_TENANT_ID)
         )
+        if not re.match(r"^[a-z0-9_-]{1,64}$", tid):
+            raise ValueError(
+                f"Invalid tenant_id {tid!r} from config/env. "
+                "Must be 1-64 lowercase alphanumeric, hyphens, or underscores."
+            )
+        return tid
 
     @property
     def psa_mode(self):

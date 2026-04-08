@@ -2910,13 +2910,6 @@ atlas = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-dev = [
-    { name = "chromadb" },
-    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
 migration = [
     { name = "chromadb" },
 ]
@@ -2935,36 +2928,41 @@ training = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "chromadb" },
+    { name = "faiss-cpu", version = "1.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "faiss-cpu", version = "1.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "scikit-learn", version = "1.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "autocorrect", marker = "extra == 'spellcheck'", specifier = ">=2.0" },
-    { name = "chromadb", marker = "extra == 'dev'", specifier = ">=0.5.0,<0.7" },
     { name = "chromadb", marker = "extra == 'migration'", specifier = ">=0.5.0,<0.7" },
     { name = "chromadb", marker = "extra == 'palace'", specifier = ">=0.5.0,<0.7" },
     { name = "faiss-cpu", marker = "extra == 'atlas'", specifier = ">=1.7" },
     { name = "numpy", specifier = ">=1.21" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "scikit-learn", marker = "extra == 'atlas'", specifier = ">=1.0" },
     { name = "sentence-transformers", specifier = ">=2.2" },
     { name = "sentence-transformers", marker = "extra == 'training'", specifier = ">=2.2" },
     { name = "torch", marker = "extra == 'training'", specifier = ">=2.0" },
 ]
-provides-extras = ["atlas", "training", "migration", "palace", "spellcheck", "dev"]
+provides-extras = ["atlas", "training", "migration", "palace", "spellcheck"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "chromadb", specifier = ">=0.5.0,<0.7" },
+    { name = "faiss-cpu", specifier = ">=1.7" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "pytest-cov", specifier = ">=4.0" },
     { name = "ruff", specifier = ">=0.4.0" },
+    { name = "scikit-learn", specifier = ">=1.0" },
 ]
 
 [[package]]

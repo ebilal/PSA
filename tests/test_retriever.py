@@ -134,17 +134,16 @@ def test_rrf_both_lists_contribute():
     # Item at rank 0 in both lists should have highest score
     dense_ranked = [0, 1, 2]
     bm25_ranked = [0, 2, 1]
-    scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked, k=60)
+    scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked, n_cards=3, k=60)
     assert scores[0] > scores[1]
     assert scores[0] > scores[2]
 
 
 def test_rrf_only_in_one_list():
     # Item 0 in both lists, item 1 only in dense, item 2 only in dense
-    # Use indices within the scores array length (max of both ranked lists lengths)
     dense_ranked = [0, 1, 2]
     bm25_ranked = [0, 1, 2]
-    scores_both = _reciprocal_rank_fusion(dense_ranked, bm25_ranked, k=60)
+    scores_both = _reciprocal_rank_fusion(dense_ranked, bm25_ranked, n_cards=3, k=60)
 
     # Now compare item 0 at rank 0 in both vs item 1 at rank 1 in both
     # Item 0 should have higher score since it's ranked higher
@@ -153,7 +152,7 @@ def test_rrf_only_in_one_list():
 
 def test_rrf_formula():
     # Manual: rank 1 in both → 1/61 + 1/61 = 2/61
-    scores = _reciprocal_rank_fusion([0], [0], k=60)
+    scores = _reciprocal_rank_fusion([0], [0], n_cards=1, k=60)
     expected = 2.0 / 61.0
     assert abs(scores[0] - expected) < 1e-9
 

@@ -417,19 +417,23 @@ def _dedup_against_store(
     """
     Check if a near-duplicate already exists in the store.
 
+    Uses embedding similarity search to check against ALL memories of the same
+    type, not just the most recent ones.
+
     Returns (is_duplicate, existing_id_or_None).
     """
     if mo.embedding is None:
         return False, None
 
+    from .embeddings import EmbeddingModel
+
+    # Check all memories of same type with embeddings
     existing = store.query_by_type(
-        mo.tenant_id, mo.memory_type, limit=50, exclude_duplicates=True
+        mo.tenant_id, mo.memory_type, limit=10_000, exclude_duplicates=True
     )
     for ex in existing:
         if ex.embedding is None:
             continue
-        from .embeddings import EmbeddingModel
-
         sim = EmbeddingModel.cosine_similarity(mo.embedding, ex.embedding)
         if sim >= similarity_threshold:
             return True, ex.memory_object_id
@@ -547,7 +551,11 @@ class ConsolidationPipeline:
             try:
                 mo.embedding = embedding_model.embed(embed_text)
             except Exception as e:
-                logger.warning("Embedding failed for memory %s: %s", mo.memory_object_id, e)
+                logger.warning(
+                    "Embedding failed for memory %s: %s — skipping (would be un-searchable)",
+                    mo.memory_object_id, e,
+                )
+                continue
 
             # Dedup
             is_dup, existing_id = _dedup_against_store(mo, self.store, embedding_model)

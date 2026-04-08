@@ -129,8 +129,9 @@ def cmd_search(args):
         return
     except FileNotFoundError:
         pass  # no atlas yet — fall through to raw search
-    except Exception:
-        pass  # pipeline error — fall through to raw search
+    except Exception as e:
+        import logging
+        logging.getLogger("psa.cli").warning("PSA pipeline failed, falling back to raw search: %s", e)
 
     # Fallback: raw ChromaDB search
     from .searcher import search, SearchError

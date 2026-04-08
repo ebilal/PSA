@@ -85,6 +85,7 @@ class OracleLabel:
 
     @classmethod
     def from_dict(cls, d: dict) -> "OracleLabel":
+        d = dict(d)  # shallow copy to avoid mutating caller's dict
         sets = [CandidateSetScore(**s) for s in d.pop("all_sets", [])]
         return cls(all_sets=sets, **d)
 
@@ -174,72 +175,128 @@ def oracle_score(
     )
 
 
-# ── Qwen cheap-stage caller ────────────────────────────────────────────────────
+# ── Qwen cheap-stage caller (batched) ─────────────────────────────────────────
+
+_ZERO_SCORES: Dict[str, float] = {
+    "support_coverage": 0.0,
+    "procedural_utility": 0.0,
+    "noise_penalty": 0.0,
+    "token_cost": 0.0,
+}
 
 
-def _call_qwen_proxy(
+def _call_qwen_proxy_batch(
     query: str,
-    candidate_set: List[int],
+    candidate_sets: List[List[int]],
     anchor_cards_text: Dict[int, str],
     endpoint: str,
     model: str,
-    timeout: int = 30,
-) -> Dict[str, float]:
+    timeout: int = 120,
+) -> List[Dict[str, float]]:
     """
-    Call Qwen2.5-7B-Instruct to score a candidate anchor set with proxy metrics.
+    Score ALL candidate sets for one query in a single Qwen call.
 
-    Returns dict with keys: support_coverage, procedural_utility, noise_penalty, token_cost
+    Batching all sets into one prompt reduces ~23 HTTP calls/query to 1,
+    cutting labeling time from ~16h to ~1h for 500 queries on an M4 Mac.
+
+    Returns a list of score dicts (same order as candidate_sets).
+    Falls back to zero scores for any set that can't be parsed.
     """
     import urllib.request
 
-    cards_text = "\n\n".join(
-        f"[anchor_{aid}]\n{anchor_cards_text.get(aid, '(no card)')}"
-        for aid in candidate_set
-    )
-    prompt = (
-        f"Query: {query}\n\n"
-        f"Candidate anchor set: {candidate_set}\n\n"
-        f"Anchor cards:\n{cards_text}\n\n"
-        "Score this anchor set (0.0 to 1.0 each):\n"
-        '{"support_coverage": ..., "procedural_utility": ..., '
-        '"noise_penalty": ..., "token_cost": ...}'
-    )
+    n = len(candidate_sets)
 
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-            "max_tokens": 128,
-            "response_format": {"type": "json_object"},
-        }
-    ).encode()
-
-    try:
+    def _post(pl: bytes) -> str:
         req = urllib.request.Request(
             endpoint,
-            data=payload,
+            data=pl,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        content = data["choices"][0]["message"]["content"]
-        scores = json.loads(content)
-        return {
-            "support_coverage": float(scores.get("support_coverage", 0)),
-            "procedural_utility": float(scores.get("procedural_utility", 0)),
-            "noise_penalty": float(scores.get("noise_penalty", 0)),
-            "token_cost": float(scores.get("token_cost", 0)),
-        }
+            return json.loads(resp.read())["choices"][0]["message"]["content"]
+
+    def _parse_scores(raw_sets: list, indices: List[int]) -> Dict[int, Dict[str, float]]:
+        """Return {original_index: scores} for items that parse successfully."""
+        parsed = {}
+        for local_i, orig_i in enumerate(indices):
+            if local_i >= len(raw_sets):
+                break
+            s = raw_sets[local_i]
+            try:
+                parsed[orig_i] = {
+                    "support_coverage": float(s["support_coverage"]),
+                    "procedural_utility": float(s["procedural_utility"]),
+                    "noise_penalty": float(s["noise_penalty"]),
+                    "token_cost": float(s["token_cost"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                pass  # will be retried
+        return parsed
+
+    def _make_payload(sets_subset: List[List[int]]) -> bytes:
+        k = len(sets_subset)
+        sets_lines = "\n".join(f"  set_{i}: {cs}" for i, cs in enumerate(sets_subset))
+        needed: set = set()
+        for cs in sets_subset:
+            needed.update(cs)
+        cards = "\n\n".join(
+            f"[anchor_{aid}]\n{anchor_cards_text.get(aid, '(no card)')}"
+            for aid in sorted(needed)
+        )
+        p = (
+            f"Query: {query}\n\n"
+            f"Anchor cards available:\n{cards}\n\n"
+            f"Score each of the {k} candidate anchor sets below.\n"
+            f"For each set return four float scores in [0.0, 1.0]:\n"
+            f"  support_coverage  — fraction of query evidence covered\n"
+            f"  procedural_utility — presence of procedural/failure/tool memories\n"
+            f"  noise_penalty     — fraction of anchors that are off-target\n"
+            f"  token_cost        — normalized packed-token cost\n\n"
+            f"Candidate sets:\n{sets_lines}\n\n"
+            f'Return JSON: {{"sets": [{{"support_coverage": 0.0, "procedural_utility": 0.0, '
+            f'"noise_penalty": 0.0, "token_cost": 0.0}}, ...]}}\n'
+            f'Return exactly {k} objects in the "sets" array, one per set, in order.'
+        )
+        return json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": p}],
+            "temperature": 0.0,
+            "max_tokens": 64 * k + 64,
+            "response_format": {"type": "json_object"},
+        }).encode()
+
+    all_indices = list(range(n))
+    results: Dict[int, Dict[str, float]] = {}
+
+    # First attempt: all sets in one call
+    try:
+        content = _post(_make_payload(candidate_sets))
+        raw_sets = json.loads(content).get("sets", [])
+        results.update(_parse_scores(raw_sets, all_indices))
     except Exception as e:
-        logger.warning("Qwen proxy scoring failed: %s", e)
-        return {
-            "support_coverage": 0.0,
-            "procedural_utility": 0.0,
-            "noise_penalty": 0.0,
-            "token_cost": 0.0,
-        }
+        logger.warning("Qwen batch proxy scoring failed on first attempt: %s", e)
+
+    # Retry any indices that are still missing or malformed
+    missing = [i for i in all_indices if i not in results]
+    if missing:
+        logger.info("Retrying %d missing/malformed sets", len(missing))
+        retry_sets = [candidate_sets[i] for i in missing]
+        try:
+            content = _post(_make_payload(retry_sets))
+            raw_sets = json.loads(content).get("sets", [])
+            results.update(_parse_scores(raw_sets, missing))
+        except Exception as e:
+            logger.warning("Qwen retry scoring failed: %s", e)
+
+    # Fill any still-missing with zeros (give up after one retry)
+    still_missing = [i for i in all_indices if i not in results]
+    if still_missing:
+        logger.warning("%d sets could not be scored after retry; using zero scores", len(still_missing))
+        for i in still_missing:
+            results[i] = dict(_ZERO_SCORES)
+
+    return [results[i] for i in all_indices]
 
 
 # ── OracleLabeler ──────────────────────────────────────────────────────────────
@@ -311,42 +368,45 @@ class OracleLabeler:
             for c in candidates
         }
 
-        # Step 3: Cheap stage — score all candidate sets
-        all_sets: List[CandidateSetScore] = []
-
+        # Step 3: Cheap stage — score ALL candidate sets in ONE Qwen call
+        # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
+        # time from ~16h to ~1h for 500 queries on an M4 Mac.
+        all_combos: List[List[int]] = []
         for (max_size, max_combos) in specs:
             candidate_pool = candidate_ids[:max(8, max_size * 4)]
             combos = list(combinations(candidate_pool, max_size))[:max_combos]
-            for combo in combos:
-                combo_list = list(combo)
-                # Cheap proxy scoring
-                proxy = _call_qwen_proxy(
-                    query=query,
-                    candidate_set=combo_list,
-                    anchor_cards_text=anchor_cards_text,
-                    endpoint=self.qwen_endpoint,
-                    model=self.qwen_model,
-                )
-                # Compute preliminary oracle score (TaskSuccess=0 until expensive stage)
-                score = oracle_score(
+            all_combos.extend(list(c) for c in combos)
+
+        proxy_scores = _call_qwen_proxy_batch(
+            query=query,
+            candidate_sets=all_combos,
+            anchor_cards_text=anchor_cards_text,
+            endpoint=self.qwen_endpoint,
+            model=self.qwen_model,
+        )
+
+        all_sets: List[CandidateSetScore] = []
+        for combo_list, proxy in zip(all_combos, proxy_scores):
+            # Compute preliminary oracle score (TaskSuccess=0 until expensive stage)
+            score = oracle_score(
+                support_coverage=proxy["support_coverage"],
+                task_success=0.0,
+                procedural_utility=proxy["procedural_utility"],
+                noise_penalty=proxy["noise_penalty"],
+                token_cost=proxy["token_cost"],
+            )
+            all_sets.append(
+                CandidateSetScore(
+                    anchor_ids=combo_list,
                     support_coverage=proxy["support_coverage"],
-                    task_success=0.0,
                     procedural_utility=proxy["procedural_utility"],
                     noise_penalty=proxy["noise_penalty"],
                     token_cost=proxy["token_cost"],
+                    task_success=None,
+                    oracle_score=score,
+                    packed_tokens=0,
                 )
-                all_sets.append(
-                    CandidateSetScore(
-                        anchor_ids=combo_list,
-                        support_coverage=proxy["support_coverage"],
-                        procedural_utility=proxy["procedural_utility"],
-                        noise_penalty=proxy["noise_penalty"],
-                        token_cost=proxy["token_cost"],
-                        task_success=None,
-                        oracle_score=score,
-                        packed_tokens=0,
-                    )
-                )
+            )
 
         # Step 4: Expensive stage — TaskSuccess for top-N surviving sets
         all_sets.sort(key=lambda s: s.oracle_score, reverse=True)
@@ -414,6 +474,64 @@ class OracleLabeler:
         return labels
 
 
+def _load_queries_from_sessions(
+    sessions_dir: str,
+    max_queries: int = 5000,
+) -> List[Tuple[str, str]]:
+    """
+    Extract real user messages from Claude Code session JSONL files.
+
+    These are the actual questions you typed during sessions — much better
+    training signal than memory titles because they match the phrasing you'll
+    use at retrieval time.
+
+    Filters out: slash commands, tool caveats, XML-tagged system messages,
+    very short messages (< 30 chars), and pure file-path messages.
+
+    max_queries: stop scanning once this many unique queries are collected.
+    """
+    import glob as _glob
+    import re as _re
+
+    _skip_patterns = _re.compile(
+        r"^(/|<|https?://|```|\.|\.\.)"  # slash commands, XML, URLs, code, paths
+    )
+    queries: List[Tuple[str, str]] = []
+    seen: set = set()
+
+    for fpath in _glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True):
+        if len(queries) >= max_queries:
+            break
+        try:
+            with open(fpath) as f:
+                for line in f:
+                    if len(queries) >= max_queries:
+                        break
+                    d = json.loads(line)
+                    if d.get("type") != "user":
+                        continue
+                    content = d["message"].get("content", "")
+                    if not isinstance(content, str):
+                        continue
+                    content = content.strip()
+                    # Must be a plain text message of reasonable length
+                    if len(content) < 30 or len(content) > 800:
+                        continue
+                    if _skip_patterns.match(content):
+                        continue
+                    # Deduplicate on full content to avoid false collisions
+                    if content in seen:
+                        continue
+                    seen.add(content)
+                    msg_id = d.get("uuid", f"{os.path.basename(fpath)}_{len(queries)}")
+                    queries.append((msg_id, content))
+        except Exception:
+            pass
+
+    logger.info("Loaded %d real user queries from %s", len(queries), sessions_dir)
+    return queries
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -421,11 +539,18 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="PSA oracle labeler — generate training labels")
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
-    parser.add_argument("--n-queries", type=int, default=500, help="Number of queries to label (default: 500)")
+    parser.add_argument("--n-queries", type=int, default=300, help="Number of queries to label (default: 300, minimum gate)")
     parser.add_argument(
         "--output",
         default=None,
         help="Output JSONL path (default: ~/.psa/tenants/<tenant>/training/oracle_labels.jsonl)",
+    )
+    parser.add_argument(
+        "--sessions-dir",
+        default=None,
+        help="Path to Claude Code sessions dir (e.g. ~/.claude/projects). "
+             "When provided, real user messages from session JSONL files are used "
+             "as queries instead of memory titles. Better training signal.",
     )
     args = parser.parse_args()
 
@@ -442,23 +567,30 @@ if __name__ == "__main__":
         print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
         raise SystemExit(1)
 
-    # Use memory object titles + summaries as self-supervised queries
-    from psa.memory_object import MemoryStore, MemoryType
-    store = MemoryStore(db_path=tenant.memory_db_path)
-    all_memories = []
-    for mtype in MemoryType:
-        all_memories.extend(
-            store.query_by_type(tenant_id=args.tenant, memory_type=mtype, limit=1000)
-        )
+    if args.sessions_dir:
+        queries = _load_queries_from_sessions(args.sessions_dir)
+        if not queries:
+            print(f"No usable user messages found in {args.sessions_dir}. "
+                  "Falling back to memory titles.")
+            args.sessions_dir = None
 
-    if not all_memories:
-        # Fall back to anchor card texts as query source
-        queries = [
-            (f"anchor_{c.anchor_id}", c.name + ". " + c.meaning)
-            for c in pipeline.atlas.cards
-        ]
-    else:
-        queries = [(m.memory_object_id, m.title + ". " + m.summary) for m in all_memories]
+    if not args.sessions_dir:
+        # Self-supervised fallback: derive queries from memory titles + summaries
+        from psa.memory_object import MemoryStore, MemoryType
+        store = MemoryStore(db_path=tenant.memory_db_path)
+        all_memories = []
+        for mtype in MemoryType:
+            all_memories.extend(
+                store.query_by_type(tenant_id=args.tenant, memory_type=mtype, limit=1000)
+            )
+
+        if not all_memories:
+            queries = [
+                (f"anchor_{c.anchor_id}", c.name + ". " + c.meaning)
+                for c in pipeline.atlas.cards
+            ]
+        else:
+            queries = [(m.memory_object_id, m.title + ". " + m.summary) for m in all_memories]
 
     random.shuffle(queries)
     queries = queries[:args.n_queries]

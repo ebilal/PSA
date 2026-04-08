@@ -325,6 +325,22 @@ class EvidencePacker:
             if cost <= budget_remaining:
                 assembled_sections.append(sec)
                 budget_remaining -= cost
+            else:
+                # Incrementally pack items that fit instead of dropping the whole section
+                partial = PackedSection(role=sec.role, header=sec.header, items=[], memory_ids=[])
+                header_cost = _token_count(sec.header) + 2
+                if header_cost < budget_remaining:
+                    partial_budget = budget_remaining - header_cost
+                    for item, mid in zip(sec.items, sec.memory_ids):
+                        item_cost = _token_count(f"- {item}\n")
+                        if item_cost > partial_budget:
+                            break
+                        partial.items.append(item)
+                        partial.memory_ids.append(mid)
+                        partial_budget -= item_cost
+                    if partial.items:
+                        assembled_sections.append(partial)
+                        budget_remaining -= _token_count(partial.render()) + 2
 
         parts = [header_text]
         for sec in assembled_sections:
@@ -344,12 +360,12 @@ class EvidencePacker:
         )
 
 
-def _trim_to_budget(items: List[str], budget_chars: int) -> List[str]:
-    """Trim item list to fit within a character budget."""
+def _trim_to_budget(items: List[str], budget_tokens: int) -> List[str]:
+    """Trim item list to fit within a token budget."""
     result = []
-    remaining = budget_chars
+    remaining = budget_tokens
     for item in items:
-        cost = len(f"- {item}\n")
+        cost = _token_count(f"- {item}\n")
         if cost > remaining:
             break
         result.append(item)

@@ -681,7 +681,22 @@ def mine_psa(
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
-    pipeline = ConsolidationPipeline(store=store, tenant_id=tenant_id, use_llm=True)
+    # Check if Qwen endpoint is reachable; fall back to no-LLM mode with a clear warning
+    import logging as _logging
+    use_llm = True
+    try:
+        import urllib.request
+        from .consolidation import QWEN_ENDPOINT
+        req = urllib.request.Request(QWEN_ENDPOINT, method="HEAD")
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        _logging.getLogger("psa.miner").warning(
+            "Qwen endpoint not reachable. "
+            "PSA consolidation will skip LLM-based memory extraction. "
+            "Start Ollama with 'ollama serve' and pull qwen2.5:7b.",
+        )
+        use_llm = False
+    pipeline = ConsolidationPipeline(store=store, tenant_id=tenant_id, use_llm=use_llm)
 
     project_path = Path(project_dir).expanduser().resolve()
     files = scan_project(str(project_path))

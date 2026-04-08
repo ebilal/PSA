@@ -86,9 +86,13 @@ psa atlas health          # novelty rate, utilization skew, rebuild recommendati
 ### Requirements
 
 - Python 3.9+
+- [uv](https://docs.astral.sh/uv/) — Python package manager
 - [Ollama](https://ollama.com/) running locally (for consolidation — `qwen2.5:7b`)
 
 ```bash
+# Install uv (if not already)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Install Ollama and pull the model
 ollama pull qwen2.5:7b
 ```
@@ -96,18 +100,19 @@ ollama pull qwen2.5:7b
 ### Install
 
 ```bash
-pip install psa                    # base (no atlas, no training)
-pip install "psa[atlas]"           # + scikit-learn + faiss-cpu (required for atlas + search)
-pip install "psa[training]"        # + torch + sentence-transformers (for selector training)
-pip install "psa[atlas,training]"  # full stack
+# From PyPI
+uv tool install psa                         # base (no atlas, no training)
+uv tool install "psa[atlas]"               # + scikit-learn + faiss-cpu (required for atlas + search)
+uv tool install "psa[atlas,training]"      # full stack including torch
 ```
 
 Or install from source:
 
 ```bash
 git clone https://github.com/ebilal/PSA
-cd psa
-pip install -e ".[atlas,training,dev]"
+cd PSA
+uv sync                    # installs dev deps (pytest, ruff, chromadb, faiss)
+uv sync --extra training   # also installs torch for selector training
 ```
 
 ### First-time setup
@@ -143,7 +148,7 @@ psa wake-up                          # load atlas summary as session context
 ### With Claude Code (MCP)
 
 ```bash
-claude mcp add psa -- python -m psa.mcp_server
+claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
 ```
 
 Claude then has 25 MCP tools available — PSA search, memory storage, atlas management, knowledge graph, and diary tools. Ask it anything:
@@ -272,17 +277,36 @@ The anchor selector has two modes:
 - **Cosine** (default) — sorts candidates by query-anchor similarity. No training required.
 - **Trained** — a fine-tuned `cross-encoder/ms-marco-MiniLM-L-6-v2` that learns task utility, not just topical overlap. This is what makes PSA distinct from embedding-only retrieval.
 
-Training requires `pip install "psa[training]"` and a local GPU (or slow CPU training).
+Training requires `uv sync --extra training`. Apple Silicon (M1–M4) is supported via MPS — no discrete GPU needed.
+
+**Memory requirements:** Qwen 7B q4 via Ollama (~4.7 GB) + bge-base-en-v1.5 (~420 MB) + cross-encoder (~90 MB) = ~5.2 GB peak. Each stage runs sequentially, so 16 GB RAM is sufficient; 20 GB is comfortable.
+
+**Time estimates on M4 MacBook Air (no discrete GPU):**
+| Step | Time |
+|------|------|
+| Oracle labeling — 300 queries | ~1–2 h |
+| Generate 12,000 training examples | < 5 min |
+| Selector training (3 phases, CPU/MPS) | ~2–4 h |
+| **Total** | **~3–6 h** |
 
 ### Step 1 — Collect oracle labels
 
-Oracle labeling scores every candidate anchor set for a query and picks the best one using a two-stage scorer: Qwen cheap-stage (all sets) + your runtime model for TaskSuccess (top 3 only).
+Oracle labeling scores every candidate anchor set for a query and picks the best one. All candidate sets for a query are batched into a **single Qwen call** (not one call per set), so labeling 300 queries takes ~1–2 hours instead of 16+.
+
+By default, the labeler derives queries from your stored memory titles — a self-supervised approach. For better training signal, pass `--sessions-dir` to use the **real questions you typed** during Claude Code sessions instead:
 
 ```bash
-# Label a batch of queries from your memory corpus
-python -m psa.training.oracle_labeler \
+# Recommended: use real queries from your Claude Code sessions
+uv run python -m psa.training.oracle_labeler \
   --tenant default \
-  --n-queries 500 \
+  --n-queries 300 \
+  --sessions-dir ~/.claude/projects \
+  --output ~/.psa/tenants/default/training/oracle_labels.jsonl
+
+# Fallback: self-supervised from memory titles (no --sessions-dir needed)
+uv run python -m psa.training.oracle_labeler \
+  --tenant default \
+  --n-queries 300 \
   --output ~/.psa/tenants/default/training/oracle_labels.jsonl
 ```
 
@@ -299,7 +323,7 @@ The system logs gate status when you run `psa atlas status`.
 ### Step 2 — Generate training data
 
 ```bash
-python -m psa.training.data_generator \
+uv run python -m psa.training.data_generator \
   --tenant default \
   --labels ~/.psa/tenants/default/training/oracle_labels.jsonl \
   --output ~/.psa/tenants/default/training/training_data.jsonl \
@@ -314,7 +338,7 @@ This produces `(query, anchor_card, label)` triples with a 60/20/20 mix:
 ### Step 3 — Train
 
 ```bash
-python -m psa.training.train_selector \
+uv run python -m psa.training.train_selector \
   --tenant default \
   --training-data ~/.psa/tenants/default/training/training_data.jsonl \
   --output-dir ~/.psa/models/selector_v1
@@ -371,7 +395,7 @@ Configure in `.claude/settings.local.json`.
 ## MCP Server
 
 ```bash
-claude mcp add psa -- python -m psa.mcp_server
+claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
 ```
 
 ### Tools

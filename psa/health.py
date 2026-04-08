@@ -140,18 +140,14 @@ class AtlasHealthMonitor:
         total_anchors = len(cards)
         novelty_anchors = sum(1 for c in cards if c.is_novelty)
 
-        # Per-anchor memory counts from the store
+        # Per-anchor memory counts via single GROUP BY query
+        counts_by_anchor = store.count_by_anchor(tenant_id)
         anchor_stats: List[AnchorStats] = []
         novelty_memories = 0
         total_memories = 0
 
         for card in cards:
-            memories = store.query_by_anchor(
-                tenant_id=tenant_id,
-                anchor_id=card.anchor_id,
-                limit=10_000,
-            )
-            count = len(memories)
+            count = counts_by_anchor.get(card.anchor_id, 0)
             total_memories += count
             if card.is_novelty:
                 novelty_memories += count
@@ -171,8 +167,8 @@ class AtlasHealthMonitor:
         learned_counts = [s.memory_count for s in anchor_stats if not s.is_novelty]
         utilization_skew = _utilization_skew(learned_counts)
 
-        # Memory type distribution
-        memory_type_distribution = _count_memory_types(store, tenant_id)
+        # Memory type distribution via single GROUP BY query
+        memory_type_distribution = store.count_by_type(tenant_id)
 
         # Rebuild decision
         rebuild_reasons: List[str] = []

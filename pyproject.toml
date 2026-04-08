@@ -49,11 +49,8 @@ migration = ["chromadb>=0.5.0,<0.7"]
 palace = ["chromadb>=0.5.0,<0.7"]
 # Spell checking
 spellcheck = ["autocorrect>=2.0"]
-# Development and testing
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "chromadb>=0.5.0,<0.7"]
-
 [dependency-groups]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "chromadb>=0.5.0,<0.7", "scikit-learn>=1.0", "faiss-cpu>=1.7"]
 
 [build-system]
 requires = ["hatchling"]

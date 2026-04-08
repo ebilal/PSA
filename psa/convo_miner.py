@@ -382,7 +382,20 @@ def _mine_convos_psa(convo_dir: str, files: list):
     tm = TenantManager()
     tenant = tm.get_or_create(cfg.tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
-    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=True)
+    use_llm = True
+    try:
+        import urllib.request
+        from .consolidation import QWEN_ENDPOINT
+        req = urllib.request.Request(QWEN_ENDPOINT, method="HEAD")
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        import logging
+        logging.getLogger("psa.convo_miner").warning(
+            "Qwen endpoint not reachable. Skipping LLM-based memory extraction. "
+            "Start Ollama with 'ollama serve' and pull qwen2.5:7b."
+        )
+        use_llm = False
+    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=use_llm)
 
     print(f"  [PSA] Running conversation consolidation (mode: {cfg.psa_mode})...")
     total = 0

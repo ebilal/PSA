@@ -118,6 +118,7 @@ class BM25Index:
 def _reciprocal_rank_fusion(
     dense_ranked: List[int],
     bm25_ranked: List[int],
+    n_cards: int,
     k: int = RRF_K,
 ) -> List[float]:
     """
@@ -125,18 +126,18 @@ def _reciprocal_rank_fusion(
 
     dense_ranked / bm25_ranked: ordered lists of anchor indices (0-based into
     the cards list, not anchor_ids), best first.
+    n_cards: total number of cards (scores array is sized to this).
 
     Returns a list of RRF scores indexed by card position.
     """
-    n = max(len(dense_ranked), len(bm25_ranked))
-    scores = [0.0] * n
+    scores = [0.0] * n_cards
 
     for rank, idx in enumerate(dense_ranked, start=1):
-        if 0 <= idx < n:
+        if 0 <= idx < n_cards:
             scores[idx] += 1.0 / (k + rank)
 
     for rank, idx in enumerate(bm25_ranked, start=1):
-        if 0 <= idx < n:
+        if 0 <= idx < n_cards:
             scores[idx] += 1.0 / (k + rank)
 
     return scores
@@ -170,6 +171,7 @@ class AnchorRetriever:
         query: str,
         embedding_model,
         top_k: int = 24,
+        query_vec: Optional[List[float]] = None,
     ) -> List[AnchorCandidate]:
         """
         Retrieve top-k anchor candidates for a query.
@@ -182,6 +184,8 @@ class AnchorRetriever:
             psa.embeddings.EmbeddingModel instance.
         top_k:
             Number of candidates to return (plan default: 24).
+        query_vec:
+            Pre-computed query embedding. If provided, skips re-embedding.
 
         Returns
         -------
@@ -194,7 +198,8 @@ class AnchorRetriever:
         k = min(top_k, len(cards))
 
         # ── Dense retrieval ──────────────────────────────────────────────────
-        query_vec = embedding_model.embed(query)
+        if query_vec is None:
+            query_vec = embedding_model.embed(query)
         dense_hits = self.atlas.anchor_index.search(query_vec, top_k=k)
         # dense_hits: [(anchor_id, score), ...] sorted by score desc
 
@@ -209,7 +214,7 @@ class AnchorRetriever:
         bm25_ranked = sorted(range(len(cards)), key=lambda i: bm25_scores[i], reverse=True)[:k]
 
         # ── RRF fusion ───────────────────────────────────────────────────────
-        rrf_scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked)
+        rrf_scores = _reciprocal_rank_fusion(dense_ranked, bm25_ranked, n_cards=len(cards))
 
         # Build AnchorCandidate objects
         dense_score_map = {id_to_idx[aid]: score for (aid, score) in dense_hits if aid in id_to_idx}
@@ -218,7 +223,7 @@ class AnchorRetriever:
 
         candidates = []
         for card_idx, card in enumerate(cards):
-            rrf = rrf_scores[card_idx] if card_idx < len(rrf_scores) else 0.0
+            rrf = rrf_scores[card_idx]
             if rrf == 0.0:
                 continue
             candidates.append(

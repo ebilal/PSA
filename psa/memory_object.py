@@ -14,7 +14,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 class MemoryType(str, Enum):
@@ -205,14 +205,16 @@ class MemoryStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self._conn: Optional[sqlite3.Connection] = None
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        return conn
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.row_factory = sqlite3.Row
+        return self._conn
 
     def _init_db(self):
         with self._connect() as conn:
@@ -323,9 +325,47 @@ class MemoryStore:
             )
         return mo.memory_object_id
 
+    _ADD_SQL = """
+        INSERT OR REPLACE INTO memory_objects
+          (memory_object_id, tenant_id, memory_type, title, body, summary,
+           source_ids_json, evidence_chunk_ids_json, evidence_spans_json,
+           classification_reason, created_at, updated_at,
+           embedding_blob, embedding_dim, embedding_ref,
+           primary_anchor_id, secondary_anchor_ids_json, assignment_confidence,
+           task_type, tool_names_json, success_label, quality_score,
+           validity_interval, acl_scope, is_duplicate, duplicate_of)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def _add_params(self, mo: MemoryObject) -> tuple:
+        blob = self._encode_embedding(mo.embedding)
+        dim = len(mo.embedding) if mo.embedding else None
+        return (
+            mo.memory_object_id, mo.tenant_id, mo.memory_type.value,
+            mo.title, mo.body, mo.summary,
+            json.dumps(mo.source_ids), json.dumps(mo.evidence_chunk_ids),
+            json.dumps([asdict(s) for s in mo.evidence_spans]),
+            mo.classification_reason, mo.created_at, mo.updated_at,
+            blob, dim, mo.embedding_ref,
+            mo.primary_anchor_id, json.dumps(mo.secondary_anchor_ids),
+            mo.assignment_confidence, mo.task_type, json.dumps(mo.tool_names),
+            (1 if mo.success_label else 0) if mo.success_label is not None else None,
+            mo.quality_score, mo.validity_interval, mo.acl_scope,
+            1 if mo.is_duplicate else 0, mo.duplicate_of,
+        )
+
     def batch_add(self, memories: List[MemoryObject]) -> List[str]:
-        """Persist multiple memory objects. Returns list of IDs."""
-        return [self.add(mo) for mo in memories]
+        """Persist multiple memory objects in a single transaction."""
+        conn = self._connect()
+        conn.execute("BEGIN")
+        try:
+            for mo in memories:
+                conn.execute(self._ADD_SQL, self._add_params(mo))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return [mo.memory_object_id for mo in memories]
 
     def get(self, memory_object_id: str) -> Optional[MemoryObject]:
         with self._connect() as conn:
@@ -385,6 +425,34 @@ class MemoryStore:
             ).fetchone()
         return row[0]
 
+    def count_by_anchor(self, tenant_id: str) -> Dict[int, int]:
+        """Return {anchor_id: count} for all anchors in a single query."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT primary_anchor_id, COUNT(*) as cnt
+                FROM memory_objects
+                WHERE tenant_id = ? AND is_duplicate = 0 AND primary_anchor_id IS NOT NULL
+                GROUP BY primary_anchor_id
+                """,
+                (tenant_id,),
+            ).fetchall()
+        return {row["primary_anchor_id"]: row["cnt"] for row in rows}
+
+    def count_by_type(self, tenant_id: str) -> Dict[str, int]:
+        """Return {memory_type: count} in a single query."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT memory_type, COUNT(*) as cnt
+                FROM memory_objects
+                WHERE tenant_id = ? AND is_duplicate = 0
+                GROUP BY memory_type
+                """,
+                (tenant_id,),
+            ).fetchall()
+        return {row["memory_type"]: row["cnt"] for row in rows}
+
     def query_by_type(
         self,
         tenant_id: str,
@@ -434,17 +502,24 @@ class MemoryStore:
             ).fetchall()
         return [self._row_to_memory_object(r) for r in rows]
 
-    def get_by_source_id(self, source_id: str) -> Optional[MemoryObject]:
+    def get_by_source_id(self, source_id: str, tenant_id: Optional[str] = None) -> Optional[MemoryObject]:
         """Return the first MemoryObject linked to a given source_id, or None."""
-        with self._connect() as conn:
-            row = conn.execute(
-                """
+        if tenant_id:
+            query = """
+                SELECT mo.* FROM memory_objects mo, json_each(mo.source_ids_json) je
+                WHERE je.value = ? AND mo.tenant_id = ?
+                LIMIT 1
+            """
+            params = (source_id, tenant_id)
+        else:
+            query = """
                 SELECT mo.* FROM memory_objects mo, json_each(mo.source_ids_json) je
                 WHERE je.value = ?
                 LIMIT 1
-                """,
-                (source_id,),
-            ).fetchone()
+            """
+            params = (source_id,)
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
         return self._row_to_memory_object(row) if row else None
 
     def update_anchor_assignment(
@@ -472,3 +547,37 @@ class MemoryStore:
                     memory_object_id,
                 ),
             )
+
+    def batch_update_anchor_assignments(
+        self,
+        updates: List[dict],
+    ):
+        """Batch update anchor assignments in a single transaction.
+
+        Each dict in updates must have: memory_object_id, primary_anchor_id,
+        secondary_anchor_ids, confidence.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        conn.execute("BEGIN")
+        try:
+            for u in updates:
+                conn.execute(
+                    """
+                    UPDATE memory_objects
+                    SET primary_anchor_id = ?, secondary_anchor_ids_json = ?,
+                        assignment_confidence = ?, updated_at = ?
+                    WHERE memory_object_id = ?
+                    """,
+                    (
+                        u["primary_anchor_id"],
+                        json.dumps(u.get("secondary_anchor_ids", [])),
+                        u.get("confidence", 0.0),
+                        now,
+                        u["memory_object_id"],
+                    ),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise

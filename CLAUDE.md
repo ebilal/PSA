@@ -5,24 +5,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install (dev)
-source .venv/bin/activate
-pip install -e ".[dev]"          # core + pytest + ruff
-pip install -e ".[atlas]"        # adds scikit-learn + faiss-cpu (required for atlas/pipeline)
-pip install -e ".[training]"     # adds torch (required for selector training)
+# Install (dev) — uv manages the venv at .venv
+uv sync                          # core + pytest + ruff + chromadb + faiss (dev group)
+uv sync --extra training         # also install torch for selector training
 
 # Test
-pytest tests/ -v
-pytest tests/test_memory_object.py -v          # single file
-pytest tests/ -k "test_atlas_build" -v         # single test
+uv run pytest tests/ -v
+uv run pytest tests/test_memory_object.py -v          # single file
+uv run pytest tests/ -k "test_atlas_build" -v         # single test
 
 # Lint / format
-ruff check .
-ruff format .
-ruff format --check .
+uv run ruff check .
+uv run ruff format .
+uv run ruff format --check .
 ```
 
-The `.venv` at repo root is the active environment. CI tests Python 3.9, 3.11, 3.13. Coverage threshold is 30%.
+Python is pinned to 3.13 via `.python-version`. CI tests Python 3.9, 3.11, 3.13. Coverage threshold is 30%.
 
 ## Architecture
 

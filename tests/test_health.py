@@ -43,8 +43,11 @@ def _make_atlas(cards) -> Atlas:
 
 
 def _make_store(memories_per_anchor: dict) -> MemoryStore:
-    """Mock store where query_by_anchor returns a list of the given length per anchor_id."""
+    """Mock store with count_by_anchor and count_by_type for health checks."""
     store = MagicMock(spec=MemoryStore)
+    store.count_by_anchor.return_value = memories_per_anchor
+    store.count_by_type.return_value = {}
+    # Keep legacy mocks for any code that still uses them
     store.query_by_anchor.side_effect = lambda tenant_id, anchor_id, limit: (
         [MagicMock()] * memories_per_anchor.get(anchor_id, 0)
     )
@@ -159,9 +162,8 @@ def test_check_health_healthy():
     counts = {c.anchor_id: (1 if c.is_novelty else 10) for c in cards}
     store = _make_store(counts)
 
-    with patch("psa.health._count_memory_types", return_value={"SEMANTIC": 102}):
-        monitor = AtlasHealthMonitor()
-        report = monitor.check_health(atlas, store, tenant_id="default")
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="default")
 
     assert report.total_anchors == 12
     assert report.novelty_anchors == 2
@@ -176,9 +178,8 @@ def test_check_health_high_novelty():
     counts = {c.anchor_id: (40 if c.is_novelty else 10) for c in cards}
     store = _make_store(counts)
 
-    with patch("psa.health._count_memory_types", return_value={}):
-        monitor = AtlasHealthMonitor()
-        report = monitor.check_health(atlas, store, tenant_id="default")
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="default")
 
     assert report.novelty_rate > NOVELTY_RATE_THRESHOLD
     assert report.should_rebuild is True
@@ -194,9 +195,8 @@ def test_check_health_high_skew():
         counts[c.anchor_id] = 1
     store = _make_store(counts)
 
-    with patch("psa.health._count_memory_types", return_value={}):
-        monitor = AtlasHealthMonitor()
-        report = monitor.check_health(atlas, store, tenant_id="default")
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="default")
 
     assert report.utilization_skew > UTILIZATION_SKEW_THRESHOLD
     assert report.should_rebuild is True
@@ -207,9 +207,8 @@ def test_check_health_empty_atlas():
     atlas = _make_atlas([])
     store = _make_store({})
 
-    with patch("psa.health._count_memory_types", return_value={}):
-        monitor = AtlasHealthMonitor()
-        report = monitor.check_health(atlas, store, tenant_id="t")
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="t")
 
     assert report.total_memories == 0
     assert report.total_anchors == 0
@@ -221,9 +220,8 @@ def test_check_health_anchor_stats():
     atlas = _make_atlas(cards)
     store = _make_store({0: 5, 1: 10, 2: 3})
 
-    with patch("psa.health._count_memory_types", return_value={}):
-        monitor = AtlasHealthMonitor()
-        report = monitor.check_health(atlas, store, tenant_id="t")
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="t")
 
     assert len(report.anchor_stats) == 3
     counts = {s.anchor_id: s.memory_count for s in report.anchor_stats}
