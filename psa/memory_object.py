@@ -434,6 +434,19 @@ class MemoryStore:
             ).fetchall()
         return [self._row_to_memory_object(r) for r in rows]
 
+    def get_by_source_id(self, source_id: str) -> Optional[MemoryObject]:
+        """Return the first MemoryObject linked to a given source_id, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT mo.* FROM memory_objects mo, json_each(mo.source_ids_json) je
+                WHERE je.value = ?
+                LIMIT 1
+                """,
+                (source_id,),
+            ).fetchone()
+        return self._row_to_memory_object(row) if row else None
+
     def update_anchor_assignment(
         self,
         memory_object_id: str,

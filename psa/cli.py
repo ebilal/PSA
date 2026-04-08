@@ -18,12 +18,22 @@ Commands:
     psa wake-up --wing my_app       Wake-up for a specific project
     psa status                      Show what's been filed
 
+PSA Atlas Commands (require psa_mode != "off"):
+    psa atlas build                 Build or rebuild the PSA atlas for the tenant
+    psa atlas status                Show atlas version, anchor count, memory count
+    psa atlas health                Show health report (novelty rate, skew, rebuild recommendation)
+    psa benchmark                   Compare PSA pipeline vs raw ChromaDB search
+    psa migrate                     Migrate ChromaDB palace to PSA MemoryStore (non-destructive)
+
 Examples:
     psa init ~/projects/my_app
     psa mine ~/projects/my_app
     psa mine ~/chats/claude-sessions --mode convos
     psa search "why did we switch to GraphQL"
     psa search "pricing discussion" --wing my_app --room costs
+    psa atlas build
+    psa atlas health
+    psa migrate --palace ~/.psa/palace
 """
 
 import os
@@ -224,6 +234,179 @@ def cmd_repair(args):
     print(f"\n  Repair complete. {filed} drawers rebuilt.")
     print(f"  Backup saved at {backup_path}")
     print(f"\n{'=' * 55}\n")
+
+
+# ── PSA Atlas CLI commands ────────────────────────────────────────────────────
+
+
+def cmd_atlas(args):
+    """Handle 'psa atlas <subcommand>'."""
+    action = getattr(args, "atlas_action", None)
+    if not action:
+        print("Usage: psa atlas {build,status,health}")
+        return
+
+    if action == "build":
+        _cmd_atlas_build(args)
+    elif action == "status":
+        _cmd_atlas_status(args)
+    elif action == "health":
+        _cmd_atlas_health(args)
+
+
+def _cmd_atlas_build(args):
+    tenant_id = getattr(args, "tenant", "default")
+    print(f"Building PSA atlas for tenant '{tenant_id}'...")
+
+    try:
+        from .tenant import TenantManager
+        from .atlas import AtlasManager, AtlasCorpusTooSmall, AtlasUnstable
+        from .memory_object import MemoryStore
+
+        tm = TenantManager()
+        tenant = tm.get_or_create(tenant_id)
+        store = MemoryStore(db_path=tenant.memory_db_path)
+        mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+
+        atlas = mgr.rebuild(store)
+        print(f"  Atlas v{atlas.version} built.")
+        print(f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
+              f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)")
+    except AtlasCorpusTooSmall as e:
+        print(f"  Error: {e}")
+        print("  Mine more content first ('psa mine <dir>') then try again.")
+        sys.exit(1)
+    except AtlasUnstable as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  Error building atlas: {e}")
+        sys.exit(1)
+
+
+def _cmd_atlas_status(args):
+    tenant_id = getattr(args, "tenant", "default")
+    try:
+        from .tenant import TenantManager
+        from .atlas import AtlasManager
+        from .memory_object import MemoryStore
+
+        tm = TenantManager()
+        tenant = tm.get_or_create(tenant_id)
+        store = MemoryStore(db_path=tenant.memory_db_path)
+        mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+        atlas = mgr.get_atlas()
+
+        if atlas is None:
+            print(f"No atlas built for tenant '{tenant_id}'. Run 'psa atlas build'.")
+            return
+
+        total = sum(
+            len(store.query_by_anchor(tenant_id=tenant_id, anchor_id=c.anchor_id, limit=100_000))
+            for c in atlas.cards
+        )
+        print(f"Atlas v{atlas.version} — tenant '{tenant_id}'")
+        print(f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
+              f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)")
+        print(f"  Memories indexed: {total}")
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _cmd_atlas_health(args):
+    tenant_id = getattr(args, "tenant", "default")
+    try:
+        from .tenant import TenantManager
+        from .atlas import AtlasManager
+        from .memory_object import MemoryStore
+        from .health import AtlasHealthMonitor
+
+        tm = TenantManager()
+        tenant = tm.get_or_create(tenant_id)
+        store = MemoryStore(db_path=tenant.memory_db_path)
+        mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+        atlas = mgr.get_atlas()
+
+        if atlas is None:
+            print(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build'.")
+            return
+
+        monitor = AtlasHealthMonitor()
+        report = monitor.check_health(atlas, store, tenant_id=tenant_id)
+        print(report.summary())
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def cmd_benchmark(args):
+    """Compare PSA pipeline vs raw ChromaDB search."""
+    print("PSA benchmark mode — comparing PSA pipeline vs raw ChromaDB search.")
+    print("(Full benchmarking requires a populated palace and atlas. Run 'psa mine' and 'psa atlas build' first.)")
+
+    tenant_id = getattr(args, "tenant", "default")
+    query = getattr(args, "query", None)
+
+    if not query:
+        print("Usage: psa benchmark --query 'your query here'")
+        return
+
+    try:
+        from .searcher import search_memories
+        from .config import MempalaceConfig
+        cfg = MempalaceConfig()
+
+        print(f"\n--- Raw ChromaDB search ---")
+        raw_results = search_memories(query, n_results=5, palace_path=cfg.palace_path)
+        for i, r in enumerate(raw_results.get("results", []), 1):
+            print(f"  [{i}] {r.get('title', '?')} ({r.get('similarity', 0):.3f})")
+
+        print(f"\n--- PSA pipeline search ---")
+        from .pipeline import PSAPipeline
+        try:
+            pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+            result = pipeline.query(query)
+            print(f"  Packed context: {result.token_count} tokens")
+            print(f"  Selected anchors: {[a.anchor_id for a in result.selected_anchors]}")
+            print(f"  Pipeline timing: {result.timing.total_ms:.1f}ms total")
+        except FileNotFoundError:
+            print(f"  (No atlas for tenant '{tenant_id}' — run 'psa atlas build' first)")
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def cmd_migrate(args):
+    """Migrate ChromaDB palace to PSA MemoryStore (non-destructive)."""
+    from .migrate import migrate_palace_to_psa
+
+    palace_path = getattr(args, "palace", None) or os.path.expanduser("~/.psa/palace")
+    tenant_id = getattr(args, "tenant", "default")
+    collection = getattr(args, "collection", "mempalace")
+
+    print(f"Migrating palace '{palace_path}' → PSA tenant '{tenant_id}'...")
+    print("(This is non-destructive — original palace data will not be modified.)")
+
+    try:
+        stats = migrate_palace_to_psa(
+            chroma_path=palace_path,
+            collection_name=collection,
+            tenant_id=tenant_id,
+        )
+        print(f"\n  Migration complete:")
+        print(f"    Total drawers: {stats.total}")
+        print(f"    Migrated:      {stats.migrated}")
+        print(f"    Skipped:       {stats.skipped} (already existed)")
+        print(f"    Failed:        {stats.failed}")
+        if stats.errors:
+            print(f"    Errors: {stats.errors[:3]}")
+    except FileNotFoundError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
 
 
 def cmd_hook(args):
@@ -465,6 +648,39 @@ def main():
         help="Only split files containing at least N sessions (default: 2)",
     )
 
+    # atlas
+    p_atlas = sub.add_parser("atlas", help="PSA atlas commands (build, status, health)")
+    p_atlas.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
+    atlas_sub = p_atlas.add_subparsers(dest="atlas_action")
+    atlas_sub.add_parser("build", help="Build or rebuild the PSA atlas for the tenant")
+    atlas_sub.add_parser("status", help="Show atlas version and anchor count")
+    atlas_sub.add_parser("health", help="Show health report (novelty rate, utilization skew)")
+
+    # benchmark
+    p_benchmark = sub.add_parser(
+        "benchmark", help="Compare PSA pipeline vs raw ChromaDB search"
+    )
+    p_benchmark.add_argument("--query", required=True, help="Query to compare")
+    p_benchmark.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
+
+    # migrate
+    p_migrate = sub.add_parser(
+        "migrate", help="Migrate ChromaDB palace to PSA MemoryStore (non-destructive)"
+    )
+    p_migrate.add_argument(
+        "--palace", default=None, help="Path to ChromaDB palace (default: ~/.psa/palace)"
+    )
+    p_migrate.add_argument(
+        "--tenant", default="default", help="PSA tenant to write into (default: 'default')"
+    )
+    p_migrate.add_argument(
+        "--collection", default="mempalace", help="ChromaDB collection name (default: mempalace)"
+    )
+
     # hook
     p_hook = sub.add_parser(
         "hook",
@@ -510,6 +726,13 @@ def main():
         return
 
     # Handle two-level subcommands
+    if args.command == "atlas":
+        if not getattr(args, "atlas_action", None):
+            p_atlas.print_help()
+            return
+        cmd_atlas(args)
+        return
+
     if args.command == "hook":
         if not getattr(args, "hook_action", None):
             p_hook.print_help()
@@ -535,6 +758,8 @@ def main():
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,
+        "benchmark": cmd_benchmark,
+        "migrate": cmd_migrate,
     }
     dispatch[args.command](args)
 

@@ -15,6 +15,14 @@ Tools (read):
 Tools (write):
   psa_add_drawer      — file verbatim content into a wing/room
   psa_delete_drawer   — remove a drawer by ID
+
+PSA Atlas Tools (additive — require psa_mode != "off"):
+  psa_atlas_search    — full PSA pipeline query (retriever + selector + packer)
+  psa_store_memory    — store a typed memory object in the PSA MemoryStore
+  psa_atlas_status    — atlas overview (version, anchor count, memory count)
+  psa_list_anchors    — list all anchors with utilization stats
+  psa_atlas_health    — atlas health report (novelty rate, utilization skew)
+  psa_rebuild_atlas   — trigger atlas rebuild for the tenant
 """
 
 import argparse
@@ -466,6 +474,186 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
         return {"error": str(e)}
 
 
+# ── PSA Atlas tool helpers ────────────────────────────────────────────────────
+
+
+def _get_psa_pipeline(tenant_id: str = "default"):
+    """Build a PSAPipeline for the given tenant. Returns None if atlas not built."""
+    try:
+        from .pipeline import PSAPipeline
+        return PSAPipeline.from_tenant(tenant_id=tenant_id)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.warning("PSAPipeline init failed: %s", e)
+        return None
+
+
+def _get_psa_store(tenant_id: str = "default"):
+    """Return (TenantManager, MemoryStore) for the given tenant."""
+    from .tenant import TenantManager
+    from .memory_object import MemoryStore
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    return tenant, store
+
+
+def _get_psa_atlas(tenant_id: str = "default"):
+    """Return (Atlas, AtlasManager) or (None, mgr) if no atlas exists."""
+    from .tenant import TenantManager
+    from .atlas import AtlasManager
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+    atlas = mgr.get_atlas()
+    return atlas, mgr
+
+
+# ── PSA Atlas MCP tool functions ──────────────────────────────────────────────
+
+
+def tool_psa_atlas_search(query: str, tenant_id: str = "default", token_budget: int = 6000):
+    """Run the full PSA pipeline query (retriever + selector + packer)."""
+    pipeline = _get_psa_pipeline(tenant_id)
+    if pipeline is None:
+        return {
+            "error": f"No PSA atlas built for tenant '{tenant_id}'. "
+                     "Run 'psa atlas build' first."
+        }
+    pipeline.token_budget = token_budget
+    result = pipeline.query(query)
+    return result.to_dict()
+
+
+def tool_psa_store_memory(
+    title: str,
+    body: str,
+    memory_type: str = "SEMANTIC",
+    tenant_id: str = "default",
+    quality_score: float = 0.7,
+):
+    """Store a typed memory object in the PSA MemoryStore."""
+    from .memory_object import MemoryObject, MemoryType
+    from .embeddings import EmbeddingModel
+
+    try:
+        mtype = MemoryType[memory_type.upper()]
+    except KeyError:
+        valid = [t.name for t in MemoryType]
+        return {"error": f"Unknown memory_type '{memory_type}'. Valid: {valid}"}
+
+    _, store = _get_psa_store(tenant_id)
+    em = EmbeddingModel()
+    embedding = em.embed(f"{title}\n{body}")
+
+    mo = MemoryObject.create(
+        tenant_id=tenant_id,
+        memory_type=mtype,
+        title=title,
+        body=body,
+        summary=body[:256],
+        source_ids=[],
+        classification_reason="stored via MCP psa_store_memory tool",
+        quality_score=quality_score,
+    )
+    store.add(mo, embedding=embedding)
+    return {
+        "memory_object_id": mo.memory_object_id,
+        "memory_type": mtype.value,
+        "title": title,
+        "tenant_id": tenant_id,
+        "stored": True,
+    }
+
+
+def tool_psa_atlas_status(tenant_id: str = "default"):
+    """Atlas overview: version, anchor count, memory count, PSA mode."""
+    atlas, _ = _get_psa_atlas(tenant_id)
+    _, store = _get_psa_store(tenant_id)
+
+    if atlas is None:
+        return {
+            "status": "no_atlas",
+            "tenant_id": tenant_id,
+            "message": "No atlas built yet. Run 'psa atlas build' to build one.",
+        }
+
+    total_memories = sum(
+        len(store.query_by_anchor(tenant_id=tenant_id, anchor_id=c.anchor_id, limit=100_000))
+        for c in atlas.cards
+    )
+    return {
+        "status": "ok",
+        "tenant_id": tenant_id,
+        "atlas_version": atlas.version,
+        "total_anchors": len(atlas.cards),
+        "novelty_anchors": sum(1 for c in atlas.cards if c.is_novelty),
+        "learned_anchors": sum(1 for c in atlas.cards if not c.is_novelty),
+        "total_memories_indexed": total_memories,
+    }
+
+
+def tool_psa_list_anchors(tenant_id: str = "default"):
+    """List all anchors with their names and memory counts."""
+    atlas, _ = _get_psa_atlas(tenant_id)
+    _, store = _get_psa_store(tenant_id)
+
+    if atlas is None:
+        return {"error": f"No atlas for tenant '{tenant_id}'."}
+
+    anchors = []
+    for card in atlas.cards:
+        count = len(store.query_by_anchor(tenant_id=tenant_id, anchor_id=card.anchor_id, limit=100_000))
+        anchors.append({
+            "anchor_id": card.anchor_id,
+            "name": card.name,
+            "meaning": card.meaning[:120],
+            "memory_count": count,
+            "is_novelty": card.is_novelty,
+            "memory_types": card.memory_types,
+        })
+    anchors.sort(key=lambda a: a["memory_count"], reverse=True)
+    return {"tenant_id": tenant_id, "atlas_version": atlas.version, "anchors": anchors}
+
+
+def tool_psa_atlas_health(tenant_id: str = "default"):
+    """Atlas health report: novelty rate, utilization skew, rebuild recommendation."""
+    atlas, _ = _get_psa_atlas(tenant_id)
+    _, store = _get_psa_store(tenant_id)
+
+    if atlas is None:
+        return {"error": f"No atlas for tenant '{tenant_id}'."}
+
+    from .health import AtlasHealthMonitor
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id=tenant_id)
+    return report.to_dict()
+
+
+def tool_psa_rebuild_atlas(tenant_id: str = "default"):
+    """Trigger atlas rebuild for the tenant (may take several minutes)."""
+    from .tenant import TenantManager
+    from .atlas import AtlasManager
+    from .memory_object import MemoryStore
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+
+    try:
+        atlas = mgr.rebuild(store)
+        return {
+            "status": "rebuilt",
+            "tenant_id": tenant_id,
+            "atlas_version": atlas.version,
+            "total_anchors": len(atlas.cards),
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
@@ -714,6 +902,114 @@ TOOLS = {
             "required": ["agent_name"],
         },
         "handler": tool_diary_read,
+    },
+    # ── PSA Atlas Tools ───────────────────────────────────────────────────────
+    "psa_atlas_search": {
+        "description": (
+            "Search using the PSA pipeline: retriever → selector → packer. "
+            "Returns role-organized context (FAILURE → PROCEDURAL → TOOL-USE → "
+            "EPISODES → FACTS → RAW CONTEXT) within a token budget. "
+            "Requires an atlas to be built ('psa atlas build')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The question or task to retrieve context for",
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+                "token_budget": {
+                    "type": "integer",
+                    "description": "Maximum tokens in the packed context (default: 6000)",
+                },
+            },
+            "required": ["query"],
+        },
+        "handler": tool_psa_atlas_search,
+    },
+    "psa_store_memory": {
+        "description": (
+            "Store a typed memory object in the PSA MemoryStore. "
+            "memory_type must be one of: EPISODIC, SEMANTIC, PROCEDURAL, "
+            "FAILURE, TOOL_USE, WORKING_DERIVATIVE."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short title for the memory"},
+                "body": {"type": "string", "description": "Full memory content"},
+                "memory_type": {
+                    "type": "string",
+                    "description": "Memory type: EPISODIC | SEMANTIC | PROCEDURAL | FAILURE | TOOL_USE | WORKING_DERIVATIVE",
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+                "quality_score": {
+                    "type": "number",
+                    "description": "Quality score 0.0-1.0 (default: 0.7)",
+                },
+            },
+            "required": ["title", "body"],
+        },
+        "handler": tool_psa_store_memory,
+    },
+    "psa_atlas_status": {
+        "description": "PSA atlas overview: version, anchor count, memory count. Shows whether an atlas has been built for the tenant.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+            },
+        },
+        "handler": tool_psa_atlas_status,
+    },
+    "psa_list_anchors": {
+        "description": "List all PSA anchors with their names, meanings, and memory counts. Useful for understanding what memory regions have been learned.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+            },
+        },
+        "handler": tool_psa_list_anchors,
+    },
+    "psa_atlas_health": {
+        "description": "Atlas health report: novelty rate, utilization skew, and rebuild recommendation. High novelty rate (>8%) or skew (>3×) indicates the atlas should be rebuilt.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+            },
+        },
+        "handler": tool_psa_atlas_health,
+    },
+    "psa_rebuild_atlas": {
+        "description": "Rebuild the PSA atlas for a tenant. This may take several minutes for large memory stores. Run after significant new memory ingestion or when health check recommends rebuild.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tenant_id": {
+                    "type": "string",
+                    "description": "Tenant identifier (default: 'default')",
+                },
+            },
+        },
+        "handler": tool_psa_rebuild_atlas,
     },
 }
 
