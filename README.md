@@ -2,7 +2,7 @@
 
 # PSA — Persistent Semantic Atlas
 
-### Typed memory objects, anchor-based retrieval, and a trained selector. The highest-scoring AI memory system benchmarked.
+### Typed memory objects, anchor-based retrieval, and a trained selector for AI agents.
 
 <br>
 
@@ -23,8 +23,8 @@ Every conversation you have with an AI — every decision, every debugging sessi
 
 <table>
 <tr>
-<td align="center"><strong>96.6%</strong><br><sub>LongMemEval R@5<br>raw mode, zero API calls</sub></td>
-<td align="center"><strong>256</strong><br><sub>Learned anchor regions<br>per tenant</sub></td>
+<td align="center"><strong>256</strong><br><sub>Learned anchor regions<br>per tenant (224 + 32 novelty)</sub></td>
+<td align="center"><strong>6</strong><br><sub>Typed memory classes<br>episodic · semantic · procedural · failure · tool-use · working</sub></td>
 <td align="center"><strong>$0</strong><br><sub>No subscription. No cloud.<br>Runs entirely local.</sub></td>
 </tr>
 </table>
@@ -394,29 +394,7 @@ claude mcp add psa -- python -m psa.mcp_server
 - `psa_atlas_health` — novelty rate, skew, rebuild recommendation
 - `psa_rebuild_atlas` — trigger rebuild
 
-**Diary**
-- `psa_diary_write`, `psa_diary_read`
 
----
-
-## Benchmarks
-
-| Benchmark | Mode | Score | API Calls |
-|-----------|------|-------|-----------|
-| LongMemEval R@5 | Raw ChromaDB | **96.6%** | Zero |
-| LongMemEval R@5 | Hybrid + rerank | **100%** (500/500) | ~500 |
-
-Reproducible runners in `benchmarks/`. See `benchmarks/BENCHMARKS.md` for full methodology.
-
----
-
-## Contributing
-
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
 
 <!-- Link Definitions -->
 [version-shield]: https://img.shields.io/badge/version-4.0.0-4dc9f6?style=flat-square&labelColor=0a0e14

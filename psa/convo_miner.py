@@ -259,14 +259,8 @@ def mine_convos(
     agent: str = "psa",
     limit: int = 0,
     dry_run: bool = False,
-    extract_mode: str = "exchange",
 ):
-    """Mine a directory of conversation files into the palace.
-
-    extract_mode:
-        "exchange" — default exchange-pair chunking (Q+A = one unit)
-        "general"  — general extractor: decisions, preferences, milestones, problems, emotions
-    """
+    """Mine a directory of conversation files into the palace."""
 
     convo_path = Path(convo_dir).expanduser().resolve()
     if not wing:
@@ -277,7 +271,7 @@ def mine_convos(
         files = files[:limit]
 
     print(f"\n{'=' * 55}")
-    print("  MemPalace Mine — Conversations")
+    print("  PSA Mine — Conversations")
     print(f"{'=' * 55}")
     print(f"  Wing:    {wing}")
     print(f"  Source:  {convo_path}")
@@ -310,52 +304,25 @@ def mine_convos(
         if not content or len(content.strip()) < MIN_CHUNK_SIZE:
             continue
 
-        # Chunk — either exchange pairs or general extraction
-        if extract_mode == "general":
-            from .general_extractor import extract_memories
-
-            chunks = extract_memories(content)
-            # Each chunk already has memory_type; use it as the room name
-        else:
-            chunks = chunk_exchanges(content)
+        chunks = chunk_exchanges(content)
 
         if not chunks:
             continue
 
-        # Detect room from content (general mode uses memory_type instead)
-        if extract_mode != "general":
-            room = detect_convo_room(content)
-        else:
-            room = None  # set per-chunk below
+        room = detect_convo_room(content)
 
         if dry_run:
-            if extract_mode == "general":
-                from collections import Counter
-
-                type_counts = Counter(c.get("memory_type", "general") for c in chunks)
-                types_str = ", ".join(f"{t}:{n}" for t, n in type_counts.most_common())
-                print(f"    [DRY RUN] {filepath.name} → {len(chunks)} memories ({types_str})")
-            else:
-                print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
+            print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
             total_drawers += len(chunks)
-            # Track room counts
-            if extract_mode == "general":
-                for c in chunks:
-                    room_counts[c.get("memory_type", "general")] += 1
-            else:
-                room_counts[room] += 1
+            room_counts[room] += 1
             continue
 
-        if extract_mode != "general":
-            room_counts[room] += 1
+        room_counts[room] += 1
 
         # File each chunk
         drawers_added = 0
         for chunk in chunks:
-            chunk_room = chunk.get("memory_type", room) if extract_mode == "general" else room
-            if extract_mode == "general":
-                room_counts[chunk_room] += 1
-            drawer_id = f"drawer_{wing}_{chunk_room}_{hashlib.md5((source_file + str(chunk['chunk_index'])).encode(), usedforsecurity=False).hexdigest()[:16]}"
+            drawer_id = f"drawer_{wing}_{room}_{hashlib.md5((source_file + str(chunk['chunk_index'])).encode(), usedforsecurity=False).hexdigest()[:16]}"
             try:
                 collection.add(
                     documents=[chunk["content"]],
@@ -363,13 +330,12 @@ def mine_convos(
                     metadatas=[
                         {
                             "wing": wing,
-                            "room": chunk_room,
+                            "room": room,
                             "source_file": source_file,
                             "chunk_index": chunk["chunk_index"],
                             "added_by": agent,
                             "filed_at": datetime.now().isoformat(),
                             "ingest_mode": "convos",
-                            "extract_mode": extract_mode,
                         }
                     ],
                 )

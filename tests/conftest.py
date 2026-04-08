@@ -1,13 +1,12 @@
 """
 conftest.py — Shared fixtures for PSA tests.
 
-Provides isolated palace and knowledge graph instances so tests never
-touch the user's real data or leak temp files on failure.
+Provides isolated palace instances so tests never touch the user's real
+data or leak temp files on failure.
 
 HOME is redirected to a temp directory at module load time — before any
-psa imports — so that module-level initialisations (e.g.
-``_kg = KnowledgeGraph()`` in mcp_server) write to a throwaway location
-instead of the real user profile.
+psa imports — so module-level initialisations write to a throwaway
+location instead of the real user profile.
 """
 
 import os
@@ -36,8 +35,6 @@ import chromadb  # noqa: E402
 import pytest  # noqa: E402
 
 from psa.config import MempalaceConfig  # noqa: E402
-from psa.knowledge_graph import KnowledgeGraph  # noqa: E402
-
 
 @pytest.fixture(autouse=True)
 def _reset_mcp_cache():
@@ -168,25 +165,3 @@ def seeded_collection(collection):
     return collection
 
 
-@pytest.fixture
-def kg(tmp_dir):
-    """An isolated KnowledgeGraph using a temp SQLite file."""
-    db_path = os.path.join(tmp_dir, "test_kg.sqlite3")
-    return KnowledgeGraph(db_path=db_path)
-
-
-@pytest.fixture
-def seeded_kg(kg):
-    """KnowledgeGraph pre-loaded with sample triples."""
-    kg.add_entity("Alice", entity_type="person")
-    kg.add_entity("Max", entity_type="person")
-    kg.add_entity("swimming", entity_type="activity")
-    kg.add_entity("chess", entity_type="activity")
-
-    kg.add_triple("Alice", "parent_of", "Max", valid_from="2015-04-01")
-    kg.add_triple("Max", "does", "swimming", valid_from="2025-01-01")
-    kg.add_triple("Max", "does", "chess", valid_from="2024-06-01")
-    kg.add_triple("Alice", "works_at", "Acme Corp", valid_from="2020-01-01", valid_to="2024-12-31")
-    kg.add_triple("Alice", "works_at", "NewCo", valid_from="2025-01-01")
-
-    return kg

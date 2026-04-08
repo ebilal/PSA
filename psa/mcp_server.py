@@ -37,8 +37,6 @@ from .config import MempalaceConfig
 from .version import __version__
 from .searcher import search_memories
 
-from .knowledge_graph import KnowledgeGraph
-
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger("psa_mcp")
 
@@ -60,11 +58,6 @@ if _args.palace:
     os.environ["PSA_PALACE_PATH"] = os.path.abspath(_args.palace)
 
 _config = MempalaceConfig()
-if _args.palace:
-    _kg = KnowledgeGraph(db_path=os.path.join(_config.palace_path, "knowledge_graph.sqlite3"))
-else:
-    _kg = KnowledgeGraph()
-
 
 _client_cache = None
 _collection_cache = None
@@ -126,12 +119,10 @@ def tool_status():
 # Included in status response so the AI learns it on first wake-up call.
 # Also available via psa_get_aaak_spec tool.
 
-PALACE_PROTOCOL = """IMPORTANT — MemPalace Memory Protocol:
-1. ON WAKE-UP: Call psa_status to load palace overview + AAAK spec.
-2. BEFORE RESPONDING about any person, project, or past event: call psa_kg_query or psa_search FIRST. Never guess — verify.
-3. IF UNSURE about a fact (name, gender, age, relationship): say "let me check" and query the palace. Wrong is worse than slow.
-4. AFTER EACH SESSION: call psa_diary_write to record what happened, what you learned, what matters.
-5. WHEN FACTS CHANGE: call psa_kg_invalidate on the old fact, psa_kg_add for the new one.
+PALACE_PROTOCOL = """IMPORTANT — PSA Memory Protocol:
+1. ON WAKE-UP: Call psa_status to load palace overview.
+2. BEFORE RESPONDING about any past event or decision: call psa_atlas_search or psa_search FIRST. Never guess — verify.
+3. IF UNSURE about a fact: say "let me check" and query the atlas. Wrong is worse than slow.
 
 This protocol ensures the AI KNOWS before it speaks. Storage is not memory — but storage + this protocol = memory."""
 
@@ -313,140 +304,6 @@ def tool_delete_drawer(drawer_id: str):
         return {"success": True, "drawer_id": drawer_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
-
-
-# ==================== KNOWLEDGE GRAPH ====================
-
-
-def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
-    """Query the knowledge graph for an entity's relationships."""
-    results = _kg.query_entity(entity, as_of=as_of, direction=direction)
-    return {"entity": entity, "as_of": as_of, "facts": results, "count": len(results)}
-
-
-def tool_kg_add(
-    subject: str, predicate: str, object: str, valid_from: str = None, source_closet: str = None
-):
-    """Add a relationship to the knowledge graph."""
-    triple_id = _kg.add_triple(
-        subject, predicate, object, valid_from=valid_from, source_closet=source_closet
-    )
-    return {"success": True, "triple_id": triple_id, "fact": f"{subject} → {predicate} → {object}"}
-
-
-def tool_kg_invalidate(subject: str, predicate: str, object: str, ended: str = None):
-    """Mark a fact as no longer true (set end date)."""
-    _kg.invalidate(subject, predicate, object, ended=ended)
-    return {
-        "success": True,
-        "fact": f"{subject} → {predicate} → {object}",
-        "ended": ended or "today",
-    }
-
-
-def tool_kg_timeline(entity: str = None):
-    """Get chronological timeline of facts, optionally for one entity."""
-    results = _kg.timeline(entity)
-    return {"entity": entity or "all", "timeline": results, "count": len(results)}
-
-
-def tool_kg_stats():
-    """Knowledge graph overview: entities, triples, relationship types."""
-    return _kg.stats()
-
-
-# ==================== AGENT DIARY ====================
-
-
-def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
-    """
-    Write a diary entry for this agent. Each agent gets its own wing
-    with a diary room. Entries are timestamped and accumulate over time.
-
-    This is the agent's personal journal — observations, thoughts,
-    what it worked on, what it noticed, what it thinks matters.
-    """
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
-    room = "diary"
-    col = _get_collection(create=True)
-    if not col:
-        return _no_palace()
-
-    now = datetime.now()
-    entry_id = f"diary_{wing}_{now.strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(entry[:50].encode()).hexdigest()[:8]}"
-
-    try:
-        col.add(
-            ids=[entry_id],
-            documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
-        )
-        logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
-        return {
-            "success": True,
-            "entry_id": entry_id,
-            "agent": agent_name,
-            "topic": topic,
-            "timestamp": now.isoformat(),
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-def tool_diary_read(agent_name: str, last_n: int = 10):
-    """
-    Read an agent's recent diary entries. Returns the last N entries
-    in chronological order — the agent's personal journal.
-    """
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
-    col = _get_collection()
-    if not col:
-        return _no_palace()
-
-    try:
-        results = col.get(
-            where={"$and": [{"wing": wing}, {"room": "diary"}]},
-            include=["documents", "metadatas"],
-            limit=10000,
-        )
-
-        if not results["ids"]:
-            return {"agent": agent_name, "entries": [], "message": "No diary entries yet."}
-
-        # Combine and sort by timestamp
-        entries = []
-        for doc, meta in zip(results["documents"], results["metadatas"]):
-            entries.append(
-                {
-                    "date": meta.get("date", ""),
-                    "timestamp": meta.get("filed_at", ""),
-                    "topic": meta.get("topic", ""),
-                    "content": doc,
-                }
-            )
-
-        entries.sort(key=lambda x: x["timestamp"], reverse=True)
-        entries = entries[:last_n]
-
-        return {
-            "agent": agent_name,
-            "entries": entries,
-            "total": len(results["ids"]),
-            "showing": len(entries),
-        }
-    except Exception as e:
-        return {"error": str(e)}
 
 
 # ── PSA Atlas tool helpers ────────────────────────────────────────────────────
@@ -658,92 +515,7 @@ TOOLS = {
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_get_taxonomy,
     },
-    "psa_get_aaak_spec": {
-        "description": "Get the AAAK dialect specification — the compressed memory format MemPalace uses. Call this if you need to read or write AAAK-compressed memories.",
-        "input_schema": {"type": "object", "properties": {}},
-        "handler": tool_get_aaak_spec,
-    },
-    "psa_kg_query": {
-        "description": "Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "entity": {
-                    "type": "string",
-                    "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')",
-                },
-                "as_of": {
-                    "type": "string",
-                    "description": "Date filter — only facts valid at this date (YYYY-MM-DD, optional)",
-                },
-                "direction": {
-                    "type": "string",
-                    "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)",
-                },
-            },
-            "required": ["entity"],
-        },
-        "handler": tool_kg_query,
-    },
-    "psa_kg_add": {
-        "description": "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01').",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "subject": {"type": "string", "description": "The entity doing/being something"},
-                "predicate": {
-                    "type": "string",
-                    "description": "The relationship type (e.g. 'loves', 'works_on', 'daughter_of')",
-                },
-                "object": {"type": "string", "description": "The entity being connected to"},
-                "valid_from": {
-                    "type": "string",
-                    "description": "When this became true (YYYY-MM-DD, optional)",
-                },
-                "source_closet": {
-                    "type": "string",
-                    "description": "Closet ID where this fact appears (optional)",
-                },
-            },
-            "required": ["subject", "predicate", "object"],
-        },
-        "handler": tool_kg_add,
-    },
-    "psa_kg_invalidate": {
-        "description": "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "subject": {"type": "string", "description": "Entity"},
-                "predicate": {"type": "string", "description": "Relationship"},
-                "object": {"type": "string", "description": "Connected entity"},
-                "ended": {
-                    "type": "string",
-                    "description": "When it stopped being true (YYYY-MM-DD, default: today)",
-                },
-            },
-            "required": ["subject", "predicate", "object"],
-        },
-        "handler": tool_kg_invalidate,
-    },
-    "psa_kg_timeline": {
-        "description": "Chronological timeline of facts. Shows the story of an entity (or everything) in order.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "entity": {
-                    "type": "string",
-                    "description": "Entity to get timeline for (optional — omit for full timeline)",
-                },
-            },
-        },
-        "handler": tool_kg_timeline,
-    },
-    "psa_kg_stats": {
-        "description": "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
-        "input_schema": {"type": "object", "properties": {}},
-        "handler": tool_kg_stats,
-    },
+
     "psa_search": {
         "description": "Semantic search. Returns verbatim drawer content with similarity scores.",
         "input_schema": {
@@ -804,46 +576,6 @@ TOOLS = {
             "required": ["drawer_id"],
         },
         "handler": tool_delete_drawer,
-    },
-    "psa_diary_write": {
-        "description": "Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Your name — each agent gets their own diary wing",
-                },
-                "entry": {
-                    "type": "string",
-                    "description": "Your diary entry in AAAK format — compressed, entity-coded, emotion-marked",
-                },
-                "topic": {
-                    "type": "string",
-                    "description": "Topic tag (optional, default: general)",
-                },
-            },
-            "required": ["agent_name", "entry"],
-        },
-        "handler": tool_diary_write,
-    },
-    "psa_diary_read": {
-        "description": "Read your recent diary entries (in AAAK). See what past versions of yourself recorded — your journal across sessions.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Your name — each agent gets their own diary wing",
-                },
-                "last_n": {
-                    "type": "integer",
-                    "description": "Number of recent entries to read (default: 10)",
-                },
-            },
-            "required": ["agent_name"],
-        },
-        "handler": tool_diary_read,
     },
     # ── PSA Atlas Tools ───────────────────────────────────────────────────────
     "psa_atlas_search": {
