@@ -412,3 +412,45 @@ class OracleLabeler:
                     except Exception as e:
                         logger.warning("Failed to parse oracle label: %s", e)
         return labels
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="PSA oracle labeler — generate training labels")
+    parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
+    parser.add_argument("--n-queries", type=int, default=500, help="Number of queries to label (default: 500)")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output JSONL path (default: ~/.psa/tenants/<tenant>/training/oracle_labels.jsonl)",
+    )
+    args = parser.parse_args()
+
+    from psa.tenant import TenantManager
+    from psa.memory_object import MemoryStore
+    from psa.atlas import AtlasManager
+    from psa.embeddings import EmbeddingModel
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(args.tenant)
+    output = args.output or os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
+
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    embedding_model = EmbeddingModel()
+    atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=args.tenant)
+    atlas = atlas_mgr.get_atlas()
+    if atlas is None:
+        print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
+        raise SystemExit(1)
+
+    labeler = OracleLabeler(
+        store=store,
+        atlas=atlas,
+        embedding_model=embedding_model,
+        tenant_id=args.tenant,
+        output_path=output,
+    )
+    labels = labeler.label_queries(n_queries=args.n_queries)
+    print(f"Labeled {len(labels)} queries → {output}")

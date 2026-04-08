@@ -192,7 +192,7 @@ psa atlas rebuild                       # force rebuild
 ### Benchmark
 
 ```bash
-psa benchmark "query"                   # compare PSA vs raw ChromaDB side-by-side
+psa benchmark --query "query"           # compare PSA vs raw ChromaDB side-by-side
 ```
 
 ### Migration (from legacy palace)

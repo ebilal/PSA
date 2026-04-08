@@ -89,7 +89,6 @@ def cmd_mine(args):
             agent=args.agent,
             limit=args.limit,
             dry_run=args.dry_run,
-            extract_mode=args.extract,
         )
     else:
         from .miner import mine
@@ -299,7 +298,7 @@ def cmd_atlas(args):
         print("Usage: psa atlas {build,status,health}")
         return
 
-    if action == "build":
+    if action in ("build", "rebuild"):
         _cmd_atlas_build(args)
     elif action == "status":
         _cmd_atlas_status(args)
@@ -748,6 +747,7 @@ def main():
     atlas_sub.add_parser("build", help="Build or rebuild the PSA atlas for the tenant")
     atlas_sub.add_parser("status", help="Show atlas version and anchor count")
     atlas_sub.add_parser("health", help="Show health report (novelty rate, utilization skew)")
+    atlas_sub.add_parser("rebuild", help="Force rebuild the atlas (same as build)")
 
     # benchmark
     p_benchmark = sub.add_parser(

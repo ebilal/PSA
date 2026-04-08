@@ -313,3 +313,30 @@ class DataGenerator:
             if family in counts:
                 counts[family] += 1
         return counts
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PSA training data generator")
+    parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
+    parser.add_argument("--labels", required=True, help="Path to oracle_labels.jsonl")
+    parser.add_argument("--output", required=True, help="Output JSONL path for training data")
+    parser.add_argument("--n-samples", type=int, default=1000, help="Total samples to generate (default: 1000)")
+    args = parser.parse_args()
+
+    from psa.atlas import AtlasManager
+    from psa.tenant import TenantManager
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(args.tenant)
+    atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=args.tenant)
+    atlas = atlas_mgr.get_atlas()
+    if atlas is None:
+        print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
+        raise SystemExit(1)
+
+    gen = DataGenerator(oracle_labels_path=args.labels, atlas=atlas)
+    records = gen.generate(n_total=args.n_samples)
+    gen.save(records, args.output)
+    print(f"Generated {len(records)} training samples → {args.output}")

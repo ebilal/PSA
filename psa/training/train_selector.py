@@ -336,3 +336,37 @@ class SelectorTrainer:
                 best_tau = tau
 
         return best_tau
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PSA selector trainer — fine-tune cross-encoder")
+    parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
+    parser.add_argument("--training-data", required=True, help="Path to training_data.jsonl")
+    parser.add_argument("--output-dir", required=True, help="Directory to save the trained model")
+    parser.add_argument("--epochs", type=int, default=EPOCHS, help=f"Training epochs (default: {EPOCHS})")
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE, help=f"Learning rate (default: {LEARNING_RATE})")
+    args = parser.parse_args()
+
+    from psa.tenant import TenantManager
+    from psa.atlas import AtlasManager
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(args.tenant)
+    atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=args.tenant)
+    atlas = atlas_mgr.get_atlas()
+    if atlas is None:
+        print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
+        raise SystemExit(1)
+
+    trainer = SelectorTrainer(
+        training_data_path=args.training_data,
+        output_dir=args.output_dir,
+        atlas_version=str(atlas.version),
+        tenant_id=args.tenant,
+        epochs=args.epochs,
+        learning_rate=args.lr,
+    )
+    version = trainer.train()
+    print(f"Selector trained → {args.output_dir} (version: {version.version_id})")
