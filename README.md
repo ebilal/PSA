@@ -348,31 +348,6 @@ result = pipeline.query("what auth approach did we use?")
 
 ---
 
-## Knowledge Graph
-
-Temporal entity-relationship triples — local SQLite, no graph database required.
-
-```python
-from psa.knowledge_graph import KnowledgeGraph
-
-kg = KnowledgeGraph()
-kg.add_triple("Kai", "works_on", "Orion", valid_from="2025-06-01")
-kg.add_triple("Maya", "assigned_to", "auth-migration", valid_from="2026-01-15")
-
-# Current state
-kg.query_entity("Kai")
-# → [Kai → works_on → Orion (current)]
-
-# Point-in-time query
-kg.query_entity("Maya", as_of="2026-01-20")
-# → [Maya → assigned_to → auth-migration (active)]
-
-# Invalidate when something changes
-kg.invalidate("Kai", "works_on", "Orion", ended="2026-03-01")
-```
-
----
-
 ## Auto-Save Hooks (Claude Code)
 
 Two hooks that automatically save memories during work sessions:
@@ -418,9 +393,6 @@ claude mcp add psa -- python -m psa.mcp_server
 - `psa_list_anchors` — anchor cards + utilization
 - `psa_atlas_health` — novelty rate, skew, rebuild recommendation
 - `psa_rebuild_atlas` — trigger rebuild
-
-**Knowledge Graph**
-- `psa_kg_query`, `psa_kg_add`, `psa_kg_invalidate`, `psa_kg_timeline`, `psa_kg_stats`
 
 **Diary**
 - `psa_diary_write`, `psa_diary_read`
