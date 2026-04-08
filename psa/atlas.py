@@ -290,7 +290,7 @@ def _generate_stub_card(
         anchor_id=anchor_id,
         name=name,
         meaning=meaning,
-        memory_types=[m.memory_type.value for m in sample_memories[:5]] if not is_novelty else [],
+        memory_types=memory_types if not is_novelty else [],
         include_terms=include_terms,
         exclude_terms=exclude_terms,
         prototype_examples=prototypes,

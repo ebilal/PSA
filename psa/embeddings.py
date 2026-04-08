@@ -18,8 +18,8 @@ def _require_sentence_transformers():
     except ImportError:
         raise ImportError(
             "sentence-transformers is required for PSA embeddings.\n"
-            "Install it with: pip install 'psa[psa]'\n"
-            "or: pip install sentence-transformers"
+            "Install it with: pip install sentence-transformers\n"
+            "or: pip install 'psa[training]'"
         )
 
 

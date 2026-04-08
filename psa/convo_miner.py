@@ -15,8 +15,6 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-import chromadb
-
 from .normalize import normalize
 
 
@@ -212,6 +210,7 @@ def detect_convo_room(content: str) -> str:
 
 
 def get_collection(palace_path: str):
+    import chromadb
     os.makedirs(palace_path, exist_ok=True)
     client = chromadb.PersistentClient(path=palace_path)
     try:

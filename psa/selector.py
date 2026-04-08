@@ -100,7 +100,7 @@ def _load_cross_encoder(model_path: str):
     except ImportError:
         raise ImportError(
             "sentence-transformers is required for the trained selector. "
-            "Install it with: pip install 'psa[psa]'"
+            "Install it with: pip install 'psa[training]'"
         )
 
 

@@ -116,7 +116,11 @@ def cmd_search(args):
     tenant_id = cfg.tenant_id
     try:
         from .pipeline import PSAPipeline
-        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, token_budget=cfg.token_budget)
+        pipeline = PSAPipeline.from_tenant(
+            tenant_id=tenant_id,
+            token_budget=cfg.token_budget,
+            psa_mode=cfg.psa_mode,
+        )
         result = pipeline.query(query)
         print(f"\n── PSA Search: {query!r} ──\n")
         print(result.text or "(no context found)")
@@ -414,7 +418,7 @@ def cmd_benchmark(args):
         print(f"\n--- PSA pipeline search ---")
         from .pipeline import PSAPipeline
         try:
-            pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+            pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, psa_mode=cfg.psa_mode)
             result = pipeline.query(query)
             print(f"  Packed context: {result.token_count} tokens")
             print(f"  Selected anchors: {[a.anchor_id for a in result.selected_anchors]}")
@@ -507,7 +511,12 @@ def cmd_instructions(args):
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
     import chromadb
-    from .dialect import Dialect
+    try:
+        from .dialect import Dialect
+    except ImportError:
+        print("Error: 'compress' requires the dialect module which has been removed in PSA v4.")
+        print("Use 'psa mine' to re-ingest content through the consolidation pipeline.")
+        return
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
 

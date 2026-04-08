@@ -36,7 +36,6 @@ from datetime import datetime
 from .config import MempalaceConfig
 from .version import __version__
 from .searcher import search_memories
-import chromadb
 
 from .knowledge_graph import KnowledgeGraph
 
@@ -75,6 +74,7 @@ def _get_collection(create=False):
     """Return the ChromaDB collection, caching the client between calls."""
     global _client_cache, _collection_cache
     try:
+        import chromadb
         if _client_cache is None:
             _client_cache = chromadb.PersistentClient(path=_config.palace_path)
         if create:
@@ -532,7 +532,8 @@ def tool_psa_store_memory(
         classification_reason="stored via MCP psa_store_memory tool",
         quality_score=quality_score,
     )
-    store.add(mo, embedding=embedding)
+    mo.embedding = embedding
+    store.add(mo)
     return {
         "memory_object_id": mo.memory_object_id,
         "memory_type": mtype.value,

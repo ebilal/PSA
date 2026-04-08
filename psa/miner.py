@@ -15,8 +15,6 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-import chromadb
-
 READABLE_EXTENSIONS = {
     ".txt",
     ".md",
@@ -394,6 +392,7 @@ def chunk_text(content: str, source_file: str) -> list:
 
 
 def get_collection(palace_path: str):
+    import chromadb
     os.makedirs(palace_path, exist_ok=True)
     client = chromadb.PersistentClient(path=palace_path)
     try:
@@ -715,6 +714,7 @@ def mine_psa(
 def status(palace_path: str):
     """Show what's been filed in the palace."""
     try:
+        import chromadb
         client = chromadb.PersistentClient(path=palace_path)
         col = client.get_collection("psa_drawers")
     except Exception:
