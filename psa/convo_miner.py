@@ -394,6 +394,52 @@ def mine_convos(
     print('\n  Next: psa search "what you\'re looking for"')
     print(f"{'=' * 55}\n")
 
+    # PSA dual-path: consolidate conversations alongside ChromaDB storage
+    if not dry_run:
+        _mine_convos_psa(convo_dir=convo_dir, files=files)
+
+
+def _mine_convos_psa(convo_dir: str, files: list):
+    """Run PSA consolidation over conversation files (dual-path, additive)."""
+    try:
+        from .config import MempalaceConfig
+        from .consolidation import ConsolidationPipeline
+        from .memory_object import MemoryStore
+        from .tenant import TenantManager
+    except ImportError:
+        return
+
+    cfg = MempalaceConfig()
+    if cfg.psa_mode == "off":
+        return
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(cfg.tenant_id)
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=True)
+
+    print(f"  [PSA] Running conversation consolidation (mode: {cfg.psa_mode})...")
+    total = 0
+    for filepath in files:
+        try:
+            text = filepath.read_text(encoding="utf-8", errors="replace")
+        except (OSError, AttributeError):
+            try:
+                from pathlib import Path
+                text = Path(str(filepath)).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        if not text.strip():
+            continue
+        memories = pipeline.consolidate(
+            raw_text=text,
+            source_type="conversation",
+            source_path=str(filepath),
+            title=Path(str(filepath)).name,
+        )
+        total += len(memories)
+    print(f"  [PSA] {total} memory objects created from conversations.\n")
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

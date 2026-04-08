@@ -637,6 +637,75 @@ def mine(
     print('\n  Next: psa search "what you\'re looking for"')
     print(f"{'=' * 55}\n")
 
+    # PSA dual-path: run consolidation alongside ChromaDB storage
+    if not dry_run:
+        from .config import MempalaceConfig
+        cfg = MempalaceConfig()
+        psa_mode = cfg.psa_mode
+        if psa_mode != "off":
+            print(f"  [PSA] Running consolidation (mode: {psa_mode})...")
+            n = mine_psa(project_dir, tenant_id=cfg.tenant_id, psa_mode=psa_mode)
+            print(f"  [PSA] {n} memory objects created.\n")
+
+
+# =============================================================================
+# PSA DUAL-PATH: mine_psa
+# =============================================================================
+
+
+def mine_psa(
+    project_dir: str,
+    tenant_id: str = "default",
+    psa_mode: str = "side-by-side",
+) -> int:
+    """
+    PSA consolidation pass over a project directory.
+
+    Reads each source file, persists it as a RawSource, and runs
+    ConsolidationPipeline to extract typed MemoryObjects.
+
+    Called by mine() when psa_mode != "off". Never touches ChromaDB.
+    Returns the number of memory objects created.
+    """
+    if psa_mode == "off":
+        return 0
+
+    try:
+        from .consolidation import ConsolidationPipeline, _infer_chunk_type
+        from .memory_object import MemoryStore
+        from .tenant import TenantManager
+    except ImportError as e:
+        import logging
+        logging.getLogger("psa.miner").warning("PSA consolidation unavailable: %s", e)
+        return 0
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    pipeline = ConsolidationPipeline(store=store, tenant_id=tenant_id, use_llm=True)
+
+    project_path = Path(project_dir).expanduser().resolve()
+    files = scan_project(str(project_path))
+
+    total = 0
+    for filepath in files:
+        try:
+            text = filepath.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+
+        memories = pipeline.consolidate(
+            raw_text=text,
+            source_type="project_file",
+            source_path=str(filepath),
+            title=filepath.name,
+        )
+        total += len(memories)
+
+    return total
+
 
 # =============================================================================
 # STATUS
