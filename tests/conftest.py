@@ -18,6 +18,11 @@ import tempfile
 _original_env = {}
 _session_tmp = tempfile.mkdtemp(prefix="psa_session_")
 
+# Preserve the HuggingFace model cache so embedding tests can use
+# locally-cached models even after HOME is redirected.
+_real_home = os.path.expanduser("~")
+os.environ.setdefault("HF_HOME", os.path.join(_real_home, ".cache", "huggingface"))
+
 for _var in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"):
     _original_env[_var] = os.environ.get(_var)
 

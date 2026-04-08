@@ -12,6 +12,14 @@ from pathlib import Path
 DEFAULT_PALACE_PATH = os.path.expanduser("~/.psa/palace")
 DEFAULT_COLLECTION_NAME = "psa_drawers"
 
+# PSA-specific defaults
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+DEFAULT_ATLAS_SIZE = 256          # 224 learned + 32 novelty anchors (V1 fixed)
+DEFAULT_TOKEN_BUDGET = 6000       # packed context token budget
+DEFAULT_SELECTOR_THRESHOLD = 0.3  # minimum selector score to include an anchor
+DEFAULT_TENANT_ID = "default"
+DEFAULT_PSA_MODE = "off"          # "off" | "side-by-side" | "primary"
+
 DEFAULT_TOPIC_WINGS = [
     "emotions",
     "consciousness",
@@ -134,6 +142,50 @@ class MempalaceConfig:
     def hall_keywords(self):
         """Mapping of hall names to keyword lists."""
         return self._file_config.get("hall_keywords", DEFAULT_HALL_KEYWORDS)
+
+    # ── PSA-specific settings ────────────────────────────────────────────────
+
+    @property
+    def embedding_model(self):
+        """Sentence-transformers model for PSA embeddings."""
+        return self._file_config.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+
+    @property
+    def atlas_size(self):
+        """Total anchor count (learned + novelty). Fixed at 256 for V1."""
+        return int(self._file_config.get("atlas_size", DEFAULT_ATLAS_SIZE))
+
+    @property
+    def token_budget(self):
+        """Maximum packed-context token budget."""
+        return int(self._file_config.get("token_budget", DEFAULT_TOKEN_BUDGET))
+
+    @property
+    def selector_threshold(self):
+        """Minimum score for the anchor selector to include an anchor."""
+        return float(self._file_config.get("selector_threshold", DEFAULT_SELECTOR_THRESHOLD))
+
+    @property
+    def tenant_id(self):
+        """Active tenant identifier."""
+        return (
+            os.environ.get("PSA_TENANT_ID")
+            or self._file_config.get("tenant_id", DEFAULT_TENANT_ID)
+        )
+
+    @property
+    def psa_mode(self):
+        """
+        PSA operating mode.
+
+        "off"          — existing raw ChromaDB search only (default)
+        "side-by-side" — PSA runs alongside raw; results from both available
+        "primary"      — PSA is the primary search path
+        """
+        return (
+            os.environ.get("PSA_MODE")
+            or self._file_config.get("psa_mode", DEFAULT_PSA_MODE)
+        )
 
     def init(self):
         """Create config directory and write default config.json if it doesn't exist."""
