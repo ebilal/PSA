@@ -336,7 +336,9 @@ if __name__ == "__main__":
         print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
         raise SystemExit(1)
 
-    gen = DataGenerator(oracle_labels_path=args.labels, atlas=atlas)
-    records = gen.generate(n_total=args.n_samples)
-    gen.save(records, args.output)
-    print(f"Generated {len(records)} training samples → {args.output}")
+    # Build anchor_cards dict: {anchor_id: card_text}
+    anchor_cards = {c.anchor_id: c.to_card_text() for c in atlas.cards}
+
+    gen = DataGenerator(oracle_labels_path=args.labels, anchor_cards=anchor_cards)
+    n_written = gen.generate(output_path=args.output, n_examples=args.n_samples)
+    print(f"Generated {n_written} training samples → {args.output}")

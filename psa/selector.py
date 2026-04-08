@@ -125,10 +125,10 @@ def _trained_select(
     except Exception as e:
         logger.warning("Cross-encoder prediction failed (%s); falling back to cosine", e)
         return _cosine_select(
-            query_vec=[],
+            query_vec=[],        # unused by _cosine_select (sorts by dense_score)
             candidates=candidates,
             max_k=max_k,
-            threshold=0.0,
+            threshold=0.0,      # no threshold in fallback — always return top-k
         )
 
     scored = sorted(

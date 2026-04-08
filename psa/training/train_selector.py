@@ -200,8 +200,16 @@ class SelectorTrainer:
             len(by_type.get("adversarial", [])),
         )
 
+        # Select device: MPS (Apple Silicon) → CPU fallback (no CUDA assumed)
+        import torch
+        if torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+        logger.info("Training on device: %s", device)
+
         # Load base model
-        model = CrossEncoder(self.base_model, max_length=self.max_seq_len)
+        model = CrossEncoder(self.base_model, max_length=self.max_seq_len, device=device)
 
         model_out = os.path.join(self.output_dir, f"selector_v{version}")
         os.makedirs(model_out, exist_ok=True)
@@ -361,12 +369,10 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     trainer = SelectorTrainer(
-        training_data_path=args.training_data,
         output_dir=args.output_dir,
-        atlas_version=str(atlas.version),
-        tenant_id=args.tenant,
+        atlas_version=atlas.version,
         epochs=args.epochs,
         learning_rate=args.lr,
     )
-    version = trainer.train()
-    print(f"Selector trained → {args.output_dir} (version: {version.version_id})")
+    sv = trainer.train(train_data_path=args.training_data)
+    print(f"Selector v{sv.version} trained → {sv.model_path}")

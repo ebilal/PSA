@@ -417,6 +417,7 @@ class OracleLabeler:
 if __name__ == "__main__":
     import argparse
     import os
+    import random
 
     parser = argparse.ArgumentParser(description="PSA oracle labeler — generate training labels")
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
@@ -429,28 +430,52 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     from psa.tenant import TenantManager
-    from psa.memory_object import MemoryStore
-    from psa.atlas import AtlasManager
-    from psa.embeddings import EmbeddingModel
+    from psa.pipeline import PSAPipeline
 
     tm = TenantManager()
     tenant = tm.get_or_create(args.tenant)
     output = args.output or os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
 
-    store = MemoryStore(db_path=tenant.memory_db_path)
-    embedding_model = EmbeddingModel()
-    atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=args.tenant)
-    atlas = atlas_mgr.get_atlas()
-    if atlas is None:
+    try:
+        pipeline = PSAPipeline.from_tenant(tenant_id=args.tenant, psa_mode="primary")
+    except FileNotFoundError:
         print(f"No atlas for tenant '{args.tenant}'. Run 'psa atlas build' first.")
         raise SystemExit(1)
 
+    # Use memory object titles + summaries as self-supervised queries
+    from psa.memory_object import MemoryStore, MemoryType
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    all_memories = []
+    for mtype in MemoryType:
+        all_memories.extend(
+            store.query_by_type(tenant_id=args.tenant, memory_type=mtype, limit=1000)
+        )
+
+    if not all_memories:
+        # Fall back to anchor card texts as query source
+        queries = [
+            (f"anchor_{c.anchor_id}", c.name + ". " + c.meaning)
+            for c in pipeline.atlas.cards
+        ]
+    else:
+        queries = [(m.memory_object_id, m.title + ". " + m.summary) for m in all_memories]
+
+    random.shuffle(queries)
+    queries = queries[:args.n_queries]
+
     labeler = OracleLabeler(
-        store=store,
-        atlas=atlas,
-        embedding_model=embedding_model,
-        tenant_id=args.tenant,
+        pipeline=pipeline,
         output_path=output,
     )
-    labels = labeler.label_queries(n_queries=args.n_queries)
-    print(f"Labeled {len(labels)} queries → {output}")
+
+    count = 0
+    for query_id, query_text in queries:
+        try:
+            labeler.label(query_id=query_id, query=query_text)
+            count += 1
+            if count % 10 == 0:
+                print(f"  Labeled {count}/{len(queries)}...", flush=True)
+        except Exception as e:
+            logger.warning("Failed to label query %s: %s", query_id, e)
+
+    print(f"Labeled {count} queries → {output}")
