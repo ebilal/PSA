@@ -6,7 +6,7 @@ Two-pass approach:
   Pass 1: scan files, extract entity candidates with signal counts
   Pass 2: score and classify each candidate as person, project, or uncertain
 
-Used by mempalace init before mining begins.
+Used by psa init before mining begins.
 The confirmed entity map feeds the miner as the taxonomy.
 
 Usage:
@@ -81,7 +81,7 @@ PROJECT_VERB_PATTERNS = [
     r"\bthe\s+{name}\s+system\b",
     r"\bthe\s+{name}\s+repo\b",
     r"\b{name}\s+v\d+\b",  # MemPal v2
-    r"\b{name}\.py\b",  # mempalace.py
+    r"\b{name}\.py\b",  # psa.py
     r"\b{name}-core\b",  # mempal-core (hyphen only, not underscore)
     r"\b{name}-local\b",
     r"\bimport\s+{name}\b",
@@ -433,7 +433,7 @@ SKIP_DIRS = {
     "build",
     ".next",
     "coverage",
-    ".mempalace",
+    ".psa",
 }
 
 

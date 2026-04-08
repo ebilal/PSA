@@ -14,7 +14,7 @@ from AAAK output. It is a structured summary layer (closets) that points to the
 original verbatim content (drawers). The 96.6% benchmark score is from raw mode,
 not AAAK mode.
 
-Adapted for mempalace: works standalone on plain text and ChromaDB drawers.
+Adapted for psa: works standalone on plain text and ChromaDB drawers.
 No dependency on palace.py or layers.py.
 
 FORMAT:
@@ -409,7 +409,7 @@ class Dialect:
             flags.append("PIVOT")
         return "+".join(flags) if flags else ""
 
-    # === PLAIN TEXT COMPRESSION (new for mempalace) ===
+    # === PLAIN TEXT COMPRESSION (new for psa) ===
 
     def _detect_emotions(self, text: str) -> List[str]:
         """Detect emotions from plain text using keyword signals."""

@@ -3,27 +3,27 @@
 MemPalace — Give your AI a memory. No API key required.
 
 Two ways to ingest:
-  Projects:      mempalace mine ~/projects/my_app          (code, docs, notes)
-  Conversations: mempalace mine ~/chats/ --mode convos     (Claude, ChatGPT, Slack)
+  Projects:      psa mine ~/projects/my_app          (code, docs, notes)
+  Conversations: psa mine ~/chats/ --mode convos     (Claude, ChatGPT, Slack)
 
 Same palace. Same search. Different ingest strategies.
 
 Commands:
-    mempalace init <dir>                  Detect rooms from folder structure
-    mempalace split <dir>                 Split concatenated mega-files into per-session files
-    mempalace mine <dir>                  Mine project files (default)
-    mempalace mine <dir> --mode convos    Mine conversation exports
-    mempalace search "query"              Find anything, exact words
-    mempalace wake-up                     Show L0 + L1 wake-up context
-    mempalace wake-up --wing my_app       Wake-up for a specific project
-    mempalace status                      Show what's been filed
+    psa init <dir>                  Detect rooms from folder structure
+    psa split <dir>                 Split concatenated mega-files into per-session files
+    psa mine <dir>                  Mine project files (default)
+    psa mine <dir> --mode convos    Mine conversation exports
+    psa search "query"              Find anything, exact words
+    psa wake-up                     Show L0 + L1 wake-up context
+    psa wake-up --wing my_app       Wake-up for a specific project
+    psa status                      Show what's been filed
 
 Examples:
-    mempalace init ~/projects/my_app
-    mempalace mine ~/projects/my_app
-    mempalace mine ~/chats/claude-sessions --mode convos
-    mempalace search "why did we switch to GraphQL"
-    mempalace search "pricing discussion" --wing my_app --room costs
+    psa init ~/projects/my_app
+    psa mine ~/projects/my_app
+    psa mine ~/chats/claude-sessions --mode convos
+    psa search "why did we switch to GraphQL"
+    psa search "pricing discussion" --wing my_app --room costs
 """
 
 import os
@@ -141,7 +141,7 @@ def cmd_split(args):
         argv += ["--min-sessions", str(args.min_sessions)]
 
     old_argv = sys.argv
-    sys.argv = ["mempalace split"] + argv
+    sys.argv = ["psa split"] + argv
     try:
         split_main()
     finally:
@@ -174,7 +174,7 @@ def cmd_repair(args):
     # Try to read existing drawers
     try:
         client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = client.get_collection("psa_drawers")
         total = col.count()
         print(f"  Drawers found: {total}")
     except Exception as e:
@@ -209,8 +209,8 @@ def cmd_repair(args):
     shutil.copytree(palace_path, backup_path)
 
     print("  Rebuilding collection...")
-    client.delete_collection("mempalace_drawers")
-    new_col = client.create_collection("mempalace_drawers")
+    client.delete_collection("psa_drawers")
+    new_col = client.create_collection("psa_drawers")
 
     filed = 0
     for i in range(0, len(all_ids), batch_size):
@@ -264,10 +264,10 @@ def cmd_compress(args):
     # Connect to palace
     try:
         client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = client.get_collection("psa_drawers")
     except Exception:
         print(f"\n  No palace found at {palace_path}")
-        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+        print("  Run: psa init <dir> then psa mine <dir>")
         sys.exit(1)
 
     # Query drawers in batches to avoid SQLite variable limit (~999)
@@ -335,7 +335,7 @@ def cmd_compress(args):
     # Store compressed versions (unless dry-run)
     if not args.dry_run:
         try:
-            comp_col = client.get_or_create_collection("mempalace_compressed")
+            comp_col = client.get_or_create_collection("psa_compressed")
             for doc_id, compressed, meta, stats in compressed_entries:
                 comp_meta = dict(meta)
                 comp_meta["compression_ratio"] = round(stats["ratio"], 1)
@@ -346,7 +346,7 @@ def cmd_compress(args):
                     metadatas=[comp_meta],
                 )
             print(
-                f"  Stored {len(compressed_entries)} compressed drawers in 'mempalace_compressed' collection."
+                f"  Stored {len(compressed_entries)} compressed drawers in 'psa_compressed' collection."
             )
         except Exception as e:
             print(f"  Error storing compressed drawers: {e}")
@@ -370,7 +370,7 @@ def main():
     parser.add_argument(
         "--palace",
         default=None,
-        help="Where the palace lives (default: from ~/.mempalace/config.json or ~/.mempalace/palace)",
+        help="Where the palace lives (default: from ~/.psa/config.json or ~/.psa/palace)",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -405,8 +405,8 @@ def main():
     )
     p_mine.add_argument(
         "--agent",
-        default="mempalace",
-        help="Your name — recorded on every drawer (default: mempalace)",
+        default="psa",
+        help="Your name — recorded on every drawer (default: psa)",
     )
     p_mine.add_argument("--limit", type=int, default=0, help="Max files to process (0 = all)")
     p_mine.add_argument(

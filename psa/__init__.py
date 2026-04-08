@@ -1,4 +1,4 @@
-"""MemPalace — Give your AI a memory. No API key required."""
+"""PSA — Persistent Semantic Atlas for agent memory."""
 
 import logging
 import os

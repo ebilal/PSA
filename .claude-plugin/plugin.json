@@ -1,5 +1,5 @@
 {
-  "name": "mempalace",
+  "name": "psa",
   "version": "3.0.11",
   "description": "Give your AI a memory — mine projects and conversations into a searchable palace. 19 MCP tools, auto-save hooks, and guided setup.",
   "author": {
@@ -8,11 +8,11 @@
   "license": "MIT",
   "commands": [],
   "mcpServers": {
-    "mempalace": {
+    "psa": {
       "command": "python3",
       "args": [
         "-m",
-        "mempalace.mcp_server"
+        "psa.mcp_server"
       ]
     }
   },
@@ -25,5 +25,5 @@
     "palace",
     "search"
   ],
-  "repository": "https://github.com/milla-jovovich/mempalace"
+  "repository": "https://github.com/milla-jovovich/psa"
 }

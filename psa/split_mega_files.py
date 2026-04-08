@@ -32,8 +32,8 @@ HOME = Path.home()
 LUMI_DIR = Path(os.environ.get("MEMPALACE_SOURCE_DIR", str(HOME / "Desktop/transcripts")))
 
 # People we know about (for name detection in content)
-# Loaded from ~/.mempalace/known_names.json if it exists, otherwise generic fallback.
-_KNOWN_NAMES_PATH = HOME / ".mempalace" / "known_names.json"
+# Loaded from ~/.psa/known_names.json if it exists, otherwise generic fallback.
+_KNOWN_NAMES_PATH = HOME / ".psa" / "known_names.json"
 _FALLBACK_KNOWN_PEOPLE = ["Alice", "Ben", "Riley", "Max", "Sam", "Devon", "Jordan"]
 _KNOWN_NAMES_CACHE = None
 
@@ -148,7 +148,7 @@ def extract_people(lines):
     dir_match = re.search(r"/Users/(\w+)/", text)
     if dir_match:
         username = dir_match.group(1)
-        # User can map usernames to names in ~/.mempalace/known_names.json
+        # User can map usernames to names in ~/.psa/known_names.json
         # under a "username_map" key, e.g. {"username_map": {"jdoe": "John"}}
         username_map = _load_username_map()
         if username in username_map:

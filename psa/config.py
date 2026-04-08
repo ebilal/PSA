@@ -1,15 +1,16 @@
 """
-MemPalace configuration system.
+PSA configuration system.
 
-Priority: env vars > config file (~/.mempalace/config.json) > defaults
+Priority: env vars > config file (~/.psa/config.json) > defaults
+Backward compat: checks ~/.mempalace/ if ~/.psa/ doesn't exist.
 """
 
 import json
 import os
 from pathlib import Path
 
-DEFAULT_PALACE_PATH = os.path.expanduser("~/.mempalace/palace")
-DEFAULT_COLLECTION_NAME = "mempalace_drawers"
+DEFAULT_PALACE_PATH = os.path.expanduser("~/.psa/palace")
+DEFAULT_COLLECTION_NAME = "psa_drawers"
 
 DEFAULT_TOPIC_WINGS = [
     "emotions",
@@ -73,11 +74,18 @@ class MempalaceConfig:
 
         Args:
             config_dir: Override config directory (useful for testing).
-                        Defaults to ~/.mempalace.
+                        Defaults to ~/.psa.
         """
-        self._config_dir = (
-            Path(config_dir) if config_dir else Path(os.path.expanduser("~/.mempalace"))
-        )
+        if config_dir:
+            self._config_dir = Path(config_dir)
+        else:
+            psa_dir = Path(os.path.expanduser("~/.psa"))
+            legacy_dir = Path(os.path.expanduser("~/.mempalace"))
+            # Backward compat: use legacy dir if it exists and new dir doesn't
+            if not psa_dir.exists() and legacy_dir.exists():
+                self._config_dir = legacy_dir
+            else:
+                self._config_dir = psa_dir
         self._config_file = self._config_dir / "config.json"
         self._people_map_file = self._config_dir / "people_map.json"
         self._file_config = {}
@@ -92,7 +100,11 @@ class MempalaceConfig:
     @property
     def palace_path(self):
         """Path to the memory palace data directory."""
-        env_val = os.environ.get("MEMPALACE_PALACE_PATH") or os.environ.get("MEMPAL_PALACE_PATH")
+        env_val = (
+            os.environ.get("PSA_PALACE_PATH")
+            or os.environ.get("MEMPALACE_PALACE_PATH")
+            or os.environ.get("MEMPAL_PALACE_PATH")
+        )
         if env_val:
             return env_val
         return self._file_config.get("palace_path", DEFAULT_PALACE_PATH)

@@ -38,7 +38,7 @@ SKIP_DIRS = {
     "dist",
     "build",
     ".next",
-    ".mempalace",
+    ".psa",
     "tool-results",
     "memory",
 }
@@ -215,9 +215,9 @@ def get_collection(palace_path: str):
     os.makedirs(palace_path, exist_ok=True)
     client = chromadb.PersistentClient(path=palace_path)
     try:
-        return client.get_collection("mempalace_drawers")
+        return client.get_collection("psa_drawers")
     except Exception:
-        return client.create_collection("mempalace_drawers")
+        return client.create_collection("psa_drawers")
 
 
 def file_already_mined(collection, source_file: str) -> bool:
@@ -257,7 +257,7 @@ def mine_convos(
     convo_dir: str,
     palace_path: str,
     wing: str = None,
-    agent: str = "mempalace",
+    agent: str = "psa",
     limit: int = 0,
     dry_run: bool = False,
     extract_mode: str = "exchange",
@@ -391,7 +391,7 @@ def mine_convos(
         print("\n  By room:")
         for room, count in sorted(room_counts.items(), key=lambda x: x[1], reverse=True):
             print(f"    {room:20} {count} files")
-    print('\n  Next: mempalace search "what you\'re looking for"')
+    print('\n  Next: psa search "what you\'re looking for"')
     print(f"{'=' * 55}\n")
 
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# MemPalace Stop Hook — thin wrapper calling Python CLI
-# All logic lives in mempalace.hooks_cli for cross-harness extensibility
+# PSA Stop Hook — thin wrapper calling Python CLI
+# All logic lives in psa.hooks_cli for cross-harness extensibility
 INPUT=$(cat)
-echo "$INPUT" | python3 -m mempalace hook run --hook stop --harness claude-code
+echo "$INPUT" | python3 -m psa hook run --hook stop --harness claude-code

@@ -1,11 +1,11 @@
 {
-  "name": "mempalace",
+  "name": "psa",
   "interface": {
-    "displayName": "MemPalace"
+    "displayName": "PSA"
   },
   "plugins": [
     {
-      "name": "mempalace",
+      "name": "psa",
       "source": {
         "source": "local",
         "path": "./.codex-plugin"

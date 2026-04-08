@@ -9,7 +9,7 @@ Built from three sources, in priority order:
   3. Researched — what we looked up via Wikipedia for unknown words
 
 Usage:
-    from mempalace.entity_registry import EntityRegistry
+    from psa.entity_registry import EntityRegistry
     registry = EntityRegistry.load()
     result = registry.lookup("Riley", context="I went with Riley today")
     # → {"type": "person", "confidence": 1.0, "source": "onboarding"}
@@ -266,7 +266,7 @@ class EntityRegistry:
     """
     Persistent personal entity registry.
 
-    Stored at ~/.mempalace/entity_registry.json
+    Stored at ~/.psa/entity_registry.json
     Schema:
     {
       "mode": "personal",   # work | personal | combo
@@ -288,7 +288,7 @@ class EntityRegistry:
     }
     """
 
-    DEFAULT_PATH = Path.home() / ".mempalace" / "entity_registry.json"
+    DEFAULT_PATH = Path.home() / ".psa" / "entity_registry.json"
 
     def __init__(self, data: dict, path: Path):
         self._data = data
@@ -552,7 +552,7 @@ class EntityRegistry:
         Scan session text for new entity candidates.
         Returns list of newly discovered candidates for review.
         """
-        from mempalace.entity_detector import extract_candidates, score_entity, classify_entity
+        from psa.entity_detector import extract_candidates, score_entity, classify_entity
 
         lines = text.splitlines()
         candidates = extract_candidates(text)

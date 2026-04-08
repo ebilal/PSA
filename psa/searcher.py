@@ -11,7 +11,7 @@ from pathlib import Path
 
 import chromadb
 
-logger = logging.getLogger("mempalace_mcp")
+logger = logging.getLogger("psa_mcp")
 
 
 class SearchError(Exception):
@@ -25,10 +25,10 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
     """
     try:
         client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = client.get_collection("psa_drawers")
     except Exception:
         print(f"\n  No palace found at {palace_path}")
-        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+        print("  Run: psa init <dir> then psa mine <dir>")
         raise SearchError(f"No palace found at {palace_path}")
 
     # Build where filter
@@ -99,12 +99,12 @@ def search_memories(
     """
     try:
         client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = client.get_collection("psa_drawers")
     except Exception as e:
         logger.error("No palace found at %s: %s", palace_path, e)
         return {
             "error": "No palace found",
-            "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
+            "hint": "Run: psa init <dir> && psa mine <dir>",
         }
 
     # Build where filter

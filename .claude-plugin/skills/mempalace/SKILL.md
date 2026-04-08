@@ -1,33 +1,33 @@
 ---
-name: mempalace
-description: MemPalace — mine projects and conversations into a searchable memory palace. Use when asked about mempalace, memory palace, mining memories, searching memories, or palace setup.
+name: psa
+description: PSA — mine projects and conversations into a searchable memory palace. Use when asked about psa, memory palace, mining memories, searching memories, or palace setup.
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
-# MemPalace
+# PSA
 
 A searchable memory palace for AI — mine projects and conversations, then search them semantically.
 
 ## Prerequisites
 
-Ensure `mempalace` is installed:
+Ensure `psa` is installed:
 
 ```bash
-mempalace --version
+psa --version
 ```
 
 If not installed:
 
 ```bash
-pip install mempalace
+pip install psa
 ```
 
 ## Usage
 
-MemPalace provides dynamic instructions via the CLI. To get instructions for any operation:
+PSA provides dynamic instructions via the CLI. To get instructions for any operation:
 
 ```bash
-mempalace instructions <command>
+psa instructions <command>
 ```
 
 Where `<command>` is one of: `help`, `init`, `mine`, `search`, `status`.

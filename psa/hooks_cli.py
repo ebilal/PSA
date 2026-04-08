@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 SAVE_INTERVAL = 15
-STATE_DIR = Path.home() / ".mempalace" / "hook_state"
+STATE_DIR = Path.home() / ".psa" / "hook_state"
 
 STOP_BLOCK_REASON = (
     "AUTO-SAVE checkpoint. Save key topics, decisions, quotes, and code "
@@ -88,14 +88,14 @@ def _output(data: dict):
 
 
 def _maybe_auto_ingest():
-    """If MEMPAL_DIR is set and exists, run mempalace mine in background."""
+    """If MEMPAL_DIR is set and exists, run psa mine in background."""
     mempal_dir = os.environ.get("MEMPAL_DIR", "")
     if mempal_dir and os.path.isdir(mempal_dir):
         try:
             log_path = STATE_DIR / "hook.log"
             with open(log_path, "a") as log_f:
                 subprocess.Popen(
-                    [sys.executable, "-m", "mempalace", "mine", mempal_dir],
+                    [sys.executable, "-m", "psa", "mine", mempal_dir],
                     stdout=log_f,
                     stderr=log_f,
                 )
@@ -192,7 +192,7 @@ def hook_precompact(data: dict, harness: str):
             log_path = STATE_DIR / "hook.log"
             with open(log_path, "a") as log_f:
                 subprocess.run(
-                    [sys.executable, "-m", "mempalace", "mine", mempal_dir],
+                    [sys.executable, "-m", "psa", "mine", mempal_dir],
                     stdout=log_f,
                     stderr=log_f,
                     timeout=60,

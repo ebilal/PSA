@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-layers.py — 4-Layer Memory Stack for mempalace
+layers.py — 4-Layer Memory Stack for psa
 ===================================================
 
 Load only what you need, when you need it.
@@ -12,8 +12,8 @@ Load only what you need, when you need it.
 
 Wake-up cost: ~600-900 tokens (L0+L1). Leaves 95%+ of context free.
 
-Reads directly from ChromaDB (mempalace_drawers)
-and ~/.mempalace/identity.txt.
+Reads directly from ChromaDB (psa_drawers)
+and ~/.psa/identity.txt.
 """
 
 import os
@@ -34,7 +34,7 @@ from .config import MempalaceConfig
 class Layer0:
     """
     ~100 tokens. Always loaded.
-    Reads from ~/.mempalace/identity.txt — a plain-text file the user writes.
+    Reads from ~/.psa/identity.txt — a plain-text file the user writes.
 
     Example identity.txt:
         I am Atlas, a personal AI assistant for Alice.
@@ -45,7 +45,7 @@ class Layer0:
 
     def __init__(self, identity_path: str = None):
         if identity_path is None:
-            identity_path = os.path.expanduser("~/.mempalace/identity.txt")
+            identity_path = os.path.expanduser("~/.psa/identity.txt")
         self.path = identity_path
         self._text = None
 
@@ -59,7 +59,7 @@ class Layer0:
                 self._text = f.read().strip()
         else:
             self._text = (
-                "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
+                "## L0 — IDENTITY\nNo identity configured. Create ~/.psa/identity.txt"
             )
 
         return self._text
@@ -92,9 +92,9 @@ class Layer1:
         """Pull top drawers from ChromaDB and format as compact L1 text."""
         try:
             client = chromadb.PersistentClient(path=self.palace_path)
-            col = client.get_collection("mempalace_drawers")
+            col = client.get_collection("psa_drawers")
         except Exception:
-            return "## L1 — No palace found. Run: mempalace mine <dir>"
+            return "## L1 — No palace found. Run: psa mine <dir>"
 
         # Fetch all drawers in batches to avoid SQLite variable limit (~999)
         _BATCH = 500
@@ -197,7 +197,7 @@ class Layer2:
         """Retrieve drawers filtered by wing and/or room."""
         try:
             client = chromadb.PersistentClient(path=self.palace_path)
-            col = client.get_collection("mempalace_drawers")
+            col = client.get_collection("psa_drawers")
         except Exception:
             return "No palace found."
 
@@ -250,7 +250,7 @@ class Layer2:
 class Layer3:
     """
     Unlimited depth. Semantic search against the full palace.
-    Reuses searcher.py logic against mempalace_drawers.
+    Reuses searcher.py logic against psa_drawers.
     """
 
     def __init__(self, palace_path: str = None):
@@ -261,7 +261,7 @@ class Layer3:
         """Semantic search, returns compact result text."""
         try:
             client = chromadb.PersistentClient(path=self.palace_path)
-            col = client.get_collection("mempalace_drawers")
+            col = client.get_collection("psa_drawers")
         except Exception:
             return "No palace found."
 
@@ -317,7 +317,7 @@ class Layer3:
         """Return raw dicts instead of formatted text."""
         try:
             client = chromadb.PersistentClient(path=self.palace_path)
-            col = client.get_collection("mempalace_drawers")
+            col = client.get_collection("psa_drawers")
         except Exception:
             return []
 
@@ -379,7 +379,7 @@ class MemoryStack:
     def __init__(self, palace_path: str = None, identity_path: str = None):
         cfg = MempalaceConfig()
         self.palace_path = palace_path or cfg.palace_path
-        self.identity_path = identity_path or os.path.expanduser("~/.mempalace/identity.txt")
+        self.identity_path = identity_path or os.path.expanduser("~/.psa/identity.txt")
 
         self.l0 = Layer0(self.identity_path)
         self.l1 = Layer1(self.palace_path)
@@ -438,7 +438,7 @@ class MemoryStack:
         # Count drawers
         try:
             client = chromadb.PersistentClient(path=self.palace_path)
-            col = client.get_collection("mempalace_drawers")
+            col = client.get_collection("psa_drawers")
             count = col.count()
             result["total_drawers"] = count
         except Exception:

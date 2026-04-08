@@ -2,19 +2,19 @@
 """
 MemPalace MCP Server — read/write palace access for Claude Code
 ================================================================
-Install: claude mcp add mempalace -- python -m mempalace.mcp_server [--palace /path/to/palace]
+Install: claude mcp add psa -- python -m psa.mcp_server [--palace /path/to/palace]
 
 Tools (read):
-  mempalace_status          — total drawers, wing/room breakdown
-  mempalace_list_wings      — all wings with drawer counts
-  mempalace_list_rooms      — rooms within a wing
-  mempalace_get_taxonomy    — full wing → room → count tree
-  mempalace_search          — semantic search, optional wing/room filter
-  mempalace_check_duplicate — check if content already exists before filing
+  psa_status          — total drawers, wing/room breakdown
+  psa_list_wings      — all wings with drawer counts
+  psa_list_rooms      — rooms within a wing
+  psa_get_taxonomy    — full wing → room → count tree
+  psa_search          — semantic search, optional wing/room filter
+  psa_check_duplicate — check if content already exists before filing
 
 Tools (write):
-  mempalace_add_drawer      — file verbatim content into a wing/room
-  mempalace_delete_drawer   — remove a drawer by ID
+  psa_add_drawer      — file verbatim content into a wing/room
+  psa_delete_drawer   — remove a drawer by ID
 """
 
 import argparse
@@ -34,23 +34,24 @@ import chromadb
 from .knowledge_graph import KnowledgeGraph
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
-logger = logging.getLogger("mempalace_mcp")
+logger = logging.getLogger("psa_mcp")
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="MemPalace MCP Server")
+    parser = argparse.ArgumentParser(description="PSA MCP Server")
     parser.add_argument(
         "--palace",
         metavar="PATH",
         help="Path to the palace directory (overrides config file and env var)",
     )
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()
+    return args
 
 
 _args = _parse_args()
 
 if _args.palace:
-    os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
+    os.environ["PSA_PALACE_PATH"] = os.path.abspath(_args.palace)
 
 _config = MempalaceConfig()
 if _args.palace:
@@ -81,7 +82,7 @@ def _get_collection(create=False):
 def _no_palace():
     return {
         "error": "No palace found",
-        "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
+        "hint": "Run: psa init <dir> && psa mine <dir>",
     }
 
 
@@ -116,14 +117,14 @@ def tool_status():
 
 # ── AAAK Dialect Spec ─────────────────────────────────────────────────────────
 # Included in status response so the AI learns it on first wake-up call.
-# Also available via mempalace_get_aaak_spec tool.
+# Also available via psa_get_aaak_spec tool.
 
 PALACE_PROTOCOL = """IMPORTANT — MemPalace Memory Protocol:
-1. ON WAKE-UP: Call mempalace_status to load palace overview + AAAK spec.
-2. BEFORE RESPONDING about any person, project, or past event: call mempalace_kg_query or mempalace_search FIRST. Never guess — verify.
+1. ON WAKE-UP: Call psa_status to load palace overview + AAAK spec.
+2. BEFORE RESPONDING about any person, project, or past event: call psa_kg_query or psa_search FIRST. Never guess — verify.
 3. IF UNSURE about a fact (name, gender, age, relationship): say "let me check" and query the palace. Wrong is worse than slow.
-4. AFTER EACH SESSION: call mempalace_diary_write to record what happened, what you learned, what matters.
-5. WHEN FACTS CHANGE: call mempalace_kg_invalidate on the old fact, mempalace_kg_add for the new one.
+4. AFTER EACH SESSION: call psa_diary_write to record what happened, what you learned, what matters.
+5. WHEN FACTS CHANGE: call psa_kg_invalidate on the old fact, psa_kg_add for the new one.
 
 This protocol ensures the AI KNOWS before it speaks. Storage is not memory — but storage + this protocol = memory."""
 
@@ -468,17 +469,17 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
-    "mempalace_status": {
+    "psa_status": {
         "description": "Palace overview — total drawers, wing and room counts",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_status,
     },
-    "mempalace_list_wings": {
+    "psa_list_wings": {
         "description": "List all wings with drawer counts",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_list_wings,
     },
-    "mempalace_list_rooms": {
+    "psa_list_rooms": {
         "description": "List rooms within a wing (or all rooms if no wing given)",
         "input_schema": {
             "type": "object",
@@ -488,17 +489,17 @@ TOOLS = {
         },
         "handler": tool_list_rooms,
     },
-    "mempalace_get_taxonomy": {
+    "psa_get_taxonomy": {
         "description": "Full taxonomy: wing → room → drawer count",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_get_taxonomy,
     },
-    "mempalace_get_aaak_spec": {
+    "psa_get_aaak_spec": {
         "description": "Get the AAAK dialect specification — the compressed memory format MemPalace uses. Call this if you need to read or write AAAK-compressed memories.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_get_aaak_spec,
     },
-    "mempalace_kg_query": {
+    "psa_kg_query": {
         "description": "Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.",
         "input_schema": {
             "type": "object",
@@ -520,7 +521,7 @@ TOOLS = {
         },
         "handler": tool_kg_query,
     },
-    "mempalace_kg_add": {
+    "psa_kg_add": {
         "description": "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01').",
         "input_schema": {
             "type": "object",
@@ -544,7 +545,7 @@ TOOLS = {
         },
         "handler": tool_kg_add,
     },
-    "mempalace_kg_invalidate": {
+    "psa_kg_invalidate": {
         "description": "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
         "input_schema": {
             "type": "object",
@@ -561,7 +562,7 @@ TOOLS = {
         },
         "handler": tool_kg_invalidate,
     },
-    "mempalace_kg_timeline": {
+    "psa_kg_timeline": {
         "description": "Chronological timeline of facts. Shows the story of an entity (or everything) in order.",
         "input_schema": {
             "type": "object",
@@ -574,12 +575,12 @@ TOOLS = {
         },
         "handler": tool_kg_timeline,
     },
-    "mempalace_kg_stats": {
+    "psa_kg_stats": {
         "description": "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_kg_stats,
     },
-    "mempalace_traverse": {
+    "psa_traverse": {
         "description": "Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).",
         "input_schema": {
             "type": "object",
@@ -597,7 +598,7 @@ TOOLS = {
         },
         "handler": tool_traverse_graph,
     },
-    "mempalace_find_tunnels": {
+    "psa_find_tunnels": {
         "description": "Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?",
         "input_schema": {
             "type": "object",
@@ -608,12 +609,12 @@ TOOLS = {
         },
         "handler": tool_find_tunnels,
     },
-    "mempalace_graph_stats": {
+    "psa_graph_stats": {
         "description": "Palace graph overview: total rooms, tunnel connections, edges between wings.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_graph_stats,
     },
-    "mempalace_search": {
+    "psa_search": {
         "description": "Semantic search. Returns verbatim drawer content with similarity scores.",
         "input_schema": {
             "type": "object",
@@ -627,7 +628,7 @@ TOOLS = {
         },
         "handler": tool_search,
     },
-    "mempalace_check_duplicate": {
+    "psa_check_duplicate": {
         "description": "Check if content already exists in the palace before filing",
         "input_schema": {
             "type": "object",
@@ -642,7 +643,7 @@ TOOLS = {
         },
         "handler": tool_check_duplicate,
     },
-    "mempalace_add_drawer": {
+    "psa_add_drawer": {
         "description": "File verbatim content into the palace. Checks for duplicates first.",
         "input_schema": {
             "type": "object",
@@ -663,7 +664,7 @@ TOOLS = {
         },
         "handler": tool_add_drawer,
     },
-    "mempalace_delete_drawer": {
+    "psa_delete_drawer": {
         "description": "Delete a drawer by ID. Irreversible.",
         "input_schema": {
             "type": "object",
@@ -674,7 +675,7 @@ TOOLS = {
         },
         "handler": tool_delete_drawer,
     },
-    "mempalace_diary_write": {
+    "psa_diary_write": {
         "description": "Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.",
         "input_schema": {
             "type": "object",
@@ -696,7 +697,7 @@ TOOLS = {
         },
         "handler": tool_diary_write,
     },
-    "mempalace_diary_read": {
+    "psa_diary_read": {
         "description": "Read your recent diary entries (in AAAK). See what past versions of yourself recorded — your journal across sessions.",
         "input_schema": {
             "type": "object",
@@ -729,7 +730,7 @@ def handle_request(request):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "mempalace", "version": __version__},
+                "serverInfo": {"name": "psa", "version": __version__},
             },
         }
     elif method == "notifications/initialized":

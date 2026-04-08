@@ -4,7 +4,7 @@ room_detector_local.py — Local setup, no API required.
 
 Two ways to define rooms without calling any AI:
   1. Auto-detect from folder structure (zero config)
-  2. Define manually in mempalace.yaml
+  2. Define manually in psa.yaml
 
 No internet. No API key. Your files stay on your machine.
 """
@@ -264,13 +264,13 @@ def save_config(project_dir: str, project_name: str, rooms: list):
             for r in rooms
         ],
     }
-    config_path = Path(project_dir).expanduser().resolve() / "mempalace.yaml"
+    config_path = Path(project_dir).expanduser().resolve() / "psa.yaml"
     with open(config_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     print(f"\n  Config saved: {config_path}")
     print("\n  Next step:")
-    print(f"    mempalace mine {project_dir}")
+    print(f"    psa mine {project_dir}")
     print(f"\n{'=' * 55}\n")
 
 

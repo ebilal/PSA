@@ -16,19 +16,19 @@ There are three mining modes:
 
 ### Project mining
 
-    mempalace mine <dir>
+    psa mine <dir>
 
 Mines code files, documentation, and notes from a project directory.
 
 ### Conversation mining
 
-    mempalace mine <dir> --mode convos
+    psa mine <dir> --mode convos
 
 Mines conversation exports from Claude, ChatGPT, or Slack into the palace.
 
 ### General extraction (auto-classify)
 
-    mempalace mine <dir> --mode convos --extract general
+    psa mine <dir> --mode convos --extract general
 
 Auto-classifies mined content into decisions, milestones, and problems.
 
@@ -37,7 +37,7 @@ Auto-classifies mined content into decisions, milestones, and problems.
 If the source directory contains very large files, suggest splitting them
 before mining:
 
-    mempalace split <dir> [--dry-run]
+    psa split <dir> [--dry-run]
 
 Use --dry-run first to preview what will be split without making changes.
 
@@ -46,7 +46,7 @@ Use --dry-run first to preview what will be split without making changes.
 If the user wants to organize mined content under a specific wing, add the
 --wing flag:
 
-    mempalace mine <dir> --wing <name>
+    psa mine <dir> --wing <name>
 
 ## 5. Show progress and results
 
@@ -59,6 +59,6 @@ completion, summarize the results including:
 ## 6. Suggest next steps
 
 After mining completes, suggest the user try:
-- /mempalace:search -- search the newly mined content
-- /mempalace:status -- check the current state of their palace
+- /psa:search -- search the newly mined content
+- /psa:status -- check the current state of their palace
 - Mine more data from additional sources

@@ -1,7 +1,7 @@
 [project]
-name = "mempalace"
-version = "3.0.11"
-description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
+name = "psa"
+version = "4.0.0"
+description = "Persistent Semantic Atlas — agent memory substrate with typed memory objects, anchor-based retrieval, and trained selector."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -30,12 +30,12 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/milla-jovovich/mempalace"
-Repository = "https://github.com/milla-jovovich/mempalace"
-"Bug Tracker" = "https://github.com/milla-jovovich/mempalace/issues"
+Homepage = "https://github.com/milla-jovovich/psa"
+Repository = "https://github.com/milla-jovovich/psa"
+"Bug Tracker" = "https://github.com/milla-jovovich/psa/issues"
 
 [project.scripts]
-mempalace = "mempalace:main"
+psa = "psa:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0"]
@@ -49,7 +49,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["mempalace"]
+packages = ["psa"]
 
 [tool.ruff]
 line-length = 100
@@ -66,7 +66,7 @@ quote-style = "double"
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["mempalace"]
+source = ["psa"]
 
 [tool.coverage.report]
 fail_under = 30
