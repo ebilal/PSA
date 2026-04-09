@@ -463,8 +463,8 @@ def cmd_label(args):
         try:
             labeler.label(query_id=qid, query=query_text)
             labeled += 1
-            if labeled % 5 == 0 or labeled == len(queries):
-                print(f"  Labeled {labeled}/{len(queries)}...", flush=True)
+            if labeled == 1 or labeled % 10 == 0:
+                print(f"  [{labeled}/{len(queries)}] scored...", flush=True)
         except Exception as e:
             print(f"  Failed to label query: {e}")
 
