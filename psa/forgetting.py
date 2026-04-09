@@ -61,6 +61,11 @@ def forgetting_score(
     if now is None:
         now = datetime.now(timezone.utc)
 
+    # Grace period: memories created in the last 24 hours are never pruned
+    age_days = _days_since(memory.created_at, now)
+    if age_days < 1.0:
+        return -10.0  # strongly protect new memories
+
     idle_days = _days_since(memory.last_packed or memory.created_at, now)
     overflow = max(0, anchor_size - target_per_anchor) / max(target_per_anchor, 1)
     usage = log(1 + memory.pack_count) / 3.0  # 20 packs ~ 1.0

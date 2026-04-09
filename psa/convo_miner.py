@@ -382,20 +382,13 @@ def _mine_convos_psa(convo_dir: str, files: list):
     tm = TenantManager()
     tenant = tm.get_or_create(cfg.tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
-    use_llm = True
-    try:
-        import urllib.request
-        from .consolidation import QWEN_ENDPOINT
-        # Use GET to /api/tags (Ollama's list-models endpoint) instead of HEAD
-        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
-        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
-    except Exception:
+    from .consolidation import is_qwen_available
+    use_llm = is_qwen_available()
+    if not use_llm:
         import logging
         logging.getLogger("psa.convo_miner").warning(
-            "Qwen endpoint not reachable. Skipping LLM-based memory extraction. "
-            "Start Ollama with 'ollama serve' and pull qwen2.5:7b."
+            "Qwen endpoint not reachable. Skipping LLM-based memory extraction."
         )
-        use_llm = False
 
     # Load atlas for hot assignment
     atlas = None
@@ -408,14 +401,21 @@ def _mine_convos_psa(convo_dir: str, files: list):
 
     pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=use_llm, atlas=atlas)
 
+    already_processed = store.get_processed_source_paths(cfg.tenant_id)
+
     print(f"  [PSA] Running conversation consolidation (mode: {cfg.psa_mode})...")
     total = 0
+    skipped = 0
     for filepath in files:
+        source_path = str(filepath)
+        if source_path in already_processed:
+            skipped += 1
+            continue
         try:
             text = filepath.read_text(encoding="utf-8", errors="replace")
         except (OSError, AttributeError):
             try:
-                text = Path(str(filepath)).read_text(encoding="utf-8", errors="replace")
+                text = Path(source_path).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
         if not text.strip():
@@ -427,6 +427,8 @@ def _mine_convos_psa(convo_dir: str, files: list):
             title=Path(str(filepath)).name,
         )
         total += len(memories)
+    if skipped > 0:
+        print(f"  [PSA] Skipped {skipped} files already in PSA store.")
     print(f"  [PSA] {total} memory objects created from conversations.\n")
 
 

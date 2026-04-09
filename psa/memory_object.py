@@ -739,3 +739,12 @@ class MemoryStore:
             "never_packed": row["never_packed"] or 0,
             "never_selected": row["never_selected"] or 0,
         }
+
+    def get_processed_source_paths(self, tenant_id: str) -> set:
+        """Return set of source_paths already in raw_sources for dedup."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source_path FROM raw_sources WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchall()
+        return {row["source_path"] for row in rows if row["source_path"]}

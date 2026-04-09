@@ -264,51 +264,107 @@ def _stability_score(assignments_list: List[np.ndarray], n_samples: int = 2000) 
     return float((np.mean(scores) + 1.0) / 2.0)
 
 
-# ── Card generation (stub — full Qwen-based generation in Phase 3) ────────────
+# ── Card generation ──────────────────────────────────────────────────────────
 
 
-def _generate_stub_card(
+def _generate_card_via_qwen(
     anchor_id: int,
     centroid: List[float],
     sample_memories: List[MemoryObject],
     is_novelty: bool = False,
 ) -> AnchorCard:
     """
-    Generate a placeholder AnchorCard from cluster samples.
+    Generate a semantic AnchorCard using Qwen to analyze cluster contents.
 
-    Full semantic card generation (via Qwen) is a Phase 3 deliverable.
-    This stub creates a card from memory titles so the atlas is usable
-    immediately after Phase 2.
+    Sends sample memory titles and summaries to Qwen, which produces a
+    human-readable name, meaning, and include/exclude terms. Falls back to
+    a stub card if Qwen is unavailable.
     """
+    import json as _json
+
+    titles = [m.title for m in sample_memories[:10]]
+    summaries = [m.summary for m in sample_memories[:10] if m.summary]
+    memory_types = list({m.memory_type.value for m in sample_memories[:10]})
+    prototypes = [m.title for m in sample_memories[:5]]
+
     if is_novelty:
-        name = f"novelty_{anchor_id}"
-        meaning = "Low-density or high-distance memories not fitting learned clusters."
-        include_terms = []
-        exclude_terms = []
-        prototypes = []
-        near_but_different = []
+        prefix = "These are outlier memories that don't fit neatly into other clusters"
     else:
-        titles = [m.title for m in sample_memories[:5]]
-        memory_types = list({m.memory_type.value for m in sample_memories[:10]})
-        name = f"cluster_{anchor_id}"
+        prefix = "These memories belong to the same semantic cluster"
+
+    samples_text = "\n".join(
+        f"- [{m.memory_type.value}] {m.title}: {m.summary[:150]}"
+        for m in sample_memories[:10]
+    )
+
+    prompt = (
+        f"{prefix}. Analyze them and produce a semantic description.\n\n"
+        f"Sample memories:\n{samples_text}\n\n"
+        "Return JSON with these fields:\n"
+        '{\n'
+        '  "name": "short-kebab-case-name (2-4 words, descriptive)",\n'
+        '  "meaning": "1-2 sentences describing what this region of memory covers",\n'
+        '  "include_terms": ["up to 8 keywords that signal membership"],\n'
+        '  "exclude_terms": ["up to 4 keywords that signal non-membership"]\n'
+        '}'
+    )
+
+    try:
+        import urllib.request
+        import os
+
+        endpoint = os.environ.get(
+            "QWEN_ENDPOINT", "http://localhost:11434/v1/chat/completions"
+        )
+        model = os.environ.get("QWEN_MODEL", "qwen2.5:7b")
+
+        payload = _json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 256,
+            "response_format": {"type": "json_object"},
+        }).encode()
+
+        req = urllib.request.Request(
+            endpoint,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = _json.loads(resp.read())
+        content = data["choices"][0]["message"]["content"]
+        result = _json.loads(content)
+
+        name = result.get("name", f"cluster-{anchor_id}")
+        meaning = result.get("meaning", f"A cluster of {len(sample_memories)} memories.")
+        include_terms = result.get("include_terms", [])[:8]
+        exclude_terms = result.get("exclude_terms", [])[:4]
+
+        logger.debug("Generated card for anchor %d: %s — %s", anchor_id, name, meaning)
+
+    except Exception as e:
+        logger.warning("Qwen card generation failed for anchor %d: %s (using stub)", anchor_id, e)
+        name = f"novelty-{anchor_id}" if is_novelty else f"cluster-{anchor_id}"
         meaning = (
-            f"A cluster of {len(sample_memories)} memories. "
-            f"Representative: {'; '.join(titles[:3])}."
+            "Low-density or outlier memories."
+            if is_novelty
+            else f"A cluster of {len(sample_memories)} memories. "
+                 f"Representative: {'; '.join(titles[:3])}."
         )
         include_terms = []
         exclude_terms = []
-        prototypes = titles[:5]
-        near_but_different = []
 
     return AnchorCard(
         anchor_id=anchor_id,
         name=name,
         meaning=meaning,
-        memory_types=memory_types if not is_novelty else [],
+        memory_types=memory_types,
         include_terms=include_terms,
         exclude_terms=exclude_terms,
         prototype_examples=prototypes,
-        near_but_different=near_but_different,
+        near_but_different=[],
         centroid=centroid,
         memory_count=len(sample_memories),
         is_novelty=is_novelty,
@@ -494,8 +550,8 @@ class AtlasBuilder:
                     status="active",
                 )
             else:
-                # Fresh cluster: new stub card
-                card = _generate_stub_card(
+                # Fresh cluster: generate semantic card via Qwen
+                card = _generate_card_via_qwen(
                     anchor_id=fresh_id_counter,
                     centroid=centroid_list,
                     sample_memories=cluster_mems,
@@ -514,12 +570,22 @@ class AtlasBuilder:
         novelty_centroids = embeddings[novelty_indices]
         novelty_centroids = _l2_normalize_rows(novelty_centroids)
 
+        # Collect all used IDs to avoid collisions
+        used_ids = {c.anchor_id for c in cards}
+        novelty_id_counter = fresh_id_counter  # continue from where learned cards left off
+
         for i, (ni, nc) in enumerate(zip(novelty_indices, novelty_centroids)):
-            anchor_id = k + i  # 224, 225, ..., 255
-            card = _generate_stub_card(
+            # Find next unused ID
+            while novelty_id_counter in used_ids:
+                novelty_id_counter += 1
+            anchor_id = novelty_id_counter
+            used_ids.add(anchor_id)
+            novelty_id_counter += 1
+            novelty_mems = [memories[ni]]
+            card = _generate_card_via_qwen(
                 anchor_id=anchor_id,
                 centroid=nc.tolist(),
-                sample_memories=[memories[ni]],
+                sample_memories=novelty_mems,
                 is_novelty=True,
             )
             cards.append(card)
@@ -543,14 +609,19 @@ class AtlasBuilder:
         )
 
         # Step 7: Update anchor assignments in memory store (single transaction)
+        # Map cluster index → actual anchor_id (which may differ due to matching)
         logger.info("Updating anchor assignments in memory store...")
+        # Only use learned anchor cards (first k), not novelty
+        learned_cards = [c for c in cards if not c.is_novelty]
+        cluster_to_anchor_id = {i: learned_cards[i].anchor_id for i in range(len(learned_cards))}
+
         learned_sims = embeddings @ centroids.T  # (n, k)
         updates = []
         for idx, (mem, cluster_id) in enumerate(zip(memories, assignments)):
             row_sims = learned_sims[idx]
             top2 = np.argsort(row_sims)[::-1][:2]
-            primary_id = int(top2[0])
-            secondary_id = int(top2[1]) if len(top2) > 1 else None
+            primary_id = cluster_to_anchor_id.get(int(top2[0]), int(top2[0]))
+            secondary_id = cluster_to_anchor_id.get(int(top2[1]), int(top2[1])) if len(top2) > 1 else None
             confidence = float(row_sims[top2[0]])
             updates.append({
                 "memory_object_id": mem.memory_object_id,
@@ -558,6 +629,16 @@ class AtlasBuilder:
                 "secondary_anchor_ids": [secondary_id] if secondary_id is not None else [],
                 "confidence": confidence,
             })
+        # Also assign novelty memories to their novelty anchors
+        novelty_cards = [c for c in cards if c.is_novelty]
+        updates_by_id = {u["memory_object_id"]: u for u in updates}
+        for ni_idx, nc_card in zip(novelty_indices, novelty_cards):
+            mem = memories[int(ni_idx)]
+            u = updates_by_id.get(mem.memory_object_id)
+            if u:
+                u["primary_anchor_id"] = nc_card.anchor_id
+                u["confidence"] = float(max_sims[int(ni_idx)])
+
         self.store.batch_update_anchor_assignments(updates)
 
         # Step 8: Persist atlas

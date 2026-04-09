@@ -96,18 +96,61 @@ def _text_hash(text: str) -> str:
 # ── Hit formatting helpers ────────────────────────────────────────────────────
 
 
-def _format_memory_item(mo: MemoryObject, similarity: Optional[float] = None) -> str:
-    """Render a MemoryObject as a bullet point."""
+def _format_memory_item(
+    mo: MemoryObject,
+    similarity: Optional[float] = None,
+    source_context: Optional[str] = None,
+    max_body_chars: int = 300,
+) -> str:
+    """Render a MemoryObject as a bullet point with optional source context."""
     parts = [mo.title]
     if mo.body and mo.body != mo.title:
-        # Truncate long bodies
-        body = mo.body if len(mo.body) <= 300 else mo.body[:297] + "..."
+        body = mo.body if len(mo.body) <= max_body_chars else mo.body[:max_body_chars - 3] + "..."
         parts.append(body)
     if mo.memory_type == MemoryType.EPISODIC and mo.success_label is not None:
         parts.append(f"outcome: {'success' if mo.success_label else 'failure'}")
     if similarity is not None:
         parts.append(f"(relevance: {similarity:.2f})")
-    return " — ".join(parts)
+    text = " — ".join(parts)
+    if source_context:
+        text += f"\n  Source: {source_context}"
+    return text
+
+
+def _compute_relevance(
+    memories: List[MemoryObject],
+    query_vec: Optional[List[float]],
+) -> List[float]:
+    """Compute cosine similarity between each memory and the query embedding."""
+    if query_vec is None:
+        return [0.0] * len(memories)
+    try:
+        from .embeddings import EmbeddingModel
+        return [
+            EmbeddingModel.cosine_similarity(query_vec, mo.embedding)
+            if mo.embedding else 0.0
+            for mo in memories
+        ]
+    except Exception:
+        return [0.0] * len(memories)
+
+
+def _fetch_source_path(
+    store: Optional[MemoryStore],
+    source_ids: List[str],
+) -> Optional[str]:
+    """Follow source_ids to get the source file path for provenance."""
+    if not store or not source_ids:
+        return None
+    try:
+        source = store.get_source(source_ids[0])
+        if source and source.source_path:
+            # Show just the filename, not the full path
+            import os
+            return os.path.basename(source.source_path)
+    except Exception:
+        pass
+    return None
 
 
 def _format_raw_item(hit: Dict[str, Any]) -> str:
@@ -274,12 +317,15 @@ class EvidencePacker:
         query: str,
         memories: List[MemoryObject],
         token_budget: int = 6000,
+        query_vec: Optional[List[float]] = None,
+        store: Optional[MemoryStore] = None,
     ) -> PackedContext:
         """
         Pack MemoryObjects directly (used when memories are retrieved via PSA path).
 
-        This is the Phase 3+ path. In Phase 1 this is called when
-        psa_mode == "side-by-side" to show what PSA would produce.
+        When query_vec is provided, memories are ranked by query relevance
+        (cosine similarity) instead of static quality_score. When store is
+        provided, source records are fetched to enrich top-ranked items.
         """
         if not memories:
             return PackedContext(
@@ -291,6 +337,19 @@ class EvidencePacker:
                 untyped_count=0,
             )
 
+        # Compute per-memory relevance to the query
+        relevances = _compute_relevance(memories, query_vec)
+
+        # Combine relevance (primary) with quality (secondary) for ranking
+        scored = sorted(
+            zip(memories, relevances),
+            key=lambda pair: (pair[1] * 0.7 + pair[0].quality_score * 0.3),
+            reverse=True,
+        )
+
+        # Top N memories get source context and full body text
+        TOP_N_WITH_SOURCE = 10
+
         typed_sections: Dict[MemoryType, PackedSection] = {
             role: PackedSection(role=role, header=ROLE_HEADERS[role]) for role in ROLE_ORDER
         }
@@ -298,14 +357,25 @@ class EvidencePacker:
         seen_ids: set = set()
         all_memory_ids: List[str] = []
 
-        # Score by memory quality
-        scored = sorted(memories, key=lambda m: m.quality_score, reverse=True)
-
-        for mo in scored:
+        for rank, (mo, relevance) in enumerate(scored):
             if mo.memory_object_id in seen_ids:
                 continue
             seen_ids.add(mo.memory_object_id)
-            item = _format_memory_item(mo)
+
+            # Top-ranked memories get full body text and source provenance
+            is_top = rank < TOP_N_WITH_SOURCE
+            source_ctx = None
+            if is_top and store:
+                source_file = _fetch_source_path(store, mo.source_ids)
+                if source_file:
+                    source_ctx = f"[from {source_file}]"
+
+            item = _format_memory_item(
+                mo,
+                similarity=relevance if relevance > 0 else None,
+                source_context=source_ctx,
+                max_body_chars=800 if is_top else 300,
+            )
             role = mo.memory_type
             if role not in typed_sections:
                 role = MemoryType.SEMANTIC
@@ -350,11 +420,16 @@ class EvidencePacker:
                 parts.append("")
         final_text = "\n".join(parts)
 
+        # Only include memory IDs from sections that actually made it into the budget
+        packed_memory_ids = []
+        for sec in assembled_sections:
+            packed_memory_ids.extend(sec.memory_ids)
+
         return PackedContext(
             query=query,
             text=final_text,
             token_count=_token_count(final_text),
-            memory_ids=all_memory_ids,
+            memory_ids=packed_memory_ids,
             sections=assembled_sections,
             untyped_count=0,
         )
