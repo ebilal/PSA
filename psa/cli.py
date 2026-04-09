@@ -407,6 +407,19 @@ def cmd_label(args):
     tenant = tm.get_or_create(tenant_id)
     labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
 
+    # Reset: delete all existing labels
+    if getattr(args, "reset", False):
+        import glob
+        label_files = glob.glob(os.path.join(tenant.root_dir, "training", "oracle_labels*.jsonl"))
+        for f in label_files:
+            os.remove(f)
+            print(f"  Deleted {os.path.basename(f)}")
+        training_data = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
+        if os.path.exists(training_data):
+            os.remove(training_data)
+            print(f"  Deleted training_data.jsonl")
+        print("  Labels reset. Starting fresh.\n")
+
     # Count existing
     existing = 0
     if os.path.exists(labels_path):
@@ -439,7 +452,7 @@ def cmd_label(args):
         print(f"No new queries to label. {existing} labels already exist.")
         return
 
-    print(f"Labeling {len(queries)} queries ({existing} existing, need 300 for training)...")
+    print(f"Labeling {len(queries)} queries ({existing} existing)...")
     labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
     labeled = 0
     for i, (qid, query_text) in enumerate(queries, 1):
@@ -451,7 +464,9 @@ def cmd_label(args):
         except Exception as e:
             print(f"  Failed to label query: {e}")
 
-    print(f"\nDone. {labeled} new labels. Total: {existing + labeled}/300.")
+    total = existing + labeled
+    can_train = "ready to train" if total >= 300 else f"{300 - total} more needed to train"
+    print(f"\nDone. {labeled} new labels. Total: {total} ({can_train}).")
 
 
 def cmd_train(args):
@@ -1004,10 +1019,11 @@ def main():
     lifecycle_sub.add_parser("uninstall", help="Remove macOS launchd plist")
 
     # label
-    p_label = sub.add_parser("label", help="Run oracle labeling — score anchor sets for queries using Qwen")
+    p_label = sub.add_parser("label", help="Run oracle labeling — score anchor sets for queries")
     p_label.add_argument("--tenant", default="default", help="Tenant identifier")
     p_label.add_argument("--n-queries", type=int, default=50, help="Number of queries to label (default: 50)")
     p_label.add_argument("--sessions-dir", default=None, help="Path to Claude Code sessions (default: ~/.claude/projects)")
+    p_label.add_argument("--reset", action="store_true", help="Delete all existing labels and start from scratch")
 
     # train
     p_train = sub.add_parser("train", help="Train the selector model from oracle labels")

@@ -376,10 +376,9 @@ class LifecyclePipeline:
         llm_cfg = _llm_config()
         llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
         remaining_for_gate = max(0, 300 - existing)
-        if remaining_for_gate > 0:
-            print(f"        Scoring {len(queries)} queries with {llm_name} ({remaining_for_gate} more needed to reach 300 for training)...")
-        else:
-            print(f"        Scoring {len(queries)} queries with {llm_name} (training gate already met with {existing} labels)...")
+        can_train = existing >= 300
+        status = f"{existing} existing, can train" if can_train else f"{existing} existing, need 300 to start training"
+        print(f"        Scoring {len(queries)} new queries with {llm_name} ({status})...")
 
         # Build pipeline for labeling
         try:
@@ -404,10 +403,8 @@ class LifecyclePipeline:
                 print(f"        [{i}/{len(queries)}] FAILED: {e}", flush=True)
 
         total = existing + labeled
-        if total >= 300:
-            print(f"        Done. {total} oracle labels. Training gate met.")
-        else:
-            print(f"        Done. {total}/300 oracle labels ({300 - total} more needed to train selector).")
+        can_train = "ready to train" if total >= 300 else f"{300 - total} more needed to train"
+        print(f"        Done. {labeled} new, {total} total labels ({can_train}).")
         return labeled
 
     def _retrain_selector(self, tenant, store, atlas, state) -> bool:
