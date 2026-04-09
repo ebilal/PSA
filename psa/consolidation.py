@@ -39,14 +39,9 @@ QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen2.5:7b")
 
 
 def is_qwen_available() -> bool:
-    """Check if the Qwen endpoint is reachable."""
-    try:
-        import urllib.request
-        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
-        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
-        return True
-    except Exception:
-        return False
+    """Check if any LLM endpoint (cloud or local) is available."""
+    from .llm import is_any_llm_available
+    return is_any_llm_available()
 
 
 RETENTION_THRESHOLD = 0.65  # minimum retention score to keep a memory object
@@ -274,31 +269,12 @@ _REPAIR_SUFFIX = (
 
 
 def _call_qwen(messages: List[dict], timeout: int = 120) -> str:
-    """Call the Qwen2.5-7B-Instruct endpoint. Returns the raw response text."""
+    """Call an LLM (cloud first, local fallback). Returns the raw response text."""
     try:
-        import urllib.request
-
-        payload = json.dumps(
-            {
-                "model": QWEN_MODEL,
-                "messages": messages,
-                "temperature": 0.1,
-                "max_tokens": 2048,
-                "response_format": {"type": "json_object"},
-            }
-        ).encode()
-
-        req = urllib.request.Request(
-            QWEN_ENDPOINT,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
+        from .llm import call_llm
+        return call_llm(messages=messages, timeout=timeout)
     except Exception as e:
-        raise RuntimeError(f"Qwen endpoint call failed: {e}") from e
+        raise RuntimeError(f"LLM call failed: {e}") from e
 
 
 def _parse_qwen_output(raw: str) -> List[dict]:

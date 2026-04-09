@@ -310,31 +310,14 @@ def _generate_card_via_qwen(
     )
 
     try:
-        import urllib.request
-        import os
+        from .llm import call_llm
 
-        endpoint = os.environ.get(
-            "QWEN_ENDPOINT", "http://localhost:11434/v1/chat/completions"
+        content = call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=256,
+            timeout=60,
         )
-        model = os.environ.get("QWEN_MODEL", "qwen2.5:7b")
-
-        payload = _json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": 256,
-            "response_format": {"type": "json_object"},
-        }).encode()
-
-        req = urllib.request.Request(
-            endpoint,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = _json.loads(resp.read())
-        content = data["choices"][0]["message"]["content"]
         result = _json.loads(content)
 
         name = result.get("name", f"cluster-{anchor_id}")

@@ -249,15 +249,40 @@ Config is loaded from env vars > `~/.psa/config.json` > defaults.
 | `nightly_hour` | `0` | Hour (0-23) for scheduled lifecycle |
 | `selector_threshold` | `0.3` | Minimum score to include an anchor |
 
-### Consolidation endpoint
+### LLM Configuration
 
-PSA calls a local Qwen2.5-7B model for memory extraction:
+PSA needs an LLM for memory extraction, anchor card generation, and oracle labeling. It tries a cloud API first (via [litellm](https://docs.litellm.ai/)), then falls back to local Ollama.
 
-```bash
-export QWEN_ENDPOINT="http://localhost:11434/v1/chat/completions"  # Ollama default
+Configure in `~/.psa/llm.json` (created automatically on first run):
+
+```json
+{
+  "provider": "cloud",
+  "cloud_model": "azure/grok-4-20-reasoning",
+  "cloud_api_key": "your-api-key-here",
+  "cloud_api_base": "https://your-endpoint.openai.azure.com/openai/v1/",
+  "local_endpoint": "http://localhost:11434/v1/chat/completions",
+  "local_model": "qwen2.5:7b"
+}
 ```
 
-Any OpenAI-compatible API endpoint works here.
+| Key | Description |
+|-----|-------------|
+| `provider` | `"cloud"` = try cloud first, fall back to local. `"local"` = local Ollama only. |
+| `cloud_model` | Any litellm model string: `"azure/gpt-4o"`, `"openai/gpt-4o"`, `"anthropic/claude-sonnet-4-20250514"`, etc. |
+| `cloud_api_key` | API key for the cloud provider |
+| `cloud_api_base` | Base URL (required for Azure, optional for OpenAI/Anthropic) |
+| `local_endpoint` | Ollama endpoint URL |
+| `local_model` | Local model name (e.g., `"qwen2.5:7b"`, `"llama3:8b"`) |
+
+To use only local Ollama (no cloud):
+```json
+{
+  "provider": "local"
+}
+```
+
+Environment variables override the config file: `PSA_LLM_MODEL`, `PSA_LLM_API_KEY`, `PSA_LLM_API_BASE`, `QWEN_ENDPOINT`, `QWEN_MODEL`.
 
 ---
 

@@ -189,32 +189,24 @@ def _call_qwen_proxy_batch(
     query: str,
     candidate_sets: List[List[int]],
     anchor_cards_text: Dict[int, str],
-    endpoint: str,
-    model: str,
+    endpoint: str = "",
+    model: str = "",
     timeout: int = 120,
 ) -> List[Dict[str, float]]:
     """
-    Score ALL candidate sets for one query in a single Qwen call.
+    Score ALL candidate sets for one query in a single LLM call.
 
-    Batching all sets into one prompt reduces ~23 HTTP calls/query to 1,
-    cutting labeling time from ~16h to ~1h for 500 queries on an M4 Mac.
+    Uses the unified LLM caller (cloud first, local fallback).
 
     Returns a list of score dicts (same order as candidate_sets).
     Falls back to zero scores for any set that can't be parsed.
     """
-    import urllib.request
+    from psa.llm import call_llm
 
     n = len(candidate_sets)
 
-    def _post(pl: bytes) -> str:
-        req = urllib.request.Request(
-            endpoint,
-            data=pl,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())["choices"][0]["message"]["content"]
+    def _post(messages: List[dict]) -> str:
+        return call_llm(messages=messages, temperature=0.0, max_tokens=64 * n + 64, timeout=timeout)
 
     def _parse_scores(raw_sets: list, indices: List[int]) -> Dict[int, Dict[str, float]]:
         """Return {original_index: scores} for items that parse successfully."""
@@ -258,13 +250,7 @@ def _call_qwen_proxy_batch(
             f'"noise_penalty": 0.0, "token_cost": 0.0}}, ...]}}\n'
             f'Return exactly {k} objects in the "sets" array, one per set, in order.'
         )
-        return json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": p}],
-            "temperature": 0.0,
-            "max_tokens": 64 * k + 64,
-            "response_format": {"type": "json_object"},
-        }).encode()
+        return [{"role": "user", "content": p}]
 
     all_indices = list(range(n))
     results: Dict[int, Dict[str, float]] = {}
@@ -315,7 +301,7 @@ def _qwen_task_success(
 
     Returns a score in [0.0, 1.0].
     """
-    import urllib.request
+    from psa.llm import call_llm
 
     prompt = (
         "You are evaluating whether a retrieved context is useful for answering a query.\n\n"
@@ -332,28 +318,17 @@ def _qwen_task_success(
         "1.0 = context fully answers the query"
     )
 
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "max_tokens": 128,
-        "response_format": {"type": "json_object"},
-    }).encode()
-
     try:
-        req = urllib.request.Request(
-            endpoint,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        content = call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=128,
+            timeout=timeout,
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        content = data["choices"][0]["message"]["content"]
         result = json.loads(content)
         return max(0.0, min(1.0, float(result.get("score", 0.0))))
     except Exception as e:
-        logger.warning("Qwen task-success judge failed: %s", e)
+        logger.warning("Task-success judge failed: %s", e)
         return 0.0
 
 
