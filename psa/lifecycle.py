@@ -375,9 +375,11 @@ class LifecyclePipeline:
         from .llm import _load_config as _llm_config
         llm_cfg = _llm_config()
         llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
-        gate_met = existing >= 300
-        gate_str = ", training gate met" if gate_met else f", need 300 to train selector"
-        print(f"        Scoring {len(queries)} queries with {llm_name} ({existing} labels so far{gate_str})...")
+        remaining_for_gate = max(0, 300 - existing)
+        if remaining_for_gate > 0:
+            print(f"        Scoring {len(queries)} queries with {llm_name} ({remaining_for_gate} more needed to reach 300 for training)...")
+        else:
+            print(f"        Scoring {len(queries)} queries with {llm_name} (training gate already met with {existing} labels)...")
 
         # Build pipeline for labeling
         try:
