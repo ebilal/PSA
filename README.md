@@ -8,14 +8,6 @@
 
 Every conversation you have with an AI — every decision, every debugging session, every architecture debate — disappears when the session ends. Other memory systems extract snippets and throw away the reasoning. PSA takes a different approach: **ingest everything, derive typed memory objects from it, and retrieve by learned anchor regions — not flat embedding search.**
 
-<br>
-
-[![][version-shield]][release-link]
-[![][python-shield]][python-link]
-[![][license-shield]][license-link]
-[![][discord-shield]][discord-link]
-
-<br>
 
 [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Setup](#setup) · [Commands](#commands) · [Selector Training](#selector-training) · [MCP Server](#mcp-server)
 
