@@ -30,7 +30,7 @@ logger = logging.getLogger("psa.selector")
 # ── Selector config ───────────────────────────────────────────────────────────
 
 DEFAULT_MAX_K = 4        # maximum anchors to return
-DEFAULT_THRESHOLD = 0.0  # minimum score to include (cosine mode: always include top-1)
+DEFAULT_THRESHOLD = 0.0  # cosine sims to centroids are always 0.4-0.7; threshold is only useful in trained mode
 
 # Trained mode settings
 TRAINED_MAX_SEQ = 320    # max input tokens for cross-encoder

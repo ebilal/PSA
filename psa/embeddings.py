@@ -41,17 +41,21 @@ class EmbeddingModel:
 
     def _load(self):
         if self._model is None:
+            import io
             import logging as _logging
+            import os
+            import sys
 
-            # Suppress noisy "LOAD REPORT" output from sentence-transformers
-            _st_logger = _logging.getLogger("sentence_transformers")
-            prev_level = _st_logger.level
-            _st_logger.setLevel(_logging.WARNING)
+            # Suppress noisy "BertModel LOAD REPORT" and tqdm progress bars
+            old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+            _logging.getLogger("sentence_transformers").setLevel(_logging.ERROR)
             try:
                 from sentence_transformers import SentenceTransformer
                 self._model = SentenceTransformer(self._model_name)
             finally:
-                _st_logger.setLevel(prev_level)
+                sys.stderr = old_stderr
 
     def embed(self, text: str) -> List[float]:
         """Embed a single string. Returns an L2-normalized float list."""
