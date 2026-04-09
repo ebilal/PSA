@@ -342,13 +342,8 @@ class LifecyclePipeline:
             with open(labels_path) as f:
                 existing = sum(1 for line in f if line.strip())
 
-        if existing >= 300:
-            print(f"        {existing} oracle labels already exist (gate: 300). Skipping labeling.")
-            return 0
-
-        # How many more labels do we need?
-        remaining = 300 - existing
-        effective_batch = batch_size if batch_size > 0 else remaining
+        # batch_size=0 means label all available queries
+        effective_batch = batch_size if batch_size > 0 else 10_000
 
         # Load real user queries from sessions
         if sessions_dir:
@@ -377,7 +372,9 @@ class LifecyclePipeline:
         if not queries:
             return 0
 
-        print(f"        Scoring {len(queries)} queries with Qwen ({existing}/300 labels so far, need 300 to train selector)...")
+        gate_met = existing >= 300
+        gate_str = f" (training gate met)" if gate_met else f" (need 300 to train selector)"
+        print(f"        Scoring {len(queries)} queries with Qwen ({existing} labels so far{gate_str})...")
 
         # Build pipeline for labeling
         try:
@@ -402,7 +399,10 @@ class LifecyclePipeline:
                 logger.warning("Failed to label query %s: %s", qid, e)
 
         total = existing + labeled
-        print(f"        Done. {total}/300 oracle labels ({300 - total} more needed to train selector).")
+        if total >= 300:
+            print(f"        Done. {total} oracle labels. Training gate met.")
+        else:
+            print(f"        Done. {total}/300 oracle labels ({300 - total} more needed to train selector).")
         return labeled
 
     def _retrain_selector(self, tenant, store, atlas, state) -> bool:
