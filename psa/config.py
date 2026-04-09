@@ -23,7 +23,7 @@ DEFAULT_PSA_MODE = "primary"       # "off" | "side-by-side" | "primary"
 # Lifecycle defaults
 DEFAULT_MAX_MEMORIES = 50_000
 DEFAULT_ANCHOR_MEMORY_BUDGET = 100
-DEFAULT_NIGHTLY_HOUR = 3
+DEFAULT_NIGHTLY_HOUR = 0
 
 DEFAULT_TOPIC_WINGS = [
     "emotions",

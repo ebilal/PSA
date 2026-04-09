@@ -143,13 +143,21 @@ uv run psa search "why did we switch to GraphQL"
 
 Embeds the query, retrieves the top-24 anchor candidates (BM25 + dense), selects the 1-4 best anchors, fetches their memories, ranks by relevance, and packs into a 6000-token context organized by type (failures first, then procedures, tool notes, episodes, facts). Works immediately with cosine selector.
 
-### 4. Install the nightly lifecycle
+### 4. Run the lifecycle once (labels queries and trains the selector)
+
+```bash
+uv run psa lifecycle run
+```
+
+This runs the full pipeline end-to-end: mines any remaining sessions, labels all available queries for selector training, rebuilds the atlas if health triggers, and trains the selector if enough labels (300+) have accumulated. The first run takes several hours because it labels all queries from scratch.
+
+### 5. Install the nightly lifecycle
 
 ```bash
 uv run psa lifecycle install
 ```
 
-Installs a macOS launchd job that runs at 3 AM nightly. Each run:
+Installs a macOS launchd job that runs at midnight nightly. Each run:
 
 1. **Mines** new Claude Code sessions added since last run
 2. **Prunes** overloaded anchors and enforces the 50k memory cap
@@ -159,7 +167,7 @@ Installs a macOS launchd job that runs at 3 AM nightly. Each run:
 
 You can run it manually anytime: `uv run psa lifecycle run`
 
-### 5. Add the MCP server to Claude Code
+### 6. Add the MCP server to Claude Code
 
 ```bash
 claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
@@ -242,7 +250,7 @@ psa migrate --collection my_collection --tenant myteam
 psa lifecycle run                       # run the full pipeline manually (mine, prune, rebuild, label, train)
 psa lifecycle run --label-batch 30      # limit labeling to 30 queries per run (~90 min)
 psa lifecycle status                    # show last run, memory count, selector mode
-psa lifecycle install                   # install nightly cron (3 AM, labels all remaining queries)
+psa lifecycle install                   # install nightly cron (midnight, labels all remaining queries)
 psa lifecycle install --label-batch 30  # install with a per-night labeling cap
 psa lifecycle uninstall                 # remove nightly cron
 ```
@@ -441,7 +449,7 @@ uv run psa lifecycle run
 # Check state
 uv run psa lifecycle status
 
-# Install nightly cron (macOS launchd, runs at 3 AM)
+# Install nightly cron (macOS launchd, runs at midnight)
 uv run psa lifecycle install
 
 # Remove cron
@@ -476,7 +484,7 @@ In `~/.psa/config.json`:
 {
   "max_memories": 50000,
   "anchor_memory_budget": 100,
-  "nightly_hour": 3
+  "nightly_hour": 0
 }
 ```
 
