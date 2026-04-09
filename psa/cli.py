@@ -432,7 +432,7 @@ def cmd_label(args):
         print(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
         return
 
-    queries = _load_queries_from_sessions(sessions_dir, max_queries=n_queries * 3)
+    all_queries = _load_queries_from_sessions(sessions_dir)
 
     # Deduplicate against already-labeled
     import json
@@ -446,13 +446,14 @@ def cmd_label(args):
                         labeled_ids.add(json.loads(line).get("query_id", ""))
                     except Exception:
                         pass
-    queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:n_queries]
+    available = [(qid, qt) for qid, qt in all_queries if qid not in labeled_ids]
+    queries = available[:n_queries] if n_queries > 0 else available
 
     if not queries:
-        print(f"No new queries to label. {existing} labels already exist.")
+        print(f"No new queries to label. {existing} labels exist, {len(all_queries)} total queries found.")
         return
 
-    print(f"Labeling {len(queries)} queries ({existing} existing)...")
+    print(f"Labeling {len(queries)} of {len(available)} available queries ({existing} already labeled)...")
     labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
     labeled = 0
     for i, (qid, query_text) in enumerate(queries, 1):
@@ -1021,7 +1022,7 @@ def main():
     # label
     p_label = sub.add_parser("label", help="Run oracle labeling — score anchor sets for queries")
     p_label.add_argument("--tenant", default="default", help="Tenant identifier")
-    p_label.add_argument("--n-queries", type=int, default=50, help="Number of queries to label (default: 50)")
+    p_label.add_argument("--n-queries", type=int, default=0, help="Number of queries to label (0 = all available, default: all)")
     p_label.add_argument("--sessions-dir", default=None, help="Path to Claude Code sessions (default: ~/.claude/projects)")
     p_label.add_argument("--reset", action="store_true", help="Delete all existing labels and start from scratch")
 
