@@ -453,7 +453,10 @@ def cmd_label(args):
         print(f"No new queries to label. {existing} labels exist, {len(all_queries)} total queries found.")
         return
 
-    print(f"Labeling {len(queries)} of {len(available)} available queries ({existing} already labeled)...")
+    from .llm import _load_config as _llm_config
+    llm_cfg = _llm_config()
+    llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
+    print(f"Labeling {len(queries)} of {len(available)} available queries using {llm_name} ({existing} already labeled)...")
     labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
     labeled = 0
     for i, (qid, query_text) in enumerate(queries, 1):
