@@ -393,7 +393,8 @@ class LifecyclePipeline:
             try:
                 labeler.label(query_id=qid, query=query_text)
                 labeled += 1
-                print(f"        [{labeled}/{len(queries)}] {query_text[:60]}...", flush=True)
+                if labeled % 10 == 0 or labeled == 1:
+                    print(f"        [{labeled}/{len(queries)}] scored...", flush=True)
             except Exception as e:
                 print(f"        [{i}/{len(queries)}] FAILED: {e}", flush=True)
 
