@@ -37,6 +37,7 @@ class LifecyclePipeline:
         tenant_id: str = "default",
         sessions_dir: Optional[str] = None,
         force_rebuild: bool = False,
+        label_batch_size: int = 0,
     ) -> dict:
         """
         Run the lifecycle pipeline.
@@ -152,7 +153,8 @@ class LifecyclePipeline:
 
                 # Label queries for selector training (accumulates nightly)
                 if summary["atlas_rebuilt"]:
-                    labeled = self._label_queries(tenant, store, atlas, sessions_dir)
+                    labeled = self._label_queries(tenant, store, atlas, sessions_dir,
+                                                  batch_size=label_batch_size)
                     summary["queries_labeled"] = labeled
 
                     # Retrain selector if training gates are met
@@ -321,8 +323,8 @@ class LifecyclePipeline:
 
         return total
 
-    def _label_queries(self, tenant, store, atlas, sessions_dir, batch_size: int = 30) -> int:
-        """Label a batch of queries for selector training. Accumulates nightly."""
+    def _label_queries(self, tenant, store, atlas, sessions_dir, batch_size: int = 0) -> int:
+        """Label queries for selector training. batch_size=0 means all remaining up to 300."""
         try:
             from .training.oracle_labeler import OracleLabeler, _load_queries_from_sessions
             from .pipeline import PSAPipeline
@@ -343,9 +345,13 @@ class LifecyclePipeline:
             print(f"        {existing} oracle labels already exist (gate: 300). Skipping labeling.")
             return 0
 
+        # How many more labels do we need?
+        remaining = 300 - existing
+        effective_batch = batch_size if batch_size > 0 else remaining
+
         # Load real user queries from sessions
         if sessions_dir:
-            queries = _load_queries_from_sessions(sessions_dir, max_queries=batch_size * 3)
+            queries = _load_queries_from_sessions(sessions_dir, max_queries=effective_batch * 3)
         else:
             queries = []
 
@@ -365,7 +371,7 @@ class LifecyclePipeline:
                             labeled_ids.add(json.loads(line).get("query_id", ""))
                         except Exception:
                             pass
-        queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:batch_size]
+        queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:effective_batch]
 
         if not queries:
             return 0

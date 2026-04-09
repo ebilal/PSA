@@ -536,7 +536,8 @@ def cmd_lifecycle(args):
         from .lifecycle import LifecyclePipeline
         lp = LifecyclePipeline()
         force = getattr(args, "force_rebuild", False)
-        lp.run(tenant_id=tenant_id, force_rebuild=force)
+        label_batch = getattr(args, "label_batch", 0)
+        lp.run(tenant_id=tenant_id, force_rebuild=force, label_batch_size=label_batch)
 
     elif action == "status":
         from .lifecycle import LifecyclePipeline
@@ -550,13 +551,14 @@ def cmd_lifecycle(args):
                 print(f"  {k}: {v}")
 
     elif action == "install":
-        _lifecycle_install(tenant_id)
+        label_batch = getattr(args, "label_batch", 0)
+        _lifecycle_install(tenant_id, label_batch=label_batch)
 
     elif action == "uninstall":
         _lifecycle_uninstall()
 
 
-def _lifecycle_install(tenant_id: str):
+def _lifecycle_install(tenant_id: str, label_batch: int = 0):
     """Install macOS launchd plist for nightly lifecycle runs."""
     import subprocess
     import sys
@@ -568,7 +570,13 @@ def _lifecycle_install(tenant_id: str):
 
     psa_bin = os.path.join(os.path.dirname(sys.executable), "psa")
     if not os.path.exists(psa_bin):
-        psa_bin = "psa"  # hope it's on PATH
+        psa_bin = "psa"
+
+    label_batch_args = ""
+    if label_batch > 0:
+        label_batch_args = f"""
+        <string>--label-batch</string>
+        <string>{label_batch}</string>"""
 
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -583,7 +591,7 @@ def _lifecycle_install(tenant_id: str):
         <string>lifecycle</string>
         <string>run</string>
         <string>--tenant</string>
-        <string>{tenant_id}</string>
+        <string>{tenant_id}</string>{label_batch_args}
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -987,8 +995,12 @@ def main():
     lifecycle_sub = p_lifecycle.add_subparsers(dest="lifecycle_action")
     p_lc_run = lifecycle_sub.add_parser("run", help="Run lifecycle pipeline manually")
     p_lc_run.add_argument("--force-rebuild", action="store_true", help="Force atlas rebuild")
+    p_lc_run.add_argument("--label-batch", type=int, default=0,
+                          help="Max queries to label per run (0 = all remaining up to 300, default: 0)")
     lifecycle_sub.add_parser("status", help="Show lifecycle state")
-    lifecycle_sub.add_parser("install", help="Install macOS launchd plist for nightly runs")
+    p_lc_install = lifecycle_sub.add_parser("install", help="Install macOS launchd plist for nightly runs")
+    p_lc_install.add_argument("--label-batch", type=int, default=0,
+                              help="Max queries to label per nightly run (0 = all remaining, 30 = ~90 min)")
     lifecycle_sub.add_parser("uninstall", help="Remove macOS launchd plist")
 
     # label

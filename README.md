@@ -236,6 +236,17 @@ psa migrate                             # migrate ChromaDB drawers → PSA Memor
 psa migrate --collection my_collection --tenant myteam
 ```
 
+### Lifecycle
+
+```bash
+psa lifecycle run                       # run the full pipeline manually (mine, prune, rebuild, label, train)
+psa lifecycle run --label-batch 30      # limit labeling to 30 queries per run (~90 min)
+psa lifecycle status                    # show last run, memory count, selector mode
+psa lifecycle install                   # install nightly cron (3 AM, labels all remaining queries)
+psa lifecycle install --label-batch 30  # install with a per-night labeling cap
+psa lifecycle uninstall                 # remove nightly cron
+```
+
 ### Session context
 
 ```bash
