@@ -299,6 +299,64 @@ def _call_qwen_proxy_batch(
     return [results[i] for i in all_indices]
 
 
+# ── Qwen task-success judge ───────────────────────────────────────────────────
+
+
+def _qwen_task_success(
+    query: str,
+    packed_context: str,
+    endpoint: str = "http://localhost:11434/v1/chat/completions",
+    model: str = "qwen2.5:7b",
+    timeout: int = 120,
+) -> float:
+    """
+    Use Qwen as a judge: given a query and packed context, how well does
+    the context support answering the query?
+
+    Returns a score in [0.0, 1.0].
+    """
+    import urllib.request
+
+    prompt = (
+        "You are evaluating whether a retrieved context is useful for answering a query.\n\n"
+        f"QUERY: {query}\n\n"
+        f"RETRIEVED CONTEXT:\n{packed_context[:3000]}\n\n"
+        "Score how well this context helps answer the query.\n"
+        "Consider:\n"
+        "- Does the context contain information directly relevant to the query?\n"
+        "- Could someone answer the query using ONLY this context?\n"
+        "- Is there noise (irrelevant information) that would confuse the answer?\n\n"
+        'Return JSON: {"score": 0.0 to 1.0, "reason": "one sentence"}\n'
+        "0.0 = context is completely irrelevant\n"
+        "0.5 = context is partially relevant but incomplete\n"
+        "1.0 = context fully answers the query"
+    )
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 128,
+        "response_format": {"type": "json_object"},
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            endpoint,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        content = data["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        return max(0.0, min(1.0, float(result.get("score", 0.0))))
+    except Exception as e:
+        logger.warning("Qwen task-success judge failed: %s", e)
+        return 0.0
+
+
 # ── OracleLabeler ──────────────────────────────────────────────────────────────
 
 
@@ -306,11 +364,9 @@ class OracleLabeler:
     """
     Two-stage oracle labeler for selector training data.
 
-    Requires:
-    - A running PSA pipeline (retriever + atlas)
-    - Access to gold anchor labels for training queries
-    - A local Qwen endpoint (cheap stage)
-    - An Anthropic API key (expensive stage, optional if task_success_fn provided)
+    Stage 1 (cheap): Qwen scores ALL candidate sets with proxy metrics.
+    Stage 2 (expensive): Qwen judges task success for top-3 sets —
+    does the packed context from this anchor set actually help answer the query?
     """
 
     def __init__(
@@ -319,15 +375,24 @@ class OracleLabeler:
         output_path: str,                 # JSONL output file path
         qwen_endpoint: str = "http://localhost:11434/v1/chat/completions",
         qwen_model: str = "qwen2.5:7b",
-        runtime_model_id: str = "claude-haiku-4-5-20251001",
+        runtime_model_id: str = "qwen2.5:7b",
         task_success_fn=None,             # callable(query, packed_context) → float
+        use_task_success: bool = True,    # enable expensive stage by default
     ):
         self.pipeline = pipeline
         self.output_path = output_path
         self.qwen_endpoint = qwen_endpoint
         self.qwen_model = qwen_model
         self.runtime_model_id = runtime_model_id
-        self.task_success_fn = task_success_fn
+        self.use_task_success = use_task_success
+        if task_success_fn is not None:
+            self.task_success_fn = task_success_fn
+        elif use_task_success:
+            self.task_success_fn = lambda q, ctx: _qwen_task_success(
+                q, ctx, endpoint=qwen_endpoint, model=qwen_model
+            )
+        else:
+            self.task_success_fn = None
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     def label(

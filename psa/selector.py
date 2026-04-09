@@ -63,7 +63,8 @@ def _cosine_select(
     Cosine re-ranking: score candidates by their dense_score (already cosine
     similarity from the retriever's AnchorIndex search).
 
-    Always includes at least 1 anchor (the top dense-scored one).
+    Returns empty list if no candidate meets the threshold — the query
+    has no relevant memories.
     """
     if not candidates:
         return []
@@ -72,10 +73,9 @@ def _cosine_select(
     ranked = sorted(candidates, key=lambda c: c.dense_score, reverse=True)
 
     selected = []
-    for i, cand in enumerate(ranked[:max_k]):
+    for cand in ranked[:max_k]:
         score = cand.dense_score
-        # Always include the top-1 regardless of threshold
-        if i > 0 and score < threshold:
+        if score < threshold:
             break
         selected.append(
             SelectedAnchor(
@@ -136,8 +136,8 @@ def _trained_select(
     )
 
     selected = []
-    for i, (cand, score) in enumerate(scored[:max_k]):
-        if i > 0 and float(score) < threshold:
+    for cand, score in scored[:max_k]:
+        if float(score) < threshold:
             break
         selected.append(
             SelectedAnchor(

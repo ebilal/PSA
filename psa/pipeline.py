@@ -196,6 +196,26 @@ class PSAPipeline:
             "Selected %d anchors in %.1fms", len(selected), timing.select_ms
         )
 
+        # No anchors met the threshold — nothing relevant in memory
+        if not selected:
+            packed = PackedContext(
+                query=query,
+                text="(no relevant memories found for this query)",
+                token_count=0,
+                memory_ids=[],
+                sections=[],
+                untyped_count=0,
+            )
+            return PSAResult(
+                query=query,
+                packed_context=packed,
+                selected_anchors=[],
+                candidates=candidates,
+                timing=timing,
+                tenant_id=self.tenant_id,
+                psa_mode=self.psa_mode,
+            )
+
         # Step 4: Fetch memories for selected anchors
         t0 = time.perf_counter()
         memories = self._fetch_memories(selected)
@@ -211,6 +231,8 @@ class PSAPipeline:
             query=query,
             memories=memories,
             token_budget=self.token_budget,
+            query_vec=query_vec,
+            store=self.store,
         )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
@@ -273,6 +295,34 @@ class PSAPipeline:
         # Re-sort globally by quality_score desc
         memories.sort(key=lambda m: m.quality_score, reverse=True)
         return memories
+
+    def packed_context_for_anchors(
+        self,
+        query: str,
+        anchor_ids: List[int],
+    ) -> PackedContext:
+        """
+        Pack context for a specific set of anchor IDs.
+
+        Used by the oracle labeler to evaluate candidate anchor sets —
+        pack the memories from these anchors and return the result.
+        """
+        seen_ids: set = set()
+        memories: List[MemoryObject] = []
+        for aid in anchor_ids:
+            for mo in self.store.query_by_anchor(self.tenant_id, aid, limit=50):
+                if mo.memory_object_id not in seen_ids:
+                    seen_ids.add(mo.memory_object_id)
+                    memories.append(mo)
+
+        query_vec = self.embedding_model.embed(query)
+        return self._packer.pack_memories_direct(
+            query=query,
+            memories=memories,
+            token_budget=self.token_budget,
+            query_vec=query_vec,
+            store=self.store,
+        )
 
     def search(
         self,

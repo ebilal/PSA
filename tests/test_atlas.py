@@ -248,7 +248,8 @@ def test_atlas_assign_memory(tmp_dir, small_k):
         embedding=embedding.tolist(),
     )
     primary_id, secondary_id, confidence = atlas.assign_memory(mo)
-    assert 0 <= primary_id < 12  # within valid anchor range
+    valid_ids = {c.anchor_id for c in atlas.cards}
+    assert primary_id in valid_ids  # must be a valid anchor in this atlas
     assert 0.0 <= confidence <= 1.0
 
 

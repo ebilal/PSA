@@ -37,6 +37,18 @@ QWEN_ENDPOINT = os.environ.get(
 )
 QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen2.5:7b")
 
+
+def is_qwen_available() -> bool:
+    """Check if the Qwen endpoint is reachable."""
+    try:
+        import urllib.request
+        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
+        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
 RETENTION_THRESHOLD = 0.65  # minimum retention score to keep a memory object
 
 # Token approximation: 4 chars ≈ 1 token

@@ -63,12 +63,11 @@ def test_cosine_select_sorted_descending():
     assert scores == sorted(scores, reverse=True)
 
 
-def test_cosine_select_always_includes_top_1():
-    # Even with high threshold, first candidate is always included
+def test_cosine_select_returns_empty_when_below_threshold():
+    # With high threshold and low scores, nothing is returned — query has no relevant memories
     candidates = [_make_candidate(0, 0.1), _make_candidate(1, 0.05)]
     selected = _cosine_select(query_vec=[], candidates=candidates, max_k=4, threshold=0.9)
-    assert len(selected) == 1
-    assert selected[0].anchor_id == 0
+    assert len(selected) == 0
 
 
 def test_cosine_select_threshold_filters():

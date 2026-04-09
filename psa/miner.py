@@ -681,22 +681,13 @@ def mine_psa(
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
-    # Check if Qwen endpoint is reachable; fall back to no-LLM mode with a clear warning
     import logging as _logging
-    use_llm = True
-    try:
-        import urllib.request
-        from .consolidation import QWEN_ENDPOINT
-        # Use GET to /api/tags (Ollama's list-models endpoint) instead of HEAD
-        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
-        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
-    except Exception:
+    from .consolidation import is_qwen_available
+    use_llm = is_qwen_available()
+    if not use_llm:
         _logging.getLogger("psa.miner").warning(
-            "Qwen endpoint not reachable. "
-            "PSA consolidation will skip LLM-based memory extraction. "
-            "Start Ollama with 'ollama serve' and pull qwen2.5:7b.",
+            "Qwen endpoint not reachable. Skipping LLM-based memory extraction.",
         )
-        use_llm = False
 
     # Load atlas for hot assignment (assign new memories to nearest anchor)
     atlas = None

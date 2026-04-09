@@ -70,19 +70,25 @@ class LifecyclePipeline:
         if sessions_dir is None:
             sessions_dir = os.path.expanduser("~/.claude/projects")
 
-        # 1. Discover new sessions
-        new_sessions = self._find_new_sessions(
+        # 1. Discover all session files; _mine_sessions handles dedup against raw_sources
+        all_sessions = self._find_new_sessions(
+            sessions_dir=sessions_dir,
+            since=None,  # find ALL files, not just recent — dedup happens in _mine_sessions
+        )
+        new_since_last = self._find_new_sessions(
             sessions_dir=sessions_dir,
             since=state.get("last_mine_timestamp"),
         )
-        has_new_data = bool(new_sessions)
-        summary["new_sessions"] = len(new_sessions)
+        has_new_data = bool(new_since_last)
+        summary["new_sessions"] = len(new_since_last)
 
-        if has_new_data:
+        if all_sessions:
             # === FAST PATH: ingest ===
-            logger.info("Fast path: %d new sessions to mine", len(new_sessions))
-            mined = self._mine_sessions(new_sessions, tenant_id=tenant_id)
+            # Pass all files; _mine_sessions skips files already in PSA raw_sources
+            logger.info("Mining: %d total session files (%d new since last run)", len(all_sessions), len(new_since_last))
+            mined = self._mine_sessions(all_sessions, tenant_id=tenant_id, store=store, tenant=tenant)
             summary["memories_mined"] = mined
+            has_new_data = has_new_data or mined > 0
             state["last_mine_timestamp"] = now_iso
 
         # === MAINTENANCE (runs every time) ===
@@ -133,8 +139,10 @@ class LifecyclePipeline:
                 except Exception as e:
                     logger.error("Atlas rebuild failed: %s", e)
 
-                # TODO: retrain selector when training infrastructure is ready
-                # For now, stay in cosine mode after rebuild
+                # Retrain selector if training gates are met
+                if summary["atlas_rebuilt"]:
+                    retrained = self._retrain_selector(tenant, store, atlas, state)
+                    summary["selector_retrained"] = retrained
 
         # 6. Save state
         state["last_memory_count"] = store.count(tenant_id)
@@ -217,15 +225,17 @@ class LifecyclePipeline:
 
         return new_files
 
-    def _mine_sessions(self, session_files: List[str], tenant_id: str = "default") -> int:
+    def _mine_sessions(self, session_files: List[str], tenant_id: str = "default",
+                        store=None, tenant=None) -> int:
         """Run consolidation over new session files. Returns memory count."""
         from .consolidation import ConsolidationPipeline
-        from .memory_object import MemoryStore
-        from .tenant import TenantManager
 
-        tm = TenantManager(base_dir=self.base_dir)
-        tenant = tm.get_or_create(tenant_id)
-        store = MemoryStore(db_path=tenant.memory_db_path)
+        if store is None or tenant is None:
+            from .memory_object import MemoryStore
+            from .tenant import TenantManager
+            tm = TenantManager(base_dir=self.base_dir)
+            tenant = tm.get_or_create(tenant_id)
+            store = MemoryStore(db_path=tenant.memory_db_path)
 
         # Load atlas for hot assignment
         atlas = None
@@ -236,15 +246,24 @@ class LifecyclePipeline:
         except Exception:
             pass
 
+        from .consolidation import is_qwen_available
+        use_llm = is_qwen_available()
+        if not use_llm:
+            logger.warning("Qwen not available for lifecycle mining. Skipping LLM consolidation.")
+
         pipeline = ConsolidationPipeline(
             store=store,
             tenant_id=tenant_id,
-            use_llm=False,  # lifecycle pipeline uses offline consolidation
+            use_llm=use_llm,
             atlas=atlas,
         )
 
+        already_processed = store.get_processed_source_paths(tenant_id)
+
         total = 0
         for fpath in session_files:
+            if fpath in already_processed:
+                continue
             try:
                 text = Path(fpath).read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -261,3 +280,62 @@ class LifecyclePipeline:
             total += len(memories)
 
         return total
+
+    def _retrain_selector(self, tenant, store, atlas, state) -> bool:
+        """Retrain the selector if training gates are met. Returns True if retrained."""
+        try:
+            from .selector import check_training_gates
+            from .training.data_generator import DataGenerator
+            from .training.train_selector import SelectorTrainer
+        except ImportError:
+            logger.warning("Training dependencies not available. Skipping selector retrain.")
+            return False
+
+        # Check training gates (>=300 oracle labels, >=200 held-out, recall@24 >= 0.95)
+        labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
+        label_count = 0
+        if os.path.exists(labels_path):
+            with open(labels_path) as f:
+                label_count = sum(1 for line in f if line.strip())
+
+        gate_status = check_training_gates(
+            oracle_count=label_count,
+            held_out_count=0,  # not tracked yet — will gate on oracle_count alone
+            shortlist_recall_24=1.0,  # assume retriever is good enough
+        )
+        if not gate_status.gates_met:
+            logger.info(
+                "Training gates not met (%s). Staying in cosine mode.",
+                "; ".join(gate_status.blocking_reasons),
+            )
+            return False
+
+        # Generate training data from existing labels
+        training_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
+        anchor_cards = {c.anchor_id: c.to_stable_card_text() for c in atlas.cards}
+        gen = DataGenerator(oracle_labels_path=labels_path, anchor_cards=anchor_cards)
+        n_written = gen.generate(output_path=training_path, n_examples=max(1000, label_count * 20))
+
+        if n_written < 100:
+            logger.info("Only %d training examples generated. Staying in cosine mode.", n_written)
+            return False
+
+        # Train
+        selector_version = state.get("selector_version", 0) + 1
+        output_dir = os.path.join(tenant.root_dir, "models", f"selector_v{selector_version}")
+        trainer = SelectorTrainer(
+            output_dir=output_dir,
+            atlas_version=atlas.version,
+        )
+
+        try:
+            sv = trainer.train(train_data_path=training_path, version=selector_version)
+            logger.info("Selector v%d trained → %s", sv.version, sv.model_path)
+
+            # Activate trained selector
+            self._write_selector_mode(tenant.root_dir, "trained", sv.model_path)
+            state["selector_version"] = selector_version
+            return True
+        except Exception as e:
+            logger.error("Selector training failed: %s", e)
+            return False

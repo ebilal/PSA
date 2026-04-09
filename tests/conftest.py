@@ -54,6 +54,31 @@ def _reset_mcp_cache():
     _clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def _mock_qwen_card_generation_in_tests(monkeypatch):
+    """Use stub cards in tests to avoid slow Qwen HTTP calls during atlas builds."""
+    from psa import atlas as _atlas_mod
+    from psa.anchor import AnchorCard
+
+    def _stub_card(anchor_id, centroid, sample_memories, is_novelty=False):
+        titles = [m.title for m in sample_memories[:3]]
+        return AnchorCard(
+            anchor_id=anchor_id,
+            name=f"novelty-{anchor_id}" if is_novelty else f"cluster-{anchor_id}",
+            meaning=f"Test cluster with {len(sample_memories)} memories: {'; '.join(titles[:2])}",
+            memory_types=list({m.memory_type.value for m in sample_memories[:5]}),
+            include_terms=[],
+            exclude_terms=[],
+            prototype_examples=titles,
+            near_but_different=[],
+            centroid=centroid,
+            memory_count=len(sample_memories),
+            is_novelty=is_novelty,
+        )
+
+    monkeypatch.setattr(_atlas_mod, "_generate_card_via_qwen", _stub_card)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_home():
     """Ensure HOME points to a temp dir for the entire test session.
