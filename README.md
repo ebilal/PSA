@@ -204,6 +204,25 @@ psa atlas health                        # novelty rate, utilization skew, rebuil
 psa atlas rebuild                       # force rebuild
 ```
 
+### Labeling
+
+```bash
+psa label                               # label 50 queries from Claude sessions using Qwen
+psa label --n-queries 200               # label more queries (takes longer)
+psa label --sessions-dir ~/chats        # use a custom sessions directory
+```
+
+Each label runs a query through the pipeline, has Qwen judge which anchor sets actually help answer it, and saves the result. You need 300+ labels before the selector can be trained.
+
+### Training
+
+```bash
+psa train                               # train selector (requires 300+ labels)
+psa train --force                       # train even with fewer labels
+```
+
+Generates training data from oracle labels and fine-tunes the cross-encoder selector. Once trained, the selector learns task utility — not just topical similarity — and activates automatically.
+
 ### Benchmark
 
 ```bash

@@ -393,6 +393,136 @@ def _cmd_atlas_health(args):
         sys.exit(1)
 
 
+def cmd_label(args):
+    """Run oracle labeling — score anchor sets for queries using Qwen."""
+    tenant_id = getattr(args, "tenant", "default")
+    n_queries = getattr(args, "n_queries", 50)
+    sessions_dir = getattr(args, "sessions_dir", None) or os.path.expanduser("~/.claude/projects")
+
+    from .tenant import TenantManager
+    from .pipeline import PSAPipeline
+    from .training.oracle_labeler import OracleLabeler, _load_queries_from_sessions
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
+
+    # Count existing
+    existing = 0
+    if os.path.exists(labels_path):
+        with open(labels_path) as f:
+            existing = sum(1 for line in f if line.strip())
+
+    try:
+        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, psa_mode="primary", selector_mode="cosine")
+    except FileNotFoundError:
+        print(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
+        return
+
+    queries = _load_queries_from_sessions(sessions_dir, max_queries=n_queries * 3)
+
+    # Deduplicate against already-labeled
+    import json
+    labeled_ids = set()
+    if os.path.exists(labels_path):
+        with open(labels_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        labeled_ids.add(json.loads(line).get("query_id", ""))
+                    except Exception:
+                        pass
+    queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:n_queries]
+
+    if not queries:
+        print(f"No new queries to label. {existing} labels already exist.")
+        return
+
+    print(f"Labeling {len(queries)} queries ({existing} existing, need 300 for training)...")
+    labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
+    labeled = 0
+    for i, (qid, query_text) in enumerate(queries, 1):
+        try:
+            labeler.label(query_id=qid, query=query_text)
+            labeled += 1
+            if labeled % 5 == 0 or labeled == len(queries):
+                print(f"  Labeled {labeled}/{len(queries)}...", flush=True)
+        except Exception as e:
+            print(f"  Failed to label query: {e}")
+
+    print(f"\nDone. {labeled} new labels. Total: {existing + labeled}/300.")
+
+
+def cmd_train(args):
+    """Train the selector model from oracle labels."""
+    tenant_id = getattr(args, "tenant", "default")
+    force = getattr(args, "force", False)
+
+    from .tenant import TenantManager
+    from .memory_object import MemoryStore
+    from .atlas import AtlasManager
+    from .selector import check_training_gates
+    from .training.data_generator import DataGenerator
+    from .training.train_selector import SelectorTrainer
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    store = MemoryStore(db_path=tenant.memory_db_path)
+    atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+    atlas = atlas_mgr.get_atlas()
+
+    if atlas is None:
+        print(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
+        return
+
+    labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
+    if not os.path.exists(labels_path):
+        print("No oracle labels found. Run 'psa label' first.")
+        return
+
+    with open(labels_path) as f:
+        label_count = sum(1 for line in f if line.strip())
+
+    # Check gates
+    if not force:
+        gate_status = check_training_gates(
+            oracle_count=label_count,
+            held_out_count=0,
+            shortlist_recall_24=1.0,
+        )
+        if not gate_status.gates_met:
+            print(f"Training gates not met ({label_count}/300 labels):")
+            for reason in gate_status.blocking_reasons:
+                print(f"  - {reason}")
+            print("\nUse --force to train anyway.")
+            return
+
+    print(f"Training selector from {label_count} oracle labels...")
+
+    # Generate training data
+    training_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
+    anchor_cards = {c.anchor_id: c.to_stable_card_text() for c in atlas.cards}
+    gen = DataGenerator(oracle_labels_path=labels_path, anchor_cards=anchor_cards)
+    n_written = gen.generate(output_path=training_path, n_examples=max(1000, label_count * 20))
+    print(f"  Generated {n_written} training examples.")
+
+    # Train
+    output_dir = os.path.join(tenant.root_dir, "models", "selector_latest")
+    trainer = SelectorTrainer(output_dir=output_dir, atlas_version=atlas.version)
+    try:
+        sv = trainer.train(train_data_path=training_path)
+        print(f"  Selector trained → {sv.model_path}")
+
+        # Activate
+        from .lifecycle import LifecyclePipeline
+        lp = LifecyclePipeline()
+        lp._write_selector_mode(tenant.root_dir, "trained", sv.model_path)
+        print(f"  Activated trained selector.")
+    except Exception as e:
+        print(f"  Training failed: {e}")
+
+
 def cmd_lifecycle(args):
     """Handle 'psa lifecycle <subcommand>'."""
     action = getattr(args, "lifecycle_action", None)
@@ -861,6 +991,17 @@ def main():
     lifecycle_sub.add_parser("install", help="Install macOS launchd plist for nightly runs")
     lifecycle_sub.add_parser("uninstall", help="Remove macOS launchd plist")
 
+    # label
+    p_label = sub.add_parser("label", help="Run oracle labeling — score anchor sets for queries using Qwen")
+    p_label.add_argument("--tenant", default="default", help="Tenant identifier")
+    p_label.add_argument("--n-queries", type=int, default=50, help="Number of queries to label (default: 50)")
+    p_label.add_argument("--sessions-dir", default=None, help="Path to Claude Code sessions (default: ~/.claude/projects)")
+
+    # train
+    p_train = sub.add_parser("train", help="Train the selector model from oracle labels")
+    p_train.add_argument("--tenant", default="default", help="Tenant identifier")
+    p_train.add_argument("--force", action="store_true", help="Train even if gates are not met")
+
     # benchmark
     p_benchmark = sub.add_parser(
         "benchmark", help="Compare PSA pipeline vs raw ChromaDB search"
@@ -941,6 +1082,14 @@ def main():
             p_legacy.print_help()
             return
         cmd_legacy(args)
+        return
+
+    if args.command == "label":
+        cmd_label(args)
+        return
+
+    if args.command == "train":
+        cmd_train(args)
         return
 
     if args.command == "lifecycle":
