@@ -150,23 +150,24 @@ class LifecyclePipeline:
                 except Exception as e:
                     print(f"        Atlas rebuild failed: {e}")
                     logger.error("Atlas rebuild failed: %s", e)
-
-                # Label queries for selector training (accumulates nightly)
-                if summary["atlas_rebuilt"]:
-                    labeled = self._label_queries(tenant, store, atlas, sessions_dir,
-                                                  batch_size=label_batch_size)
-                    summary["queries_labeled"] = labeled
-
-                    # Retrain selector if training gates are met
-                    print("        Checking selector training gates...")
-                    retrained = self._retrain_selector(tenant, store, atlas, state)
-                    summary["selector_retrained"] = retrained
-                    if retrained:
-                        print(f"        Selector retrained (v{state.get('selector_version', '?')}).")
-                    else:
-                        print("        Training gates not met. Staying in cosine mode.")
             else:
                 print("        Atlas is healthy. No rebuild needed.")
+
+            # Label queries for selector training (runs every time, not just on rebuild)
+            print("  [6/6] Labeling queries for selector training...")
+            labeled = self._label_queries(tenant, store, atlas, sessions_dir,
+                                          batch_size=label_batch_size)
+            summary["queries_labeled"] = labeled
+
+            # Retrain selector if training gates are met
+            if labeled > 0 or summary["atlas_rebuilt"]:
+                print("        Checking selector training gates...")
+                retrained = self._retrain_selector(tenant, store, atlas, state)
+                summary["selector_retrained"] = retrained
+                if retrained:
+                    print(f"        Selector retrained (v{state.get('selector_version', '?')}).")
+                else:
+                    print("        Training gates not met. Staying in cosine mode.")
         else:
             print("  [3/5] No atlas found. Skipping pruning and health check.")
 
