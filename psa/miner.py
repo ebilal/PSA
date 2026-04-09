@@ -687,8 +687,9 @@ def mine_psa(
     try:
         import urllib.request
         from .consolidation import QWEN_ENDPOINT
-        req = urllib.request.Request(QWEN_ENDPOINT, method="HEAD")
-        urllib.request.urlopen(req, timeout=3)
+        # Use GET to /api/tags (Ollama's list-models endpoint) instead of HEAD
+        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
+        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
     except Exception:
         _logging.getLogger("psa.miner").warning(
             "Qwen endpoint not reachable. "
@@ -696,7 +697,17 @@ def mine_psa(
             "Start Ollama with 'ollama serve' and pull qwen2.5:7b.",
         )
         use_llm = False
-    pipeline = ConsolidationPipeline(store=store, tenant_id=tenant_id, use_llm=use_llm)
+
+    # Load atlas for hot assignment (assign new memories to nearest anchor)
+    atlas = None
+    try:
+        from .atlas import AtlasManager
+        atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+        atlas = atlas_mgr.get_atlas()
+    except Exception:
+        pass
+
+    pipeline = ConsolidationPipeline(store=store, tenant_id=tenant_id, use_llm=use_llm, atlas=atlas)
 
     project_path = Path(project_dir).expanduser().resolve()
     files = scan_project(str(project_path))

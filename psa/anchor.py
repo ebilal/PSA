@@ -43,22 +43,31 @@ class AnchorCard:
     centroid: List[float]              # L2-normalized centroid vector (dim=768)
     memory_count: int = 0              # number of memories assigned to this anchor
     is_novelty: bool = False           # True → novelty/overflow anchor
+    status: str = "active"             # "active" | "retired"
     metadata: dict = field(default_factory=dict)
 
-    def to_card_text(self) -> str:
+    def to_stable_card_text(self) -> str:
         """
-        Render a compact text representation for selector scoring.
+        Stable text used by selector (training + inference).
 
-        The cross-encoder selector encodes (query, card_text) pairs.
+        Does not include volatile prototype examples, so the selector
+        remains valid across atlas rebuilds that refresh examples.
         """
         parts = [f"Anchor: {self.name}", f"Meaning: {self.meaning}"]
         if self.include_terms:
             parts.append(f"Includes: {', '.join(self.include_terms[:8])}")
         if self.exclude_terms:
             parts.append(f"Excludes: {', '.join(self.exclude_terms[:4])}")
-        if self.prototype_examples:
-            parts.append(f"Examples: {'; '.join(self.prototype_examples[:3])}")
         return "\n".join(parts)
+
+    def to_card_text(self) -> str:
+        """
+        Full card with volatile examples. Used for display and BM25 retrieval.
+        """
+        text = self.to_stable_card_text()
+        if self.prototype_examples:
+            text += f"\nExamples: {'; '.join(self.prototype_examples[:3])}"
+        return text
 
     def to_dict(self) -> dict:
         return asdict(self)

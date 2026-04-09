@@ -386,8 +386,9 @@ def _mine_convos_psa(convo_dir: str, files: list):
     try:
         import urllib.request
         from .consolidation import QWEN_ENDPOINT
-        req = urllib.request.Request(QWEN_ENDPOINT, method="HEAD")
-        urllib.request.urlopen(req, timeout=3)
+        # Use GET to /api/tags (Ollama's list-models endpoint) instead of HEAD
+        base_url = QWEN_ENDPOINT.rsplit("/v1", 1)[0]
+        urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
     except Exception:
         import logging
         logging.getLogger("psa.convo_miner").warning(
@@ -395,7 +396,17 @@ def _mine_convos_psa(convo_dir: str, files: list):
             "Start Ollama with 'ollama serve' and pull qwen2.5:7b."
         )
         use_llm = False
-    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=use_llm)
+
+    # Load atlas for hot assignment
+    atlas = None
+    try:
+        from .atlas import AtlasManager
+        atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=cfg.tenant_id)
+        atlas = atlas_mgr.get_atlas()
+    except Exception:
+        pass
+
+    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=use_llm, atlas=atlas)
 
     print(f"  [PSA] Running conversation consolidation (mode: {cfg.psa_mode})...")
     total = 0

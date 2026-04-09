@@ -40,10 +40,10 @@ V1_TOTAL_ANCHORS = V1_LEARNED_ANCHORS + V1_NOVELTY_ANCHORS  # 256
 N_SEEDS = 3               # number of k-means seeds for stability check
 MAX_ITERATIONS = 200      # maximum k-means iterations per seed
 CONVERGENCE_TOL = 1e-4    # centroid shift threshold for convergence
-STABILITY_THRESHOLD = 0.15  # max allowed fraction of reassigned memories across seeds
+STABILITY_THRESHOLD = 0.40  # max allowed instability across seeds (loosened for small corpora)
 NOVELTY_DISTANCE_THRESHOLD = 0.3  # cosine distance to nearest learned anchor → novelty
 
-MIN_MEMORIES_FOR_ATLAS = 500  # hard minimum for a 256-anchor atlas
+MIN_MEMORIES_FOR_ATLAS = 200  # minimum for a 256-anchor atlas (reduced for faster bootstrap)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
@@ -315,6 +315,64 @@ def _generate_stub_card(
     )
 
 
+# ── Anchor matching (identity persistence across rebuilds) ───────────────────
+
+
+def _match_anchors(
+    old_cards: List[AnchorCard],
+    new_centroids: np.ndarray,
+    threshold: float = 0.5,
+) -> List[Optional[AnchorCard]]:
+    """
+    Match new clusters to existing anchors by centroid cosine similarity.
+
+    Parameters
+    ----------
+    old_cards:
+        AnchorCards from the previous atlas (active only).
+    new_centroids:
+        (k, dim) L2-normalized centroids from new k-means run.
+    threshold:
+        Minimum cosine similarity to consider a match.
+
+    Returns
+    -------
+    List of length k: matched[i] is the old AnchorCard matched to new cluster i,
+    or None if no match (fresh cluster).
+    """
+    if not old_cards:
+        return [None] * len(new_centroids)
+
+    old_centroids = np.array([c.centroid for c in old_cards], dtype=np.float32)
+    norms = np.linalg.norm(old_centroids, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    old_centroids = old_centroids / norms
+
+    # Cosine similarity matrix: (new_k, old_k)
+    sim_matrix = new_centroids @ old_centroids.T
+
+    k_new = len(new_centroids)
+    matched: List[Optional[AnchorCard]] = [None] * k_new
+    used_old: set = set()
+
+    # Greedy assignment: best match per new cluster
+    flat_indices = np.argsort(sim_matrix.ravel())[::-1]
+    for flat_idx in flat_indices:
+        new_idx = int(flat_idx // len(old_cards))
+        old_idx = int(flat_idx % len(old_cards))
+        sim = float(sim_matrix[new_idx, old_idx])
+
+        if sim < threshold:
+            break
+        if matched[new_idx] is not None or old_idx in used_old:
+            continue
+
+        matched[new_idx] = old_cards[old_idx]
+        used_old.add(old_idx)
+
+    return matched
+
+
 # ── AtlasBuilder ──────────────────────────────────────────────────────────────
 
 
@@ -334,7 +392,12 @@ class AtlasBuilder:
         self.store = store
         self.tenant_id = tenant_id
 
-    def build_atlas(self, version: int = 1, output_dir: Optional[str] = None) -> Atlas:
+    def build_atlas(
+        self,
+        version: int = 1,
+        output_dir: Optional[str] = None,
+        previous_atlas: Optional[Atlas] = None,
+    ) -> Atlas:
         """
         Build a V1 atlas from the tenant's embedded memories.
 
@@ -366,7 +429,8 @@ class AtlasBuilder:
         embeddings = _l2_normalize_rows(embeddings)
 
         # Step 2: Run spherical k-means with N_SEEDS seeds, check stability
-        k = V1_LEARNED_ANCHORS
+        # Scale k to corpus size: aim for ~5 memories per cluster minimum
+        k = min(V1_LEARNED_ANCHORS, max(8, len(memories) // 5))
         all_assignments: List[np.ndarray] = []
         all_centroids: List[np.ndarray] = []
 
@@ -391,21 +455,53 @@ class AtlasBuilder:
         centroids = all_centroids[0]
         assignments = all_assignments[0]
 
-        # Step 3: Build AnchorCards for learned clusters
+        # Step 3: Build AnchorCards for learned clusters (with anchor matching)
         cards: List[AnchorCard] = []
         cluster_memories: dict = {}  # anchor_id → list of MemoryObjects
         for idx, (mem, cluster_id) in enumerate(zip(memories, assignments)):
             cluster_memories.setdefault(int(cluster_id), []).append(mem)
 
+        # Match new clusters to old anchors if a previous atlas exists
+        old_active_cards = []
+        if previous_atlas is not None:
+            old_active_cards = [c for c in previous_atlas.cards if getattr(c, "status", "active") == "active"]
+        matched = _match_anchors(old_active_cards, centroids) if old_active_cards else [None] * k
+
+        # Track next fresh anchor_id (above all existing IDs)
+        max_existing_id = max((c.anchor_id for c in old_active_cards), default=-1) if old_active_cards else -1
+
+        fresh_id_counter = max(k, max_existing_id + 1)
+
         for cluster_id in range(k):
             cluster_mems = cluster_memories.get(cluster_id, [])
             centroid_list = centroids[cluster_id].tolist()
-            card = _generate_stub_card(
-                anchor_id=cluster_id,
-                centroid=centroid_list,
-                sample_memories=cluster_mems,
-            )
-            card.memory_count = len(cluster_mems)
+            old_card = matched[cluster_id]
+
+            if old_card is not None:
+                # Matched: preserve identity, update centroid and examples
+                card = AnchorCard(
+                    anchor_id=old_card.anchor_id,
+                    name=old_card.name,
+                    meaning=old_card.meaning,
+                    memory_types=list({m.memory_type.value for m in cluster_mems[:10]}) if cluster_mems else old_card.memory_types,
+                    include_terms=old_card.include_terms,
+                    exclude_terms=old_card.exclude_terms,
+                    prototype_examples=[m.title for m in cluster_mems[:5]],
+                    near_but_different=old_card.near_but_different,
+                    centroid=centroid_list,
+                    memory_count=len(cluster_mems),
+                    is_novelty=False,
+                    status="active",
+                )
+            else:
+                # Fresh cluster: new stub card
+                card = _generate_stub_card(
+                    anchor_id=fresh_id_counter,
+                    centroid=centroid_list,
+                    sample_memories=cluster_mems,
+                )
+                card.memory_count = len(cluster_mems)
+                fresh_id_counter += 1
             cards.append(card)
 
         # Step 4: Reserve novelty anchors (high-distance regions)
@@ -428,9 +524,10 @@ class AtlasBuilder:
             )
             cards.append(card)
 
-        # Step 5: Build AnchorIndex (dim inferred from centroid data in build())
+        # Step 5: Build AnchorIndex from active anchors only
+        active_cards = [c for c in cards if getattr(c, "status", "active") == "active"]
         anchor_index = AnchorIndex(dim=embeddings.shape[1])
-        anchor_index.build(cards)
+        anchor_index.build(active_cards)
 
         # Step 6: Compute stats
         cluster_sizes = [len(cluster_memories.get(i, [])) for i in range(k)]
@@ -541,12 +638,20 @@ class AtlasManager:
             return None
 
     def rebuild(self, store: MemoryStore) -> Atlas:
-        """Build a new atlas version (latest + 1)."""
+        """Build a new atlas version (latest + 1), with anchor matching."""
         current = self.latest_version() or 0
         new_version = current + 1
         output_dir = self._atlas_dir(new_version)
+
+        # Load the previous atlas for anchor identity matching
+        previous_atlas = self.get_atlas(version=current) if current > 0 else None
+
         builder = AtlasBuilder(store=store, tenant_id=self.tenant_id)
-        return builder.build_atlas(version=new_version, output_dir=output_dir)
+        return builder.build_atlas(
+            version=new_version,
+            output_dir=output_dir,
+            previous_atlas=previous_atlas,
+        )
 
     def get_or_build(self, store: MemoryStore) -> Atlas:
         """Return the latest atlas or build one if none exists."""

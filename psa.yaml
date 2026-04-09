@@ -1,0 +1,10 @@
+wing: psa
+rooms:
+  - name: core
+    description: "Core PSA pipeline modules"
+  - name: training
+    description: "Selector training pipeline"
+  - name: tests
+    description: "Test files"
+  - name: general
+    description: "All other project files"

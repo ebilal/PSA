@@ -119,7 +119,7 @@ def _trained_select(
     if not candidates:
         return []
 
-    pairs = [(query, c.card.to_card_text()) for c in candidates]
+    pairs = [(query, c.card.to_stable_card_text()) for c in candidates]
     try:
         scores = cross_encoder.predict(pairs)
     except Exception as e:

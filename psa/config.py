@@ -20,6 +20,11 @@ DEFAULT_SELECTOR_THRESHOLD = 0.3  # minimum selector score to include an anchor
 DEFAULT_TENANT_ID = "default"
 DEFAULT_PSA_MODE = "primary"       # "off" | "side-by-side" | "primary"
 
+# Lifecycle defaults
+DEFAULT_MAX_MEMORIES = 50_000
+DEFAULT_ANCHOR_MEMORY_BUDGET = 100
+DEFAULT_NIGHTLY_HOUR = 3
+
 DEFAULT_TOPIC_WINGS = [
     "emotions",
     "consciousness",
@@ -193,6 +198,23 @@ class MempalaceConfig:
             os.environ.get("PSA_MODE")
             or self._file_config.get("psa_mode", DEFAULT_PSA_MODE)
         )
+
+    # ── Lifecycle settings ─────────────────────────────────────────────────
+
+    @property
+    def max_memories(self):
+        """Global memory cap for forgetting system."""
+        return int(self._file_config.get("max_memories", DEFAULT_MAX_MEMORIES))
+
+    @property
+    def anchor_memory_budget(self):
+        """Per-anchor memory budget for pruning."""
+        return int(self._file_config.get("anchor_memory_budget", DEFAULT_ANCHOR_MEMORY_BUDGET))
+
+    @property
+    def nightly_hour(self):
+        """Hour (0-23) for scheduled lifecycle runs."""
+        return int(self._file_config.get("nightly_hour", DEFAULT_NIGHTLY_HOUR))
 
     def init(self):
         """Create config directory and write default config.json if it doesn't exist."""

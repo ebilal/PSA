@@ -393,6 +393,112 @@ def _cmd_atlas_health(args):
         sys.exit(1)
 
 
+def cmd_lifecycle(args):
+    """Handle 'psa lifecycle <subcommand>'."""
+    action = getattr(args, "lifecycle_action", None)
+    if not action:
+        print("Usage: psa lifecycle {run,status,install,uninstall}")
+        return
+
+    tenant_id = getattr(args, "tenant", "default")
+
+    if action == "run":
+        from .lifecycle import LifecyclePipeline
+        lp = LifecyclePipeline()
+        force = getattr(args, "force_rebuild", False)
+        summary = lp.run(tenant_id=tenant_id, force_rebuild=force)
+        print(f"\nLifecycle run complete (tenant: {tenant_id}):")
+        print(f"  New sessions:       {summary['new_sessions']}")
+        print(f"  Memories mined:     {summary['memories_mined']}")
+        print(f"  Memories pruned:    {summary['memories_pruned']}")
+        print(f"  Hard deleted:       {summary['memories_hard_deleted']}")
+        print(f"  Atlas rebuilt:      {summary['atlas_rebuilt']}")
+        print(f"  Selector retrained: {summary['selector_retrained']}")
+
+    elif action == "status":
+        from .lifecycle import LifecyclePipeline
+        lp = LifecyclePipeline()
+        state = lp.status(tenant_id=tenant_id)
+        print(f"\nLifecycle state (tenant: {tenant_id}):")
+        if not state:
+            print("  (no lifecycle runs yet)")
+        else:
+            for k, v in sorted(state.items()):
+                print(f"  {k}: {v}")
+
+    elif action == "install":
+        _lifecycle_install(tenant_id)
+
+    elif action == "uninstall":
+        _lifecycle_uninstall()
+
+
+def _lifecycle_install(tenant_id: str):
+    """Install macOS launchd plist for nightly lifecycle runs."""
+    import subprocess
+    import sys
+    cfg = MempalaceConfig()
+    hour = cfg.nightly_hour
+    plist_name = "com.psa.lifecycle"
+    plist_dir = os.path.expanduser("~/Library/LaunchAgents")
+    plist_path = os.path.join(plist_dir, f"{plist_name}.plist")
+
+    psa_bin = os.path.join(os.path.dirname(sys.executable), "psa")
+    if not os.path.exists(psa_bin):
+        psa_bin = "psa"  # hope it's on PATH
+
+    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{plist_name}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{psa_bin}</string>
+        <string>lifecycle</string>
+        <string>run</string>
+        <string>--tenant</string>
+        <string>{tenant_id}</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>{hour}</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{os.path.expanduser("~/.psa/lifecycle.log")}</string>
+    <key>StandardErrorPath</key>
+    <string>{os.path.expanduser("~/.psa/lifecycle.log")}</string>
+</dict>
+</plist>
+"""
+    os.makedirs(plist_dir, exist_ok=True)
+    with open(plist_path, "w") as f:
+        f.write(plist_content)
+
+    subprocess.run(["launchctl", "load", plist_path], check=False)
+    print(f"Installed launchd plist at {plist_path}")
+    print(f"Lifecycle will run daily at {hour}:00 for tenant '{tenant_id}'.")
+    print(f"Logs: ~/.psa/lifecycle.log")
+
+
+def _lifecycle_uninstall():
+    """Remove macOS launchd plist."""
+    import subprocess
+    plist_name = "com.psa.lifecycle"
+    plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}.plist")
+    if os.path.exists(plist_path):
+        subprocess.run(["launchctl", "unload", plist_path], check=False)
+        os.remove(plist_path)
+        print(f"Uninstalled launchd plist: {plist_path}")
+    else:
+        print("No launchd plist found. Nothing to uninstall.")
+
+
 def cmd_benchmark(args):
     """Compare PSA pipeline vs raw ChromaDB search."""
     print("PSA benchmark mode — comparing PSA pipeline vs raw ChromaDB search.")
@@ -750,6 +856,18 @@ def main():
     atlas_sub.add_parser("health", help="Show health report (novelty rate, utilization skew)")
     atlas_sub.add_parser("rebuild", help="Force rebuild the atlas (same as build)")
 
+    # lifecycle
+    p_lifecycle = sub.add_parser("lifecycle", help="PSA lifecycle management (run, status, install, uninstall)")
+    p_lifecycle.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
+    lifecycle_sub = p_lifecycle.add_subparsers(dest="lifecycle_action")
+    p_lc_run = lifecycle_sub.add_parser("run", help="Run lifecycle pipeline manually")
+    p_lc_run.add_argument("--force-rebuild", action="store_true", help="Force atlas rebuild")
+    lifecycle_sub.add_parser("status", help="Show lifecycle state")
+    lifecycle_sub.add_parser("install", help="Install macOS launchd plist for nightly runs")
+    lifecycle_sub.add_parser("uninstall", help="Remove macOS launchd plist")
+
     # benchmark
     p_benchmark = sub.add_parser(
         "benchmark", help="Compare PSA pipeline vs raw ChromaDB search"
@@ -830,6 +948,13 @@ def main():
             p_legacy.print_help()
             return
         cmd_legacy(args)
+        return
+
+    if args.command == "lifecycle":
+        if not getattr(args, "lifecycle_action", None):
+            p_lifecycle.print_help()
+            return
+        cmd_lifecycle(args)
         return
 
     if args.command == "hook":

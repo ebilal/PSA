@@ -261,7 +261,7 @@ _REPAIR_SUFFIX = (
 )
 
 
-def _call_qwen(messages: List[dict], timeout: int = 60) -> str:
+def _call_qwen(messages: List[dict], timeout: int = 120) -> str:
     """Call the Qwen2.5-7B-Instruct endpoint. Returns the raw response text."""
     try:
         import urllib.request
@@ -465,11 +465,13 @@ class ConsolidationPipeline:
         tenant_id: str = "default",
         embedding_model=None,
         use_llm: bool = True,
+        atlas=None,
     ):
         self.store = store
         self.tenant_id = tenant_id
         self._embedding_model = embedding_model
         self.use_llm = use_llm
+        self.atlas = atlas
 
     def _get_embedding_model(self):
         if self._embedding_model is None:
@@ -568,6 +570,21 @@ class ConsolidationPipeline:
                 )
 
             self.store.add(mo)
+
+            # Hot assignment: assign to nearest anchor immediately
+            if self.atlas is not None and mo.embedding is not None and not mo.is_duplicate:
+                try:
+                    primary_id, secondary_id, confidence = self.atlas.assign_memory(mo)
+                    if primary_id >= 0:
+                        self.store.update_anchor_assignment(
+                            memory_object_id=mo.memory_object_id,
+                            primary_anchor_id=primary_id,
+                            secondary_anchor_ids=[secondary_id] if secondary_id is not None else [],
+                            confidence=confidence,
+                        )
+                except Exception as e:
+                    logger.debug("Hot assignment failed for %s: %s", mo.memory_object_id, e)
+
             if not mo.is_duplicate:
                 persisted.append(mo)
 

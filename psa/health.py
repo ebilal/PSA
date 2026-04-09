@@ -64,6 +64,10 @@ class HealthReport:
     embedding_drift: Optional[float]   # mean cosine distance from centroids (None if not computed)
     should_rebuild: bool
     rebuild_reasons: List[str]
+    # Lifecycle metrics
+    never_packed_count: int = 0      # memories with pack_count == 0
+    archived_count: int = 0          # memories with is_archived = 1
+    capacity_pct: float = 0.0        # total / MAX_MEMORIES
 
     def summary(self) -> str:
         lines = [
@@ -77,6 +81,12 @@ class HealthReport:
             lines.append("  memory types: " + ", ".join(
                 f"{t}={n}" for t, n in sorted(self.memory_type_distribution.items())
             ))
+        if self.never_packed_count > 0:
+            lines.append(f"  never_packed: {self.never_packed_count}")
+        if self.archived_count > 0:
+            lines.append(f"  archived: {self.archived_count}")
+        if self.capacity_pct > 0:
+            lines.append(f"  capacity: {self.capacity_pct:.1%}")
         if self.should_rebuild:
             lines.append(f"  ⚠ REBUILD RECOMMENDED: {'; '.join(self.rebuild_reasons)}")
         else:
@@ -98,6 +108,9 @@ class HealthReport:
             ),
             "should_rebuild": self.should_rebuild,
             "rebuild_reasons": self.rebuild_reasons,
+            "never_packed_count": self.never_packed_count,
+            "archived_count": self.archived_count,
+            "capacity_pct": round(self.capacity_pct, 4),
         }
 
 
@@ -181,6 +194,13 @@ class AtlasHealthMonitor:
                 f"utilization_skew {utilization_skew:.2f}x > {UTILIZATION_SKEW_THRESHOLD:.0f}x"
             )
 
+        # Lifecycle metrics
+        forgetting = store.forgetting_stats(tenant_id)
+        never_packed_count = forgetting.get("never_packed", 0)
+        archived_count = forgetting.get("archived", 0)
+        from .forgetting import MAX_MEMORIES
+        capacity_pct = total_memories / max(MAX_MEMORIES, 1)
+
         should_rebuild = len(rebuild_reasons) > 0
         if should_rebuild:
             logger.warning(
@@ -211,6 +231,9 @@ class AtlasHealthMonitor:
             embedding_drift=None,  # V1: not computed (requires recent memory embeddings)
             should_rebuild=should_rebuild,
             rebuild_reasons=rebuild_reasons,
+            never_packed_count=never_packed_count,
+            archived_count=archived_count,
+            capacity_pct=capacity_pct,
         )
 
 

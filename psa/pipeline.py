@@ -15,6 +15,7 @@ Usage::
     print(result.text)
 """
 
+import json
 import logging
 import os
 import time
@@ -213,6 +214,13 @@ class PSAPipeline:
         )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
+        # Record usage telemetry: these memories made it into packed context
+        if packed.memory_ids:
+            try:
+                self.store.record_packed(packed.memory_ids)
+            except Exception:
+                logger.debug("Failed to record packed telemetry", exc_info=True)
+
         logger.debug(
             "Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms
         )
@@ -254,6 +262,13 @@ class PSAPipeline:
                     continue
                 seen_ids.add(mo.memory_object_id)
                 memories.append(mo)
+
+        # Record usage telemetry: these memories were fetched for selected anchors
+        if memories:
+            try:
+                self.store.record_selected([m.memory_object_id for m in memories])
+            except Exception:
+                logger.debug("Failed to record selected telemetry", exc_info=True)
 
         # Re-sort globally by quality_score desc
         memories.sort(key=lambda m: m.quality_score, reverse=True)
@@ -327,6 +342,17 @@ class PSAPipeline:
                 f"No atlas found for tenant '{tenant_id}'. "
                 "Run 'psa atlas build' to build one."
             )
+
+        # Read lifecycle state for selector mode override
+        lifecycle_path = os.path.join(tenant.root_dir, "lifecycle_state.json")
+        if os.path.exists(lifecycle_path):
+            try:
+                with open(lifecycle_path) as _lf:
+                    lstate = json.load(_lf)
+                selector_mode = lstate.get("selector_mode", selector_mode)
+                selector_model_path = lstate.get("selector_model_path", selector_model_path)
+            except (json.JSONDecodeError, OSError):
+                pass
 
         selector = AnchorSelector(
             mode=selector_mode,

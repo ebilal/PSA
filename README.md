@@ -372,6 +372,76 @@ result = pipeline.query("what auth approach did we use?")
 
 ---
 
+## Lifecycle Management
+
+PSA includes a lifecycle system that handles continuous learning, memory forgetting, and selector maintenance automatically.
+
+### How It Works
+
+New memories are **immediately searchable** — when you mine new sessions, each memory is hot-assigned to the nearest existing anchor centroid without waiting for an atlas rebuild.
+
+PSA tracks usage per memory:
+- **select_count** — how many times a memory was fetched for a selected anchor
+- **pack_count** — how many times it made it into the final packed context
+
+Memories that are never used gradually become candidates for archival and eventual deletion.
+
+### Nightly Pipeline
+
+The lifecycle pipeline runs in two speeds:
+
+**Fast path (every night with new data):** mine new sessions, hot-assign to existing anchors, prune overloaded anchors, enforce global memory cap. Takes minutes.
+
+**Slow path (only when health triggers):** rebuild atlas (with anchor identity matching), retrain selector. Takes hours. During rebuild, the system falls back to cosine selector automatically.
+
+```bash
+# Run manually
+uv run psa lifecycle run
+
+# Check state
+uv run psa lifecycle status
+
+# Install nightly cron (macOS launchd, runs at 3 AM)
+uv run psa lifecycle install
+
+# Remove cron
+uv run psa lifecycle uninstall
+```
+
+### Forgetting
+
+Memories are scored for disposability based on four factors:
+- **Idle time** — how long since last packed into context
+- **Anchor crowding** — whether the anchor exceeds its budget (default 100 memories)
+- **Usage** — frequently packed memories are protected
+- **Quality** — high-quality memories are protected
+
+When an anchor exceeds its budget, lowest-scoring memories are archived (soft-deleted). Archived memories are hard-deleted after 90 days. A global cap of 50,000 active memories prevents unbounded growth.
+
+### Anchor Persistence
+
+Anchors are durable semantic slots, not disposable k-means buckets. When the atlas rebuilds:
+- New clusters are matched to existing anchors by centroid similarity
+- Matched anchors keep their ID and stable card text (name, meaning, terms)
+- Only genuinely novel clusters get new IDs
+- Old anchors with no match are retired
+
+The selector trains and infers on **stable card text only** (name + meaning + terms, no volatile examples). This preserves selector validity across atlas rebuilds that refresh examples.
+
+### Configuration
+
+In `~/.psa/config.json`:
+
+```json
+{
+  "max_memories": 50000,
+  "anchor_memory_budget": 100,
+  "nightly_hour": 3
+}
+```
+
+---
+
 ## Auto-Save Hooks (Claude Code)
 
 Two hooks that automatically save memories during work sessions:

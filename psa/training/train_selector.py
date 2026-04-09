@@ -183,8 +183,7 @@ class SelectorTrainer:
         SelectorVersion metadata (model saved to output_dir)
         """
         from sentence_transformers.cross_encoder import CrossEncoder
-        from sentence_transformers import InputExample
-        from torch.utils.data import DataLoader
+        from torch.utils.data import DataLoader, Dataset as TorchDataset
 
         examples = _load_training_data(train_data_path)
         by_type = _split_by_example_type(examples)
@@ -213,32 +212,45 @@ class SelectorTrainer:
         model_out = os.path.join(self.output_dir, f"selector_v{version}")
         os.makedirs(model_out, exist_ok=True)
 
-        def _to_input_examples(raw: List[dict]) -> List[InputExample]:
-            return [
-                InputExample(texts=[ex["query"], ex["anchor_card"]], label=float(ex["label"]))
-                for ex in raw
-            ]
+        class _PairExample:
+            """Minimal object with .texts and .label for CrossEncoder.fit()."""
+            __slots__ = ('texts', 'label')
+            def __init__(self, texts, label):
+                self.texts = texts
+                self.label = label
+
+        class PairDataset(TorchDataset):
+            """Dataset returning _PairExample objects for CrossEncoder.fit()."""
+            def __init__(self, examples):
+                self._data = [
+                    _PairExample([ex["query"], ex["anchor_card"]], float(ex["label"]))
+                    for ex in examples
+                ]
+            def __len__(self):
+                return len(self._data)
+            def __getitem__(self, idx):
+                return self._data[idx]
+
+        positives = by_type.get("positive", [])
 
         # Phase 1: warm start (oracle positives + easy negatives)
-        phase1 = (
-            by_type.get("positive", [])
-            + by_type.get("easy_negative", [])
-        )
+        phase1 = positives + by_type.get("easy_negative", [])
         if phase1:
             logger.info("Phase 1: warm start (%d examples)", len(phase1))
-            self._train_phase(model, _to_input_examples(phase1), epochs=1)
+            self._train_phase(model, PairDataset(phase1), epochs=1)
 
-        # Phase 2: hard negatives
-        phase2 = by_type.get("hard_negative", [])
-        if phase2:
+        # Phase 2: hard negatives + some positives (need both classes for loss)
+        hard_negs = by_type.get("hard_negative", [])
+        if hard_negs:
+            phase2 = hard_negs + positives[:len(hard_negs)]
             logger.info("Phase 2: hard-negative curriculum (%d examples)", len(phase2))
-            self._train_phase(model, _to_input_examples(phase2), epochs=1)
+            self._train_phase(model, PairDataset(phase2), epochs=1)
 
-        # Phase 3: adversarial hardening
+        # Phase 3: adversarial hardening (already contains both classes)
         phase3 = by_type.get("adversarial", [])
         if phase3:
             logger.info("Phase 3: adversarial hardening (%d examples)", len(phase3))
-            self._train_phase(model, _to_input_examples(phase3), epochs=1)
+            self._train_phase(model, PairDataset(phase3), epochs=1)
 
         # Save model
         model.save(model_out)

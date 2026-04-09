@@ -77,6 +77,14 @@ class MemoryObject:
     # Deduplication
     is_duplicate: bool = False
     duplicate_of: Optional[str] = None
+    # Usage telemetry (populated by query pipeline)
+    select_count: int = 0
+    pack_count: int = 0
+    last_selected: Optional[str] = None
+    last_packed: Optional[str] = None
+    # Lifecycle (populated by forgetting system)
+    is_archived: bool = False
+    archived_at: Optional[str] = None
 
     @classmethod
     def create(
@@ -192,7 +200,13 @@ class MemoryStore:
         validity_interval     TEXT,
         acl_scope             TEXT,
         is_duplicate          INTEGER NOT NULL DEFAULT 0,
-        duplicate_of          TEXT
+        duplicate_of          TEXT,
+        select_count          INTEGER NOT NULL DEFAULT 0,
+        pack_count            INTEGER NOT NULL DEFAULT 0,
+        last_selected         TEXT,
+        last_packed           TEXT,
+        is_archived           INTEGER NOT NULL DEFAULT 0,
+        archived_at           TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_mo_tenant     ON memory_objects(tenant_id);
@@ -219,6 +233,23 @@ class MemoryStore:
     def _init_db(self):
         with self._connect() as conn:
             conn.executescript(self.SCHEMA)
+            # Migrate existing databases: add new columns if missing
+            for col, typedef in [
+                ("select_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("pack_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_selected", "TEXT"),
+                ("last_packed", "TEXT"),
+                ("is_archived", "INTEGER NOT NULL DEFAULT 0"),
+                ("archived_at", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE memory_objects ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+            # Create index on is_archived after migration ensures column exists
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mo_archived ON memory_objects(is_archived)"
+            )
 
     # ── Raw source operations (immutable) ────────────────────────────────────
 
@@ -291,8 +322,11 @@ class MemoryStore:
                    embedding_blob, embedding_dim, embedding_ref,
                    primary_anchor_id, secondary_anchor_ids_json, assignment_confidence,
                    task_type, tool_names_json, success_label, quality_score,
-                   validity_interval, acl_scope, is_duplicate, duplicate_of)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   validity_interval, acl_scope, is_duplicate, duplicate_of,
+                   select_count, pack_count, last_selected, last_packed,
+                   is_archived, archived_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mo.memory_object_id,
@@ -321,6 +355,12 @@ class MemoryStore:
                     mo.acl_scope,
                     1 if mo.is_duplicate else 0,
                     mo.duplicate_of,
+                    mo.select_count,
+                    mo.pack_count,
+                    mo.last_selected,
+                    mo.last_packed,
+                    1 if mo.is_archived else 0,
+                    mo.archived_at,
                 ),
             )
         return mo.memory_object_id
@@ -333,8 +373,11 @@ class MemoryStore:
            embedding_blob, embedding_dim, embedding_ref,
            primary_anchor_id, secondary_anchor_ids_json, assignment_confidence,
            task_type, tool_names_json, success_label, quality_score,
-           validity_interval, acl_scope, is_duplicate, duplicate_of)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           validity_interval, acl_scope, is_duplicate, duplicate_of,
+           select_count, pack_count, last_selected, last_packed,
+           is_archived, archived_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?)
     """
 
     def _add_params(self, mo: MemoryObject) -> tuple:
@@ -352,6 +395,8 @@ class MemoryStore:
             (1 if mo.success_label else 0) if mo.success_label is not None else None,
             mo.quality_score, mo.validity_interval, mo.acl_scope,
             1 if mo.is_duplicate else 0, mo.duplicate_of,
+            mo.select_count, mo.pack_count, mo.last_selected, mo.last_packed,
+            1 if mo.is_archived else 0, mo.archived_at,
         )
 
     def batch_add(self, memories: List[MemoryObject]) -> List[str]:
@@ -407,6 +452,12 @@ class MemoryStore:
             acl_scope=row["acl_scope"],
             is_duplicate=bool(row["is_duplicate"]),
             duplicate_of=row["duplicate_of"],
+            select_count=row["select_count"] or 0,
+            pack_count=row["pack_count"] or 0,
+            last_selected=row["last_selected"],
+            last_packed=row["last_packed"],
+            is_archived=bool(row["is_archived"]),
+            archived_at=row["archived_at"],
         )
 
     def delete(self, memory_object_id: str) -> bool:
@@ -420,7 +471,7 @@ class MemoryStore:
     def count(self, tenant_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM memory_objects WHERE tenant_id = ?",
+                "SELECT COUNT(*) FROM memory_objects WHERE tenant_id = ? AND is_archived = 0",
                 (tenant_id,),
             ).fetchone()
         return row[0]
@@ -432,7 +483,8 @@ class MemoryStore:
                 """
                 SELECT primary_anchor_id, COUNT(*) as cnt
                 FROM memory_objects
-                WHERE tenant_id = ? AND is_duplicate = 0 AND primary_anchor_id IS NOT NULL
+                WHERE tenant_id = ? AND is_duplicate = 0 AND is_archived = 0
+                      AND primary_anchor_id IS NOT NULL
                 GROUP BY primary_anchor_id
                 """,
                 (tenant_id,),
@@ -446,7 +498,7 @@ class MemoryStore:
                 """
                 SELECT memory_type, COUNT(*) as cnt
                 FROM memory_objects
-                WHERE tenant_id = ? AND is_duplicate = 0
+                WHERE tenant_id = ? AND is_duplicate = 0 AND is_archived = 0
                 GROUP BY memory_type
                 """,
                 (tenant_id,),
@@ -460,7 +512,7 @@ class MemoryStore:
         limit: int = 100,
         exclude_duplicates: bool = True,
     ) -> List[MemoryObject]:
-        where = "tenant_id = ? AND memory_type = ?"
+        where = "tenant_id = ? AND memory_type = ? AND is_archived = 0"
         params: list = [tenant_id, memory_type.value]
         if exclude_duplicates:
             where += " AND is_duplicate = 0"
@@ -481,7 +533,7 @@ class MemoryStore:
             rows = conn.execute(
                 """
                 SELECT * FROM memory_objects
-                WHERE tenant_id = ? AND primary_anchor_id = ? AND is_duplicate = 0
+                WHERE tenant_id = ? AND primary_anchor_id = ? AND is_duplicate = 0 AND is_archived = 0
                 ORDER BY quality_score DESC, created_at DESC
                 LIMIT ?
                 """,
@@ -495,7 +547,7 @@ class MemoryStore:
             rows = conn.execute(
                 """
                 SELECT * FROM memory_objects
-                WHERE tenant_id = ? AND embedding_blob IS NOT NULL AND is_duplicate = 0
+                WHERE tenant_id = ? AND embedding_blob IS NOT NULL AND is_duplicate = 0 AND is_archived = 0
                 ORDER BY created_at ASC
                 """,
                 (tenant_id,),
@@ -581,3 +633,109 @@ class MemoryStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+    # ── Usage telemetry ─────────────────────────────────────────────────────
+
+    def record_selected(self, memory_object_ids: List[str]):
+        """Increment select_count and update last_selected for fetched memories."""
+        if not memory_object_ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        placeholders = ",".join("?" for _ in memory_object_ids)
+        conn.execute(
+            f"""
+            UPDATE memory_objects
+            SET select_count = select_count + 1, last_selected = ?
+            WHERE memory_object_id IN ({placeholders})
+            """,
+            [now] + list(memory_object_ids),
+        )
+        conn.commit()
+
+    def record_packed(self, memory_object_ids: List[str]):
+        """Increment pack_count and update last_packed for memories in context."""
+        if not memory_object_ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        placeholders = ",".join("?" for _ in memory_object_ids)
+        conn.execute(
+            f"""
+            UPDATE memory_objects
+            SET pack_count = pack_count + 1, last_packed = ?
+            WHERE memory_object_id IN ({placeholders})
+            """,
+            [now] + list(memory_object_ids),
+        )
+        conn.commit()
+
+    # ── Lifecycle / forgetting ──────────────────────────────────────────────
+
+    def query_by_anchor_for_pruning(
+        self, tenant_id: str, anchor_id: int
+    ) -> List[MemoryObject]:
+        """Return ALL non-archived memories for an anchor, ordered worst-first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM memory_objects
+                WHERE tenant_id = ? AND primary_anchor_id = ?
+                      AND is_duplicate = 0 AND is_archived = 0
+                ORDER BY pack_count ASC, select_count ASC, quality_score ASC
+                """,
+                (tenant_id, anchor_id),
+            ).fetchall()
+        return [self._row_to_memory_object(r) for r in rows]
+
+    def archive_memories(self, memory_object_ids: List[str]):
+        """Archive memories (soft-delete for forgetting)."""
+        if not memory_object_ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        placeholders = ",".join("?" for _ in memory_object_ids)
+        conn.execute(
+            f"""
+            UPDATE memory_objects
+            SET is_archived = 1, archived_at = ?
+            WHERE memory_object_id IN ({placeholders})
+            """,
+            [now] + list(memory_object_ids),
+        )
+        conn.commit()
+
+    def delete_old_archived(self, tenant_id: str, older_than_days: int = 90) -> int:
+        """Hard-delete memories archived more than older_than_days ago."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        conn = self._connect()
+        cur = conn.execute(
+            "DELETE FROM memory_objects WHERE tenant_id = ? AND is_archived = 1 AND archived_at < ?",
+            (tenant_id, cutoff),
+        )
+        conn.commit()
+        return cur.rowcount
+
+    def forgetting_stats(self, tenant_id: str) -> dict:
+        """Return forgetting/lifecycle statistics."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_archived = 0 THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN is_archived = 1 THEN 1 ELSE 0 END) as archived,
+                    SUM(CASE WHEN pack_count = 0 AND is_archived = 0 THEN 1 ELSE 0 END) as never_packed,
+                    SUM(CASE WHEN select_count = 0 AND is_archived = 0 THEN 1 ELSE 0 END) as never_selected
+                FROM memory_objects WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+        return {
+            "total": row["total"] or 0,
+            "active": row["active"] or 0,
+            "archived": row["archived"] or 0,
+            "never_packed": row["never_packed"] or 0,
+            "never_selected": row["never_selected"] or 0,
+        }
