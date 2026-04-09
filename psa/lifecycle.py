@@ -84,18 +84,22 @@ class LifecyclePipeline:
 
         if all_sessions:
             # === FAST PATH: ingest ===
-            # Pass all files; _mine_sessions skips files already in PSA raw_sources
-            logger.info("Mining: %d total session files (%d new since last run)", len(all_sessions), len(new_since_last))
+            print(f"  [1/5] Mining sessions ({len(new_since_last)} new, {len(all_sessions)} total to check)...")
             mined = self._mine_sessions(all_sessions, tenant_id=tenant_id, store=store, tenant=tenant)
             summary["memories_mined"] = mined
             has_new_data = has_new_data or mined > 0
             state["last_mine_timestamp"] = now_iso
+            print(f"        {mined} new memories created.")
+        else:
+            print("  [1/5] No session files found.")
 
         # === MAINTENANCE (runs every time) ===
 
-        # 2. Delete old archived memories (hard-delete after 90 days)
+        print("  [2/5] Cleaning up archived memories...")
         deleted = store.delete_old_archived(tenant_id, older_than_days=90)
         summary["memories_hard_deleted"] = deleted
+        if deleted:
+            print(f"        Hard-deleted {deleted} old archived memories.")
 
         # 3. Load atlas for pruning
         atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
@@ -103,6 +107,7 @@ class LifecyclePipeline:
 
         if atlas is not None:
             # 4. Per-anchor pruning
+            print(f"  [3/5] Pruning overloaded anchors ({len(atlas.cards)} anchors)...")
             total_pruned = 0
             anchor_budget = int(
                 cfg._file_config.get("anchor_memory_budget", 100)
@@ -114,20 +119,24 @@ class LifecyclePipeline:
                     )
                     total_pruned += pruned
             summary["memories_pruned"] = total_pruned
+            if total_pruned:
+                print(f"        Archived {total_pruned} memories from overloaded anchors.")
 
             # 5. Global cap
+            print("  [4/5] Enforcing global memory cap...")
             max_memories = int(cfg._file_config.get("max_memories", 50_000))
             cap_result = enforce_global_cap(store, tenant_id, max_memories=max_memories)
             summary["memories_pruned"] += cap_result.get("archived", 0)
             summary["memories_hard_deleted"] += cap_result.get("hard_deleted", 0)
 
             # === SLOW PATH (only when health triggers AND we have new data) ===
+            print("  [5/5] Checking atlas health...")
             monitor = AtlasHealthMonitor()
             health = monitor.check_health(atlas, store, tenant_id=tenant_id)
 
             if (has_new_data and health.should_rebuild) or force_rebuild:
-                logger.info("Slow path: rebuilding atlas (reasons: %s)",
-                            "; ".join(health.rebuild_reasons) if health.rebuild_reasons else "forced")
+                reasons = "; ".join(health.rebuild_reasons) if health.rebuild_reasons else "forced"
+                print(f"        Rebuilding atlas (reason: {reasons})...")
 
                 # Cosine fallback during rebuild
                 self._write_selector_mode(tenant.root_dir, "cosine")
@@ -135,19 +144,38 @@ class LifecyclePipeline:
                 try:
                     atlas = atlas_mgr.rebuild(store)
                     summary["atlas_rebuilt"] = True
-                    logger.info("Atlas v%d rebuilt successfully", atlas.version)
+                    print(f"        Atlas v{atlas.version} rebuilt ({len(atlas.cards)} anchors).")
                 except Exception as e:
+                    print(f"        Atlas rebuild failed: {e}")
                     logger.error("Atlas rebuild failed: %s", e)
 
                 # Retrain selector if training gates are met
                 if summary["atlas_rebuilt"]:
+                    print("        Checking selector training gates...")
                     retrained = self._retrain_selector(tenant, store, atlas, state)
                     summary["selector_retrained"] = retrained
+                    if retrained:
+                        print(f"        Selector retrained (v{state.get('selector_version', '?')}).")
+                    else:
+                        print("        Training gates not met. Staying in cosine mode.")
+            else:
+                print("        Atlas is healthy. No rebuild needed.")
+        else:
+            print("  [3/5] No atlas found. Skipping pruning and health check.")
 
         # 6. Save state
         state["last_memory_count"] = store.count(tenant_id)
         state["last_run"] = now_iso
         self._save_state(tenant.root_dir, state)
+
+        # Print final summary
+        print(f"\nLifecycle run complete (tenant: {tenant_id}):")
+        print(f"  New sessions:       {summary['new_sessions']}")
+        print(f"  Memories mined:     {summary['memories_mined']}")
+        print(f"  Memories pruned:    {summary['memories_pruned']}")
+        print(f"  Hard deleted:       {summary['memories_hard_deleted']}")
+        print(f"  Atlas rebuilt:      {summary['atlas_rebuilt']}")
+        print(f"  Selector retrained: {summary['selector_retrained']}")
 
         logger.info("Lifecycle run complete: %s", summary)
         return summary
@@ -259,17 +287,23 @@ class LifecyclePipeline:
         )
 
         already_processed = store.get_processed_source_paths(tenant_id)
+        to_process = [f for f in session_files if f not in already_processed]
+
+        if not to_process:
+            return 0
 
         total = 0
-        for fpath in session_files:
-            if fpath in already_processed:
-                continue
+        for i, fpath in enumerate(to_process, 1):
             try:
                 text = Path(fpath).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             if not text.strip():
                 continue
+
+            if i % 10 == 1 or i == len(to_process):
+                print(f"        Mining [{i}/{len(to_process)}] {Path(fpath).name[:50]}...",
+                      flush=True)
 
             memories = pipeline.consolidate(
                 raw_text=text,
