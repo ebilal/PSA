@@ -13,6 +13,10 @@ from .version import __version__  # noqa: E402
 # 1 positional argument but 3 were given").  Silence just that logger.
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
+# Suppress noisy "BertModel LOAD REPORT" from sentence-transformers/transformers
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+
 # ONNX Runtime's CoreML provider segfaults during vector queries on Apple Silicon.
 # Force CPU execution unless the user has explicitly set a preference.
 if platform.machine() == "arm64" and platform.system() == "Darwin":
