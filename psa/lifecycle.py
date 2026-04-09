@@ -61,6 +61,7 @@ class LifecyclePipeline:
             "memories_pruned": 0,
             "memories_hard_deleted": 0,
             "atlas_rebuilt": False,
+            "queries_labeled": 0,
             "selector_retrained": False,
         }
 
@@ -149,8 +150,12 @@ class LifecyclePipeline:
                     print(f"        Atlas rebuild failed: {e}")
                     logger.error("Atlas rebuild failed: %s", e)
 
-                # Retrain selector if training gates are met
+                # Label queries for selector training (accumulates nightly)
                 if summary["atlas_rebuilt"]:
+                    labeled = self._label_queries(tenant, store, atlas, sessions_dir)
+                    summary["queries_labeled"] = labeled
+
+                    # Retrain selector if training gates are met
                     print("        Checking selector training gates...")
                     retrained = self._retrain_selector(tenant, store, atlas, state)
                     summary["selector_retrained"] = retrained
@@ -175,6 +180,7 @@ class LifecyclePipeline:
         print(f"  Memories pruned:    {summary['memories_pruned']}")
         print(f"  Hard deleted:       {summary['memories_hard_deleted']}")
         print(f"  Atlas rebuilt:      {summary['atlas_rebuilt']}")
+        print(f"  Queries labeled:    {summary['queries_labeled']}")
         print(f"  Selector retrained: {summary['selector_retrained']}")
 
         logger.info("Lifecycle run complete: %s", summary)
@@ -314,6 +320,82 @@ class LifecyclePipeline:
             total += len(memories)
 
         return total
+
+    def _label_queries(self, tenant, store, atlas, sessions_dir, batch_size: int = 30) -> int:
+        """Label a batch of queries for selector training. Accumulates nightly."""
+        try:
+            from .training.oracle_labeler import OracleLabeler, _load_queries_from_sessions
+            from .pipeline import PSAPipeline
+        except ImportError:
+            logger.warning("Training dependencies not available. Skipping labeling.")
+            return 0
+
+        labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
+        os.makedirs(os.path.dirname(labels_path), exist_ok=True)
+
+        # Count existing labels
+        existing = 0
+        if os.path.exists(labels_path):
+            with open(labels_path) as f:
+                existing = sum(1 for line in f if line.strip())
+
+        if existing >= 300:
+            print(f"        {existing} oracle labels already exist (gate: 300). Skipping labeling.")
+            return 0
+
+        # Load real user queries from sessions
+        if sessions_dir:
+            queries = _load_queries_from_sessions(sessions_dir, max_queries=batch_size * 3)
+        else:
+            queries = []
+
+        if not queries:
+            logger.info("No queries available for labeling.")
+            return 0
+
+        # Deduplicate against already-labeled query IDs
+        labeled_ids = set()
+        if os.path.exists(labels_path):
+            import json
+            with open(labels_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            labeled_ids.add(json.loads(line).get("query_id", ""))
+                        except Exception:
+                            pass
+        queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:batch_size]
+
+        if not queries:
+            return 0
+
+        print(f"        Labeling {len(queries)} queries (have {existing}, need 300)...")
+
+        # Build pipeline for labeling
+        try:
+            pipeline = PSAPipeline.from_tenant(
+                tenant_id=tenant.tenant_id,
+                psa_mode="primary",
+                selector_mode="cosine",
+            )
+        except FileNotFoundError:
+            logger.warning("No atlas available for labeling.")
+            return 0
+
+        labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
+        labeled = 0
+        for i, (qid, query_text) in enumerate(queries, 1):
+            try:
+                labeler.label(query_id=qid, query=query_text)
+                labeled += 1
+                if labeled % 10 == 0:
+                    print(f"        Labeled {labeled}/{len(queries)}...", flush=True)
+            except Exception as e:
+                logger.warning("Failed to label query %s: %s", qid, e)
+
+        print(f"        Labeled {labeled} queries. Total: {existing + labeled}/300.")
+        return labeled
 
     def _retrain_selector(self, tenant, store, atlas, state) -> bool:
         """Retrain the selector if training gates are met. Returns True if retrained."""

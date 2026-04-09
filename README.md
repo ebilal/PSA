@@ -120,30 +120,34 @@ This creates a default tenant at `~/.psa/tenants/default/` and mines the target 
 ## Quick Start
 
 ```bash
-# 1. Mine your project files
-psa mine ~/projects/myapp
+# 1. Mine your Claude Code sessions
+uv run psa mine ~/.claude/projects/ --mode convos
 
-# 2. Mine conversation exports (Claude Code, ChatGPT, Slack)
-psa mine ~/chats/ --mode convos
+# 2. Build the atlas (needs ≥ 200 memories)
+uv run psa atlas build
 
-# 3. Build the atlas (once you have ≥ 500 memories)
-psa atlas build
+# 3. Search (works immediately with cosine selector)
+uv run psa search "why did we switch to GraphQL"
 
-# 4. Search
-psa search "why did we switch to GraphQL"
+# 4. Install the nightly lifecycle (mines, labels, trains, prunes — all automatic)
+uv run psa lifecycle install
 
-# 5. Check what's stored
-psa status
-psa wake-up                          # load atlas summary as session context
-```
-
-### With Claude Code (MCP)
-
-```bash
+# 5. Add the MCP server to Claude Code
 claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
 ```
 
-Claude then has 25 MCP tools available — PSA search, memory storage, atlas management, knowledge graph, and diary tools. Ask it anything:
+After install, the lifecycle runs nightly at 3 AM:
+- Mines new Claude Code sessions
+- Rebuilds atlas when health triggers
+- Labels 30 queries per night for selector training (needs 300 total)
+- Trains the selector once enough labels accumulate
+- Prunes unused memories to keep the system bounded
+
+You can also run the lifecycle manually: `uv run psa lifecycle run`
+
+### With Claude Code (MCP)
+
+Once the MCP server is added, Claude has PSA tools available — search, memory storage, atlas management. Ask it anything:
 
 > *"What did we decide about auth last month?"*
 
