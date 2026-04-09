@@ -404,10 +404,21 @@ class PSAPipeline:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        selector = AnchorSelector(
-            mode=selector_mode,
-            model_path=selector_model_path,
-        )
+        # Load calibrated threshold from trained model metadata
+        selector_threshold = None
+        if selector_model_path:
+            sv_path = os.path.join(selector_model_path, "selector_version.json")
+            try:
+                with open(sv_path) as _sf:
+                    sv_meta = json.load(_sf)
+                selector_threshold = sv_meta.get("threshold_tau")
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                pass
+
+        selector_kwargs = dict(mode=selector_mode, model_path=selector_model_path)
+        if selector_threshold is not None:
+            selector_kwargs["threshold"] = selector_threshold
+        selector = AnchorSelector(**selector_kwargs)
 
         return cls(
             store=store,

@@ -90,6 +90,8 @@ class Atlas:
         Assign a memory object to anchor(s).
 
         Returns (primary_anchor_id, secondary_anchor_id_or_None, confidence).
+        If the best learned anchor is below NOVELTY_DISTANCE_THRESHOLD,
+        routes to the nearest novelty anchor instead (secondary=None).
         """
         if memory.embedding is None:
             raise ValueError(f"Memory {memory.memory_object_id} has no embedding.")
@@ -97,8 +99,44 @@ class Atlas:
         if not results:
             return -1, None, 0.0
         primary_id, primary_score = results[0]
+
+        # Find best learned anchor among top results
+        card_map = self._get_card_map()
+        best_learned_score = None
+        for rid, rscore in results:
+            card = card_map.get(rid)
+            if card and not card.is_novelty:
+                best_learned_score = rscore
+                break
+
+        # If best learned anchor is too far, route to nearest novelty anchor
+        if best_learned_score is not None and best_learned_score < (1.0 - NOVELTY_DISTANCE_THRESHOLD):
+            emb = np.asarray(memory.embedding, dtype=np.float32)
+            novelty_ids, novelty_centroids = self._get_novelty_centroids()
+            if len(novelty_centroids) > 0:
+                sims = novelty_centroids @ emb
+                best_idx = int(np.argmax(sims))
+                return novelty_ids[best_idx], None, float(sims[best_idx])
+
         secondary_id = results[1][0] if len(results) > 1 else None
         return primary_id, secondary_id, float(primary_score)
+
+    def _get_card_map(self) -> dict:
+        """Lazy {anchor_id: AnchorCard} lookup map."""
+        if not hasattr(self, "_card_map"):
+            self._card_map = {c.anchor_id: c for c in self.cards}
+        return self._card_map
+
+    def _get_novelty_centroids(self):
+        """Lazy (ids, centroids_matrix) for novelty anchors."""
+        if not hasattr(self, "_novelty_cache"):
+            nov = [(c.anchor_id, c.centroid) for c in self.cards if c.is_novelty and c.centroid]
+            if nov:
+                ids, cents = zip(*nov)
+                self._novelty_cache = (list(ids), np.array(cents, dtype=np.float32))
+            else:
+                self._novelty_cache = ([], np.empty((0, 0), dtype=np.float32))
+        return self._novelty_cache
 
     def save(self):
         """Persist the atlas (anchor cards + index) to disk."""

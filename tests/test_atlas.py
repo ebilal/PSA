@@ -327,3 +327,63 @@ def test_atlas_manager_get_or_build(tmp_dir, small_k):
     # Second call returns existing
     atlas2 = mgr.get_or_build(store)
     assert atlas2.version == 1
+
+
+# ── Novelty routing in assign_memory ─────────────────────────────────────────
+
+
+def test_assign_memory_routes_distant_to_novelty(tmp_dir, small_k):
+    """Memories far from all learned anchors should route to a novelty anchor."""
+    store = _make_store_with_memories(tmp_dir, n=80, dim=64)
+    builder = AtlasBuilder(store=store, tenant_id="test")
+    atlas = builder.build_atlas(
+        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
+    )
+
+    novelty_ids = {c.anchor_id for c in atlas.cards if c.is_novelty}
+    learned_ids = {c.anchor_id for c in atlas.cards if not c.is_novelty}
+    assert len(novelty_ids) > 0, "Atlas should have novelty anchors"
+
+    # Create a memory with a random embedding orthogonal to all learned centroids
+    # Use a very different direction to ensure low similarity
+    rng = np.random.default_rng(42424242)
+    emb = rng.standard_normal(64).astype(np.float32)
+    # Negate the average learned centroid direction to push far away
+    learned_centroids = np.array(
+        [c.centroid for c in atlas.cards if not c.is_novelty], dtype=np.float32
+    )
+    avg_direction = learned_centroids.mean(axis=0)
+    emb = -avg_direction + 0.1 * emb  # point away from all clusters
+    emb = emb / np.linalg.norm(emb)
+
+    mo = MemoryObject.create(
+        tenant_id="test",
+        memory_type=MemoryType.EPISODIC,
+        title="Very distant memory",
+        body="Something completely unrelated.",
+        summary="Distant.",
+        source_ids=[],
+        classification_reason="test",
+        embedding=emb.tolist(),
+    )
+
+    # Compute best learned anchor score to know what routing should do
+    from psa.atlas import NOVELTY_DISTANCE_THRESHOLD
+    emb_arr = np.asarray(emb, dtype=np.float32)
+    best_learned_score = max(
+        float(emb_arr @ np.asarray(c.centroid, dtype=np.float32))
+        for c in atlas.cards if not c.is_novelty
+    )
+
+    primary_id, secondary_id, confidence = atlas.assign_memory(mo)
+
+    if best_learned_score < (1.0 - NOVELTY_DISTANCE_THRESHOLD):
+        # Novelty routing should have triggered
+        assert primary_id in novelty_ids, (
+            f"Expected novelty anchor but got learned anchor {primary_id} "
+            f"(best_learned_score={best_learned_score:.3f})"
+        )
+        assert secondary_id is None, "Secondary should be None for novelty routing"
+    else:
+        # Normal routing — just verify valid anchor
+        assert primary_id in (novelty_ids | learned_ids)

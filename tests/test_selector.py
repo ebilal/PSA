@@ -207,6 +207,18 @@ def test_gates_family_count_too_low():
     assert any("single_anchor" in r for r in status.blocking_reasons)
 
 
+def test_gates_held_out_none_skips_gate():
+    """When held_out_count is not provided, that gate is skipped."""
+    status = check_training_gates(
+        oracle_count=300,
+        shortlist_recall_24=0.95,
+        query_family_counts={"single_anchor": 60},
+    )
+    assert status.gates_met is True
+    assert status.held_out_count is None
+    assert not any("held_out_count" in r for r in status.blocking_reasons)
+
+
 def test_gates_status_fields():
     status = check_training_gates(
         oracle_count=500,

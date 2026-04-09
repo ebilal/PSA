@@ -22,6 +22,7 @@ Requirements: torch, sentence-transformers (installed via psa[training])
 import json
 import logging
 import os
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -246,9 +247,13 @@ class SelectorTrainer:
             logger.info("Phase 2: hard-negative curriculum (%d examples)", len(phase2))
             self._train_phase(model, PairDataset(phase2), epochs=1)
 
-        # Phase 3: adversarial hardening (already contains both classes)
+        # Phase 3: adversarial hardening with balanced classes
         phase3 = by_type.get("adversarial", [])
         if phase3:
+            # Mix in hard negatives capped to adversarial count for class balance
+            neg_for_p3 = hard_negs[:len(phase3)] if hard_negs else []
+            phase3 = phase3 + neg_for_p3
+            random.shuffle(phase3)
             logger.info("Phase 3: adversarial hardening (%d examples)", len(phase3))
             self._train_phase(model, PairDataset(phase3), epochs=1)
 

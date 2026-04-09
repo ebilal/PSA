@@ -254,7 +254,7 @@ class TrainingGateStatus:
     """Reports whether selector training gates are met for a tenant."""
 
     oracle_count: int
-    held_out_count: int
+    held_out_count: Optional[int]
     shortlist_recall_24: Optional[float]
     query_family_counts: dict
     gates_met: bool
@@ -263,8 +263,8 @@ class TrainingGateStatus:
 
 def check_training_gates(
     oracle_count: int,
-    held_out_count: int,
     shortlist_recall_24: Optional[float],
+    held_out_count: Optional[int] = None,
     query_family_counts: Optional[dict] = None,
     oracle_min: int = 300,
     held_out_min: int = 200,
@@ -283,7 +283,7 @@ def check_training_gates(
             f"oracle_count {oracle_count} < {oracle_min} required"
         )
 
-    if held_out_count < held_out_min:
+    if held_out_count is not None and held_out_count < held_out_min:
         reasons.append(
             f"held_out_count {held_out_count} < {held_out_min} required"
         )

@@ -507,7 +507,6 @@ def cmd_train(args):
     if not force:
         gate_status = check_training_gates(
             oracle_count=label_count,
-            held_out_count=0,
             shortlist_recall_24=1.0,
         )
         if not gate_status.gates_met:

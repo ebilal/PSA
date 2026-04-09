@@ -47,10 +47,12 @@ training = ["torch>=2.0", "sentence-transformers>=2.2"]
 migration = ["chromadb>=0.5.0,<0.7"]
 # Legacy palace raw storage (backward compat)
 palace = ["chromadb>=0.5.0,<0.7"]
+# Cloud LLM via litellm (Azure, OpenAI, etc.)
+cloud = ["litellm>=1.0"]
 # Spell checking
 spellcheck = ["autocorrect>=2.0"]
 [dependency-groups]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "chromadb>=0.5.0,<0.7", "scikit-learn>=1.0", "faiss-cpu>=1.7"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "chromadb>=0.5.0,<0.7", "scikit-learn>=1.0", "faiss-cpu>=1.7", "litellm>=1.0"]
 
 [build-system]
 requires = ["hatchling"]

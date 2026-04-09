@@ -141,7 +141,8 @@ class LifecyclePipeline:
                 print(f"        Rebuilding atlas (reason: {reasons})...")
 
                 # Cosine fallback during rebuild
-                self._write_selector_mode(tenant.root_dir, "cosine")
+                state["selector_mode"] = "cosine"
+                state.pop("selector_model_path", None)
 
                 try:
                     atlas = atlas_mgr.rebuild(store)
@@ -426,7 +427,6 @@ class LifecyclePipeline:
 
         gate_status = check_training_gates(
             oracle_count=label_count,
-            held_out_count=0,  # not tracked yet — will gate on oracle_count alone
             shortlist_recall_24=1.0,  # assume retriever is good enough
         )
         if not gate_status.gates_met:
@@ -458,8 +458,9 @@ class LifecyclePipeline:
             sv = trainer.train(train_data_path=training_path, version=selector_version)
             logger.info("Selector v%d trained → %s", sv.version, sv.model_path)
 
-            # Activate trained selector
-            self._write_selector_mode(tenant.root_dir, "trained", sv.model_path)
+            # Activate trained selector (mutate state; saved by run())
+            state["selector_mode"] = "trained"
+            state["selector_model_path"] = sv.model_path
             state["selector_version"] = selector_version
             return True
         except Exception as e:

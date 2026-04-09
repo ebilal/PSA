@@ -12,12 +12,14 @@ Configuration is read from ~/.psa/llm.json (created on first run):
         "cloud_model": "azure/grok-4-20-reasoning",
         "cloud_api_key": "...",
         "cloud_api_base": "https://...",
+        "cloud_api_version": "2024-12-01-preview",
         "local_endpoint": "http://localhost:11434/v1/chat/completions",
         "local_model": "qwen2.5:7b"
     }
 
 Environment variables override the config file:
-    PSA_LLM_MODEL, PSA_LLM_API_KEY, PSA_LLM_API_BASE, QWEN_ENDPOINT, QWEN_MODEL
+    PSA_LLM_MODEL, PSA_LLM_API_KEY, PSA_LLM_API_BASE, PSA_LLM_API_VERSION,
+    QWEN_ENDPOINT, QWEN_MODEL
 """
 
 import json
@@ -37,6 +39,7 @@ _DEFAULT_CONFIG = {
     "cloud_model": "",
     "cloud_api_key": "",
     "cloud_api_base": "",
+    "cloud_api_version": "2024-12-01-preview",
     "local_endpoint": "http://localhost:11434/v1/chat/completions",
     "local_model": "qwen2.5:7b",
 }
@@ -76,6 +79,8 @@ def _load_config() -> dict:
         config["cloud_api_key"] = os.environ["PSA_LLM_API_KEY"]
     if os.environ.get("PSA_LLM_API_BASE"):
         config["cloud_api_base"] = os.environ["PSA_LLM_API_BASE"]
+    if os.environ.get("PSA_LLM_API_VERSION"):
+        config["cloud_api_version"] = os.environ["PSA_LLM_API_VERSION"]
     if os.environ.get("QWEN_ENDPOINT"):
         config["local_endpoint"] = os.environ["QWEN_ENDPOINT"]
     if os.environ.get("QWEN_MODEL"):
@@ -108,6 +113,7 @@ def _call_cloud(
             "max_tokens": max_tokens,
             "api_key": config["cloud_api_key"],
             "api_base": config["cloud_api_base"],
+            "api_version": config["cloud_api_version"],
             "timeout": timeout,
         }
         if json_mode:

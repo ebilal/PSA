@@ -219,3 +219,46 @@ def test_from_tenant_raises_without_atlas(tmp_path):
 
         with pytest.raises(FileNotFoundError, match="No atlas found"):
             PSAPipeline.from_tenant("test_tenant", base_dir=str(tmp_path))
+
+
+def test_from_tenant_loads_threshold_tau(tmp_path):
+    """from_tenant loads threshold_tau from selector_version.json."""
+    import json
+
+    with patch("psa.pipeline.TenantManager") as mock_tm, \
+         patch("psa.pipeline.MemoryStore"), \
+         patch("psa.pipeline.EmbeddingModel"), \
+         patch("psa.pipeline.AtlasManager") as mock_am:
+
+        mock_tenant = MagicMock()
+        mock_tenant.root_dir = str(tmp_path)
+        mock_tenant.memory_db_path = str(tmp_path / "memory.sqlite3")
+        mock_tm.return_value.get_or_create.return_value = mock_tenant
+
+        card = _make_card(1, "auth")
+        mock_atlas = MagicMock(spec=Atlas)
+        mock_atlas.cards = [card]
+        mock_atlas.anchor_index = AnchorIndex(dim=2)
+        mock_atlas.anchor_index.build([card])
+        mock_atlas.version = 1
+        mock_am_inst = MagicMock()
+        mock_am_inst.get_atlas.return_value = mock_atlas
+        mock_am.return_value = mock_am_inst
+
+        # Create lifecycle state pointing to a model dir
+        model_dir = tmp_path / "models" / "selector_v1"
+        model_dir.mkdir(parents=True)
+        lifecycle_state = {
+            "selector_mode": "cosine",
+            "selector_model_path": str(model_dir),
+        }
+        with open(tmp_path / "lifecycle_state.json", "w") as f:
+            json.dump(lifecycle_state, f)
+
+        # Write selector_version.json with threshold_tau
+        sv_meta = {"threshold_tau": 0.42}
+        with open(model_dir / "selector_version.json", "w") as f:
+            json.dump(sv_meta, f)
+
+        pipeline = PSAPipeline.from_tenant("test_tenant", base_dir=str(tmp_path))
+        assert pipeline.selector.threshold == 0.42
