@@ -406,14 +406,7 @@ def cmd_lifecycle(args):
         from .lifecycle import LifecyclePipeline
         lp = LifecyclePipeline()
         force = getattr(args, "force_rebuild", False)
-        summary = lp.run(tenant_id=tenant_id, force_rebuild=force)
-        print(f"\nLifecycle run complete (tenant: {tenant_id}):")
-        print(f"  New sessions:       {summary['new_sessions']}")
-        print(f"  Memories mined:     {summary['memories_mined']}")
-        print(f"  Memories pruned:    {summary['memories_pruned']}")
-        print(f"  Hard deleted:       {summary['memories_hard_deleted']}")
-        print(f"  Atlas rebuilt:      {summary['atlas_rebuilt']}")
-        print(f"  Selector retrained: {summary['selector_retrained']}")
+        lp.run(tenant_id=tenant_id, force_rebuild=force)
 
     elif action == "status":
         from .lifecycle import LifecyclePipeline

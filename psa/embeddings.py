@@ -41,9 +41,17 @@ class EmbeddingModel:
 
     def _load(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            import logging as _logging
 
-            self._model = SentenceTransformer(self._model_name)
+            # Suppress noisy "LOAD REPORT" output from sentence-transformers
+            _st_logger = _logging.getLogger("sentence_transformers")
+            prev_level = _st_logger.level
+            _st_logger.setLevel(_logging.WARNING)
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._model = SentenceTransformer(self._model_name)
+            finally:
+                _st_logger.setLevel(prev_level)
 
     def embed(self, text: str) -> List[float]:
         """Embed a single string. Returns an L2-normalized float list."""
