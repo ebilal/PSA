@@ -119,39 +119,53 @@ This creates a default tenant at `~/.psa/tenants/default/` and mines the target 
 
 ## Quick Start
 
+### 1. Mine your sessions
+
 ```bash
-# 1. Mine your Claude Code sessions
 uv run psa mine ~/.claude/projects/ --mode convos
+```
 
-# 2. Build the atlas (needs ≥ 200 memories)
+Reads your Claude Code conversation transcripts, sends each through Qwen to extract typed memories (failures, procedures, facts, tool usage), embeds them, and stores them in SQLite. Takes a few hours for a large session history.
+
+### 2. Build the atlas
+
+```bash
 uv run psa atlas build
+```
 
-# 3. Search (works immediately with cosine selector)
+Clusters your memories into semantic anchor regions via spherical k-means. Each anchor gets a Qwen-generated description (name, meaning, include/exclude terms). Requires 200+ memories. This is what makes search work — queries are matched to anchors, not individual memories.
+
+### 3. Search
+
+```bash
 uv run psa search "why did we switch to GraphQL"
+```
 
-# 4. Install the nightly lifecycle (mines, labels, trains, prunes — all automatic)
+Embeds the query, retrieves the top-24 anchor candidates (BM25 + dense), selects the 1-4 best anchors, fetches their memories, ranks by relevance, and packs into a 6000-token context organized by type (failures first, then procedures, tool notes, episodes, facts). Works immediately with cosine selector.
+
+### 4. Install the nightly lifecycle
+
+```bash
 uv run psa lifecycle install
+```
 
-# 5. Add the MCP server to Claude Code
+Installs a macOS launchd job that runs at 3 AM nightly. Each run:
+
+1. **Mines** new Claude Code sessions added since last run
+2. **Prunes** overloaded anchors and enforces the 50k memory cap
+3. **Rebuilds** the atlas when health metrics trigger (novelty rate > 8%, skew > 3x)
+4. **Labels** 30 queries per night — runs each query through the pipeline, has Qwen judge which anchor sets actually help answer it, and saves the result as an oracle label
+5. **Trains** the selector once 300+ oracle labels accumulate — fine-tunes a cross-encoder that learns task utility (not just similarity), then activates it automatically
+
+You can run it manually anytime: `uv run psa lifecycle run`
+
+### 5. Add the MCP server to Claude Code
+
+```bash
 claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
 ```
 
-After install, the lifecycle runs nightly at 3 AM:
-- Mines new Claude Code sessions
-- Rebuilds atlas when health triggers
-- Labels 30 queries per night for selector training (needs 300 total)
-- Trains the selector once enough labels accumulate
-- Prunes unused memories to keep the system bounded
-
-You can also run the lifecycle manually: `uv run psa lifecycle run`
-
-### With Claude Code (MCP)
-
-Once the MCP server is added, Claude has PSA tools available — search, memory storage, atlas management. Ask it anything:
-
-> *"What did we decide about auth last month?"*
-
-Claude calls `psa_atlas_search` automatically, gets packed context organized by memory type, and answers with the full reasoning behind the decision.
+Claude gets PSA tools — `psa_atlas_search`, `psa_store_memory`, `psa_atlas_status`, and more. When you ask a question about past work, Claude calls `psa_atlas_search` automatically and gets typed context from your memory store.
 
 ---
 
