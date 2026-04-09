@@ -175,7 +175,7 @@ def oracle_score(
     )
 
 
-# ── Qwen cheap-stage caller (batched) ─────────────────────────────────────────
+# ── LLM cheap-stage caller (batched) ─────────────────────────────────────────
 
 _ZERO_SCORES: Dict[str, float] = {
     "support_coverage": 0.0,
@@ -261,7 +261,7 @@ def _call_qwen_proxy_batch(
         raw_sets = json.loads(content).get("sets", [])
         results.update(_parse_scores(raw_sets, all_indices))
     except Exception as e:
-        logger.warning("Qwen batch proxy scoring failed on first attempt: %s", e)
+        logger.warning("LLM batch proxy scoring failed on first attempt: %s", e)
 
     # Retry any indices that are still missing or malformed
     missing = [i for i in all_indices if i not in results]
@@ -273,7 +273,7 @@ def _call_qwen_proxy_batch(
             raw_sets = json.loads(content).get("sets", [])
             results.update(_parse_scores(raw_sets, missing))
         except Exception as e:
-            logger.warning("Qwen retry scoring failed: %s", e)
+            logger.warning("LLM retry scoring failed: %s", e)
 
     # Fill any still-missing with zeros (give up after one retry)
     still_missing = [i for i in all_indices if i not in results]
@@ -285,7 +285,7 @@ def _call_qwen_proxy_batch(
     return [results[i] for i in all_indices]
 
 
-# ── Qwen task-success judge ───────────────────────────────────────────────────
+# ── LLM task-success judge ───────────────────────────────────────────────────
 
 
 def _qwen_task_success(
@@ -296,7 +296,7 @@ def _qwen_task_success(
     timeout: int = 120,
 ) -> float:
     """
-    Use Qwen as a judge: given a query and packed context, how well does
+    Use LLM as a judge: given a query and packed context, how well does
     the context support answering the query?
 
     Returns a score in [0.0, 1.0].
@@ -339,8 +339,8 @@ class OracleLabeler:
     """
     Two-stage oracle labeler for selector training data.
 
-    Stage 1 (cheap): Qwen scores ALL candidate sets with proxy metrics.
-    Stage 2 (expensive): Qwen judges task success for top-3 sets —
+    Stage 1 (cheap): LLM scores ALL candidate sets with proxy metrics.
+    Stage 2 (expensive): LLM judges task success for top-3 sets —
     does the packed context from this anchor set actually help answer the query?
     """
 
@@ -408,7 +408,7 @@ class OracleLabeler:
             for c in candidates
         }
 
-        # Step 3: Cheap stage — score ALL candidate sets in ONE Qwen call
+        # Step 3: Cheap stage — score ALL candidate sets in ONE LLM call
         # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
         # time from ~16h to ~1h for 500 queries on an M4 Mac.
         all_combos: List[List[int]] = []

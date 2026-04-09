@@ -184,12 +184,13 @@ psa atlas rebuild                       # force rebuild
 ### Labeling
 
 ```bash
-psa label                               # label 50 queries from Claude sessions using Qwen
-psa label --n-queries 200               # label more queries (takes longer)
+psa label                               # label all available queries
+psa label --n-queries 100               # label only 100 queries
+psa label --reset                       # delete all labels and start from scratch
 psa label --sessions-dir ~/chats        # use a custom sessions directory
 ```
 
-Each label runs a query through the pipeline, has Qwen judge which anchor sets actually help answer it, and saves the result. You need 300+ labels before the selector can be trained.
+Each label runs a query through the pipeline, has the LLM judge which anchor sets actually help answer it, and saves the result. You need 300+ labels before the selector can be trained. Uses the cloud LLM if configured, otherwise falls back to local Ollama.
 
 ### Training
 
