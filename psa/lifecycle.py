@@ -373,7 +373,7 @@ class LifecyclePipeline:
             return 0
 
         gate_met = existing >= 300
-        gate_str = f" (training gate met)" if gate_met else f" (need 300 to train selector)"
+        gate_str = ", training gate met" if gate_met else f", need 300 to train selector"
         print(f"        Scoring {len(queries)} queries with Qwen ({existing} labels so far{gate_str})...")
 
         # Build pipeline for labeling
@@ -393,10 +393,9 @@ class LifecyclePipeline:
             try:
                 labeler.label(query_id=qid, query=query_text)
                 labeled += 1
-                if labeled % 10 == 0:
-                    print(f"        [{labeled}/{len(queries)}] scored...", flush=True)
+                print(f"        [{labeled}/{len(queries)}] {query_text[:60]}...", flush=True)
             except Exception as e:
-                logger.warning("Failed to label query %s: %s", qid, e)
+                print(f"        [{i}/{len(queries)}] FAILED: {e}", flush=True)
 
         total = existing + labeled
         if total >= 300:
