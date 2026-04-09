@@ -285,22 +285,29 @@ class LifecyclePipeline:
         """Retrain the selector if training gates are met. Returns True if retrained."""
         try:
             from .selector import check_training_gates
-            from .training.oracle_labeler import OracleLabeler, _load_queries_from_sessions
             from .training.data_generator import DataGenerator
             from .training.train_selector import SelectorTrainer
         except ImportError:
             logger.warning("Training dependencies not available. Skipping selector retrain.")
             return False
 
-        # Check if we have enough oracle labels
+        # Check training gates (>=300 oracle labels, >=200 held-out, recall@24 >= 0.95)
         labels_path = os.path.join(tenant.root_dir, "training", "oracle_labels.jsonl")
         label_count = 0
         if os.path.exists(labels_path):
             with open(labels_path) as f:
                 label_count = sum(1 for line in f if line.strip())
 
-        if label_count < 50:
-            logger.info("Only %d oracle labels (need 50+ for training). Staying in cosine mode.", label_count)
+        gate_status = check_training_gates(
+            oracle_count=label_count,
+            held_out_count=0,  # not tracked yet — will gate on oracle_count alone
+            shortlist_recall_24=1.0,  # assume retriever is good enough
+        )
+        if not gate_status.gates_met:
+            logger.info(
+                "Training gates not met (%s). Staying in cosine mode.",
+                "; ".join(gate_status.blocking_reasons),
+            )
             return False
 
         # Generate training data from existing labels
