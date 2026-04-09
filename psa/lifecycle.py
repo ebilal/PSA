@@ -372,9 +372,12 @@ class LifecyclePipeline:
         if not queries:
             return 0
 
+        from .llm import _load_config as _llm_config
+        llm_cfg = _llm_config()
+        llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
         gate_met = existing >= 300
         gate_str = ", training gate met" if gate_met else f", need 300 to train selector"
-        print(f"        Scoring {len(queries)} queries with Qwen ({existing} labels so far{gate_str})...")
+        print(f"        Scoring {len(queries)} queries with {llm_name} ({existing} labels so far{gate_str})...")
 
         # Build pipeline for labeling
         try:
