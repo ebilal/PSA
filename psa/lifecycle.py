@@ -377,7 +377,7 @@ class LifecyclePipeline:
         if not queries:
             return 0
 
-        print(f"        Labeling {len(queries)} queries (have {existing}, need 300)...")
+        print(f"        Scoring {len(queries)} queries with Qwen ({existing}/300 labels so far, need 300 to train selector)...")
 
         # Build pipeline for labeling
         try:
@@ -397,11 +397,12 @@ class LifecyclePipeline:
                 labeler.label(query_id=qid, query=query_text)
                 labeled += 1
                 if labeled % 10 == 0:
-                    print(f"        Labeled {labeled}/{len(queries)}...", flush=True)
+                    print(f"        [{labeled}/{len(queries)}] scored...", flush=True)
             except Exception as e:
                 logger.warning("Failed to label query %s: %s", qid, e)
 
-        print(f"        Labeled {labeled} queries. Total: {existing + labeled}/300.")
+        total = existing + labeled
+        print(f"        Done. {total}/300 oracle labels ({300 - total} more needed to train selector).")
         return labeled
 
     def _retrain_selector(self, tenant, store, atlas, state) -> bool:
