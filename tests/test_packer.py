@@ -201,24 +201,6 @@ def test_token_count_approximate():
     assert _token_count(text) == 100
 
 
-def test_pack_memories_direct_accepts_selector_scores():
-    """pack_memories_direct should accept optional selector_scores dict."""
-    import inspect
-    from psa.packer import EvidencePacker
-
-    sig = inspect.signature(EvidencePacker.pack_memories_direct)
-    assert "selector_scores" in sig.parameters
-
-
-def test_pack_memories_direct_accepts_packer_weights():
-    """pack_memories_direct should accept optional packer_weights tuple."""
-    import inspect
-    from psa.packer import EvidencePacker
-
-    sig = inspect.signature(EvidencePacker.pack_memories_direct)
-    assert "packer_weights" in sig.parameters
-
-
 # ── _fetch_evidence_text ──────────────────────────────────────────────────────
 
 

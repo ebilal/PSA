@@ -16,7 +16,7 @@ on raw retrieval results.
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .memory_object import MemoryObject, MemoryStore, MemoryType
 
@@ -393,9 +393,6 @@ class EvidencePacker:
         token_budget: int = 6000,
         query_vec: Optional[List[float]] = None,
         store: Optional[MemoryStore] = None,
-        selector_scores: Optional[Dict[int, float]] = None,
-        packer_weights: Optional[Tuple[float, float, float]] = None,
-        include_assistant_turns: bool = False,
     ) -> PackedContext:
         """
         Pack MemoryObjects directly (used when memories are retrieved via PSA path).
@@ -417,24 +414,12 @@ class EvidencePacker:
         # Compute per-memory relevance to the query
         relevances = _compute_relevance(memories, query_vec)
 
-        # Combine relevance with quality and optional selector scores for ranking
-        if selector_scores and packer_weights:
-            w_sel, w_cos, w_qual = packer_weights
-            scored = sorted(
-                zip(memories, relevances),
-                key=lambda pair: (
-                    w_sel * selector_scores.get(pair[0].primary_anchor_id, 0.0)
-                    + w_cos * pair[1]
-                    + w_qual * pair[0].quality_score
-                ),
-                reverse=True,
-            )
-        else:
-            scored = sorted(
-                zip(memories, relevances),
-                key=lambda pair: pair[1] * 0.7 + pair[0].quality_score * 0.3,
-                reverse=True,
-            )
+        # Rank by cosine relevance (70%) + quality (30%)
+        scored = sorted(
+            zip(memories, relevances),
+            key=lambda pair: pair[1] * 0.7 + pair[0].quality_score * 0.3,
+            reverse=True,
+        )
 
         # Top N memories get source context and full body text
         TOP_N_WITH_SOURCE = 10
