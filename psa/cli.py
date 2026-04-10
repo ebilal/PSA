@@ -846,14 +846,36 @@ def _cmd_longmemeval(args):
         print("\nLongMemEval Score")
         print(f"  Questions:     {stats['n_questions']}")
         print(f"  Exact F1:      {stats['exact_f1']:.3f}")
+        if "recall_at_5" in stats:
+            print(f"  R@5:           {stats['recall_at_5']:.3f}")
         if "llm_score" in stats:
             print(f"  LLM-as-judge:  {stats['llm_score']:.3f}")
         print(f"\nOracle labels written: {stats['oracle_labels_written']}")
         print(f"  -> {stats['oracle_labels_path']}")
         print("\nRun 'psa train' to train the selector on these labels.")
 
+    elif lme_action == "oracle-label":
+        from .benchmarks.longmemeval import oracle_label
+
+        results_file = getattr(args, "results", None)
+        if not results_file:
+            import glob
+
+            results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
+            files = sorted(glob.glob(os.path.join(results_dir, "results_*.jsonl")))
+            if not files:
+                print("No results files found. Run 'psa benchmark longmemeval run' first.")
+                sys.exit(1)
+            results_file = files[-1]
+
+        print(f"Running oracle labeling on: {results_file}")
+        print("This uses LLM calls and may take 30-60 minutes...")
+        n = oracle_label(results_file, tenant_id=tenant_id)
+        print(f"\nOracle labels written: {n}")
+        print("Run 'psa train' to train the selector on these labels.")
+
     else:
-        print("Usage: psa benchmark longmemeval ingest|run|score")
+        print("Usage: psa benchmark longmemeval ingest|run|score|oracle-label")
         sys.exit(1)
 
 

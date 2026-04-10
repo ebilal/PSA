@@ -449,3 +449,28 @@ def test_score_oracle_labels_path_patched(tmp_path):
 
     mock_path_fn.assert_called_once_with("test_tenant")
     assert result["oracle_labels_path"] == oracle_file
+
+
+# ── _recall_at_k ───────────────────────────────────────────────────────────────
+
+
+def test_recall_at_k_hit():
+    from psa.benchmarks.longmemeval import _recall_at_k
+
+    retrieved = ["answer_abc_1.jsonl", "answer_xyz_2.jsonl", "other.jsonl"]
+    answer_ids = ["answer_abc_1", "answer_abc_2"]
+    assert _recall_at_k(retrieved, answer_ids, k=5) == 1.0
+
+
+def test_recall_at_k_miss():
+    from psa.benchmarks.longmemeval import _recall_at_k
+
+    retrieved = ["other1.jsonl", "other2.jsonl"]
+    answer_ids = ["answer_abc_1"]
+    assert _recall_at_k(retrieved, answer_ids, k=5) == 0.0
+
+
+def test_recall_at_k_empty_answer_ids():
+    from psa.benchmarks.longmemeval import _recall_at_k
+
+    assert _recall_at_k(["foo.jsonl"], [], k=5) == 0.0

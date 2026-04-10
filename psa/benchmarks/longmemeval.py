@@ -203,6 +203,7 @@ def run(
                 "context_text": context_text,
                 "answer_generated": generated,
                 "answer_gold": gold_answer,
+                "answer_session_ids": example.get("answer_session_ids", []),
                 "tokens_used": result.token_count,
                 "token_budget": token_budget,
                 "selected_anchor_ids": [a.anchor_id for a in result.selected_anchors],
@@ -280,6 +281,15 @@ def score(
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
 
+    # Compute R@5 if answer_session_ids are available
+    recall_scores = []
+    for r in records:
+        ans_ids = r.get("answer_session_ids", [])
+        if ans_ids:
+            hit = any(ans_id in r.get("context_text", "") for ans_id in ans_ids)
+            recall_scores.append(1.0 if hit else 0.0)
+    avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else None
+
     result: Dict[str, Any] = {
         "exact_f1": round(avg_exact_f1, 4),
         "n_questions": len(records),
@@ -288,7 +298,55 @@ def score(
     }
     if avg_llm is not None:
         result["llm_score"] = round(avg_llm, 4)
+    if avg_recall is not None:
+        result["recall_at_5"] = round(avg_recall, 4)
     return result
+
+
+def oracle_label(
+    results_path: str,
+    tenant_id: str = BENCH_TENANT,
+) -> int:
+    """
+    Run the real OracleLabeler on benchmark results to produce proper
+    training labels with identified winning anchor sets.
+
+    Returns the number of oracle labels written.
+    """
+    from ..training.oracle_labeler import OracleLabeler
+    from ..pipeline import PSAPipeline
+
+    records = _load_results(results_path)
+    if not records:
+        raise ValueError(f"No records found in {results_path}")
+
+    try:
+        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
+        )
+
+    oracle_path = _oracle_labels_path(tenant_id)
+    os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
+
+    labeler = OracleLabeler(pipeline=pipeline, output_path=oracle_path)
+
+    written = 0
+    for i, record in enumerate(records):
+        query_id = record.get("question_id", f"lme_q_{i:04d}")
+        query = record["question"]
+        try:
+            labeler.label(query_id=query_id, query=query)
+            written += 1
+        except Exception as e:
+            logger.warning("Oracle labeling failed for q=%s: %s", record.get("question_id"), e)
+
+        if (i + 1) % 50 == 0:
+            logger.info("  %d / %d questions labeled", i + 1, len(records))
+
+    logger.info("Wrote %d oracle labels to %s", written, oracle_path)
+    return written
 
 
 def _load_results(path: str) -> List[Dict]:
@@ -340,6 +398,29 @@ def _llm_judge(question: str, gold: str, generated: str, call_llm) -> Optional[f
         return None
     except Exception:
         return None
+
+
+def _recall_at_k(
+    retrieved_source_paths: List[str],
+    answer_session_ids: List[str],
+    k: int = 5,
+) -> float:
+    """
+    Recall@k: did any answer session appear in the top-k retrieved sources?
+
+    retrieved_source_paths are filenames like "answer_abc_1.jsonl".
+    answer_session_ids are like "answer_abc_1".
+    Match by checking if any answer_session_id is a prefix of any retrieved path.
+    """
+    if not answer_session_ids:
+        return 0.0
+    top_k = retrieved_source_paths[:k]
+    for ans_id in answer_session_ids:
+        for path in top_k:
+            path_stem = path.rsplit(".", 1)[0] if "." in path else path
+            if path_stem == ans_id or ans_id in path:
+                return 1.0
+    return 0.0
 
 
 def _oracle_labels_path(tenant_id: str) -> str:
