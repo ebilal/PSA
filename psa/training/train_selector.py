@@ -184,7 +184,7 @@ class SelectorTrainer:
         SelectorVersion metadata (model saved to output_dir)
         """
         from sentence_transformers.cross_encoder import CrossEncoder
-        from torch.utils.data import DataLoader, Dataset as TorchDataset
+        from torch.utils.data import Dataset as TorchDataset
 
         examples = _load_training_data(train_data_path)
         by_type = _split_by_example_type(examples)
@@ -207,8 +207,12 @@ class SelectorTrainer:
             device = "cpu"
         logger.info("Training on device: %s", device)
 
-        # Load base model
-        model = CrossEncoder(self.base_model, max_length=self.max_seq_len, device=device)
+        # Load base model — suppress the "Loading weights" HF progress bar
+        import io
+        import contextlib
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            model = CrossEncoder(self.base_model, max_length=self.max_seq_len, device=device)
 
         model_out = os.path.join(self.output_dir, f"selector_v{version}")
         os.makedirs(model_out, exist_ok=True)
@@ -233,29 +237,41 @@ class SelectorTrainer:
                 return self._data[idx]
 
         positives = by_type.get("positive", [])
+        print(
+            f"        Training selector v{version}"
+            f" ({len(examples)} examples, device: {device})",
+            flush=True,
+        )
+
+        last_loss = 0.0
 
         # Phase 1: warm start (oracle positives + easy negatives)
         phase1 = positives + by_type.get("easy_negative", [])
         if phase1:
-            logger.info("Phase 1: warm start (%d examples)", len(phase1))
-            self._train_phase(model, PairDataset(phase1), epochs=1)
+            print(f"          Phase 1: warm start        ({len(phase1):4d} ex)...", end="", flush=True)
+            last_loss = self._train_phase(model, PairDataset(phase1), epochs=1)
+            print(f"  loss={last_loss:.3f}", flush=True)
+            logger.info("Phase 1 done: loss=%.3f", last_loss)
 
         # Phase 2: hard negatives + some positives (need both classes for loss)
         hard_negs = by_type.get("hard_negative", [])
         if hard_negs:
             phase2 = hard_negs + positives[:len(hard_negs)]
-            logger.info("Phase 2: hard-negative curriculum (%d examples)", len(phase2))
-            self._train_phase(model, PairDataset(phase2), epochs=1)
+            print(f"          Phase 2: hard-negative      ({len(phase2):4d} ex)...", end="", flush=True)
+            last_loss = self._train_phase(model, PairDataset(phase2), epochs=1)
+            print(f"  loss={last_loss:.3f}", flush=True)
+            logger.info("Phase 2 done: loss=%.3f", last_loss)
 
         # Phase 3: adversarial hardening with balanced classes
         phase3 = by_type.get("adversarial", [])
         if phase3:
-            # Mix in hard negatives capped to adversarial count for class balance
             neg_for_p3 = hard_negs[:len(phase3)] if hard_negs else []
             phase3 = phase3 + neg_for_p3
             random.shuffle(phase3)
-            logger.info("Phase 3: adversarial hardening (%d examples)", len(phase3))
-            self._train_phase(model, PairDataset(phase3), epochs=1)
+            print(f"          Phase 3: adversarial         ({len(phase3):4d} ex)...", end="", flush=True)
+            last_loss = self._train_phase(model, PairDataset(phase3), epochs=1)
+            print(f"  loss={last_loss:.3f}", flush=True)
+            logger.info("Phase 3 done: loss=%.3f", last_loss)
 
         # Save model
         model.save(model_out)
@@ -268,7 +284,12 @@ class SelectorTrainer:
             logger.info("Val task success: %.3f", val_score)
 
         # Compute threshold tau (Youden's J on val positives/negatives)
-        tau = self._compute_threshold(model, val_data_path) if val_data_path and os.path.exists(val_data_path) else 0.3
+        tau = (
+            self._compute_threshold(model, val_data_path)
+            if val_data_path and os.path.exists(val_data_path)
+            else 0.3
+        )
+        print(f"        Selector v{version} saved.  threshold τ={tau:.2f}", flush=True)
 
         # Query family summary
         family_mix: Dict[str, int] = {}
@@ -297,8 +318,12 @@ class SelectorTrainer:
 
         return sv
 
-    def _train_phase(self, model, train_examples, epochs: int = 1):
-        """Run one training phase."""
+    def _train_phase(self, model, train_examples, epochs: int = 1) -> float:
+        """Run one training phase. Returns training loss."""
+        import contextlib
+        import io
+        import re
+        import warnings
         from torch.utils.data import DataLoader
 
         loader = DataLoader(
@@ -308,13 +333,28 @@ class SelectorTrainer:
         )
         total_steps = len(loader) * epochs
         warmup_steps = int(total_steps * self.warmup_ratio)
-        model.fit(
-            train_dataloader=loader,
-            epochs=epochs,
-            warmup_steps=warmup_steps,
-            optimizer_params={"lr": self.learning_rate},
-            show_progress_bar=False,
-        )
+
+        # Suppress HF Trainer's raw metrics dict print and MPS pin_memory warning.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*pin_memory.*")
+            model.fit(
+                train_dataloader=loader,
+                epochs=epochs,
+                warmup_steps=warmup_steps,
+                optimizer_params={"lr": self.learning_rate},
+                show_progress_bar=False,
+            )
+
+        # Extract train_loss from the Trainer's printed metrics line via regex.
+        for line in buf.getvalue().splitlines():
+            m = re.search(r"'train_loss':\s*['\"]?([0-9.]+)['\"]?", line)
+            if m:
+                try:
+                    return float(m.group(1))
+                except ValueError:
+                    pass
+        return 0.0
 
     def _evaluate(self, model, val_data_path: str) -> float:
         """
@@ -328,8 +368,8 @@ class SelectorTrainer:
         labels = [ex["label"] for ex in examples]
         scores = model.predict(pairs)
         correct = sum(
-            1 for s, l in zip(scores, labels)
-            if (s >= 0.5) == bool(l)
+            1 for s, lbl in zip(scores, labels)
+            if (s >= 0.5) == bool(lbl)
         )
         return correct / len(labels)
 
@@ -348,10 +388,10 @@ class SelectorTrainer:
         best_tau = 0.3
         best_j = -1.0
         for tau in [i / 20 for i in range(1, 20)]:
-            tp = sum(1 for s, l in zip(scores, labels) if s >= tau and l == 1)
-            tn = sum(1 for s, l in zip(scores, labels) if s < tau and l == 0)
-            fp = sum(1 for s, l in zip(scores, labels) if s >= tau and l == 0)
-            fn = sum(1 for s, l in zip(scores, labels) if s < tau and l == 1)
+            tp = sum(1 for s, lbl in zip(scores, labels) if s >= tau and lbl == 1)
+            tn = sum(1 for s, lbl in zip(scores, labels) if s < tau and lbl == 0)
+            fp = sum(1 for s, lbl in zip(scores, labels) if s >= tau and lbl == 0)
+            fn = sum(1 for s, lbl in zip(scores, labels) if s < tau and lbl == 1)
             sens = tp / max(tp + fn, 1)
             spec = tn / max(tn + fp, 1)
             j = sens + spec - 1
