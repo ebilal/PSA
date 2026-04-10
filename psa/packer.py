@@ -101,6 +101,7 @@ def _format_memory_item(
     similarity: Optional[float] = None,
     source_context: Optional[str] = None,
     max_body_chars: int = 300,
+    evidence_text: Optional[str] = None,
 ) -> str:
     """Render a MemoryObject as a bullet point with optional source context."""
     parts = [mo.title]
@@ -114,6 +115,8 @@ def _format_memory_item(
     text = " — ".join(parts)
     if source_context:
         text += f"\n  Source: {source_context}"
+    if evidence_text:
+        parts.append(f"  Source context: {evidence_text}")
     return text
 
 
@@ -151,6 +154,76 @@ def _fetch_source_path(
             return os.path.basename(source.source_path)
     except Exception:
         pass
+    return None
+
+
+def _fetch_evidence_text(
+    store: Optional[MemoryStore],
+    evidence_spans: List,
+    max_chars: int = 500,
+    body_hint: str = "",
+    source_ids: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    Retrieve relevant portions of raw source text.
+
+    Priority:
+    1. Evidence spans (exact offsets into raw source)
+    2. Keyword window (find body_hint terms in raw source, extract surrounding context)
+
+    Returns extracted text or None if no source available.
+    """
+    if not store:
+        return None
+
+    # Try evidence spans first
+    if evidence_spans:
+        chunks = []
+        chars_remaining = max_chars
+        for span in evidence_spans:
+            if chars_remaining <= 0:
+                break
+            try:
+                source = store.get_source(span.source_id)
+                if source and source.full_text:
+                    start = max(0, span.start_offset)
+                    end = min(len(source.full_text), span.end_offset)
+                    chunk = source.full_text[start:end].strip()
+                    if chunk:
+                        chunks.append(chunk)
+                        chars_remaining -= len(chunk)
+            except Exception:
+                continue
+        if chunks:
+            return " ... ".join(chunks)[:max_chars]
+
+    # Fallback: keyword window from raw source
+    if body_hint and source_ids:
+        import re
+
+        hint_words = [w for w in re.findall(r"\b\w{4,}\b", body_hint.lower()) if len(w) > 3]
+        if not hint_words:
+            return None
+        for sid in source_ids[:1]:
+            try:
+                source = store.get_source(sid)
+                if not source or not source.full_text:
+                    continue
+                text_lower = source.full_text.lower()
+                best_pos = -1
+                for word in hint_words:
+                    pos = text_lower.find(word)
+                    if pos >= 0:
+                        best_pos = pos
+                        break
+                if best_pos >= 0:
+                    window = max_chars // 2
+                    start = max(0, best_pos - window)
+                    end = min(len(source.full_text), best_pos + window)
+                    return source.full_text[start:end].strip()
+            except Exception:
+                continue
+
     return None
 
 
@@ -380,16 +453,25 @@ class EvidencePacker:
             # Top-ranked memories get full body text and source provenance
             is_top = rank < TOP_N_WITH_SOURCE
             source_ctx = None
+            evidence_text = None
             if is_top and store:
                 source_file = _fetch_source_path(store, mo.source_ids)
                 if source_file:
                     source_ctx = f"[from {source_file}]"
+                evidence_text = _fetch_evidence_text(
+                    store,
+                    mo.evidence_spans,
+                    max_chars=500,
+                    body_hint=mo.body,
+                    source_ids=mo.source_ids,
+                )
 
             item = _format_memory_item(
                 mo,
                 similarity=relevance if relevance > 0 else None,
                 source_context=source_ctx,
                 max_body_chars=800 if is_top else 300,
+                evidence_text=evidence_text,
             )
             role = mo.memory_type
             if role not in typed_sections:
