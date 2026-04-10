@@ -15,6 +15,7 @@ Usage::
 import json
 import logging
 import os
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -86,8 +87,12 @@ class LifecyclePipeline:
 
         if all_sessions:
             # === FAST PATH: ingest ===
-            print(f"  [1/5] Mining sessions ({len(new_since_last)} new, {len(all_sessions)} total to check)...")
-            mined = self._mine_sessions(all_sessions, tenant_id=tenant_id, store=store, tenant=tenant)
+            print(
+                f"  [1/5] Mining sessions ({len(new_since_last)} new, {len(all_sessions)} total to check)..."
+            )
+            mined = self._mine_sessions(
+                all_sessions, tenant_id=tenant_id, store=store, tenant=tenant
+            )
             summary["memories_mined"] = mined
             has_new_data = has_new_data or mined > 0
             state["last_mine_timestamp"] = now_iso
@@ -111,14 +116,10 @@ class LifecyclePipeline:
             # 4. Per-anchor pruning
             print(f"  [3/5] Pruning overloaded anchors ({len(atlas.cards)} anchors)...")
             total_pruned = 0
-            anchor_budget = int(
-                cfg._file_config.get("anchor_memory_budget", 100)
-            )
+            anchor_budget = int(cfg._file_config.get("anchor_memory_budget", 100))
             for card in atlas.cards:
                 if getattr(card, "status", "active") == "active":
-                    pruned = prune_anchor(
-                        store, tenant_id, card.anchor_id, budget=anchor_budget
-                    )
+                    pruned = prune_anchor(store, tenant_id, card.anchor_id, budget=anchor_budget)
                     total_pruned += pruned
             summary["memories_pruned"] = total_pruned
             if total_pruned:
@@ -156,8 +157,9 @@ class LifecyclePipeline:
 
             # Label queries for selector training (runs every time, not just on rebuild)
             print("  [6/6] Labeling queries for selector training...")
-            labeled = self._label_queries(tenant, store, atlas, sessions_dir,
-                                          batch_size=label_batch_size)
+            labeled = self._label_queries(
+                tenant, store, atlas, sessions_dir, batch_size=label_batch_size
+            )
             summary["queries_labeled"] = labeled
 
             # Retrain selector if training gates are met
@@ -263,14 +265,16 @@ class LifecyclePipeline:
 
         return new_files
 
-    def _mine_sessions(self, session_files: List[str], tenant_id: str = "default",
-                        store=None, tenant=None) -> int:
+    def _mine_sessions(
+        self, session_files: List[str], tenant_id: str = "default", store=None, tenant=None
+    ) -> int:
         """Run consolidation over new session files. Returns memory count."""
         from .consolidation import ConsolidationPipeline
 
         if store is None or tenant is None:
             from .memory_object import MemoryStore
             from .tenant import TenantManager
+
             tm = TenantManager(base_dir=self.base_dir)
             tenant = tm.get_or_create(tenant_id)
             store = MemoryStore(db_path=tenant.memory_db_path)
@@ -279,12 +283,14 @@ class LifecyclePipeline:
         atlas = None
         try:
             from .atlas import AtlasManager
+
             atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
             atlas = atlas_mgr.get_atlas()
         except Exception:
             pass
 
         from .consolidation import is_qwen_available
+
         use_llm = is_qwen_available()
         if not use_llm:
             logger.warning("Qwen not available for lifecycle mining. Skipping LLM consolidation.")
@@ -312,8 +318,9 @@ class LifecyclePipeline:
                 continue
 
             if i % 10 == 1 or i == len(to_process):
-                print(f"        Mining [{i}/{len(to_process)}] {Path(fpath).name[:50]}...",
-                      flush=True)
+                print(
+                    f"        Mining [{i}/{len(to_process)}] {Path(fpath).name[:50]}...", flush=True
+                )
 
             memories = pipeline.consolidate(
                 raw_text=text,
@@ -360,6 +367,7 @@ class LifecyclePipeline:
         labeled_ids = set()
         if os.path.exists(labels_path):
             import json
+
             with open(labels_path) as f:
                 for line in f:
                     line = line.strip()
@@ -374,12 +382,19 @@ class LifecyclePipeline:
             return 0
 
         from .llm import _load_config as _llm_config
+
         llm_cfg = _llm_config()
-        llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
-        remaining_for_gate = max(0, 300 - existing)
+        llm_name = (
+            llm_cfg.get("cloud_model")
+            if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key")
+            else llm_cfg.get("local_model", "local")
+        )
         can_train = existing >= 300
-        status = f"{existing} existing, can train" if can_train else f"{existing} existing, need 300 to start training"
-        print(f"        Scoring {len(queries)} new queries with {llm_name} ({status})...")
+        status = (
+            f"{existing} existing, can train"
+            if can_train
+            else f"{existing} existing, need 300 to start training"
+        )
 
         # Build pipeline for labeling
         try:
@@ -392,16 +407,55 @@ class LifecyclePipeline:
             logger.warning("No atlas available for labeling.")
             return 0
 
+        # Pre-score queries to classify as successful vs poor-performing.
+        # A query is "successful" when the top selector score is >= 0.6;
+        # "poor" when the pipeline returns no anchors or a low top score.
+        # This ensures oracle labels contain both positive and negative signal.
+        _SUCCESS_THRESHOLD = 0.6
+        successful_queries: List = []
+        poor_queries: List = []
+        for qid, query_text in queries:
+            try:
+                result = pipeline.query(query_text, top_k_candidates=8)
+                top_score = (
+                    max(a.selector_score for a in result.selected_anchors)
+                    if result.selected_anchors
+                    else 0.0
+                )
+                if top_score >= _SUCCESS_THRESHOLD:
+                    successful_queries.append((qid, query_text))
+                else:
+                    poor_queries.append((qid, query_text))
+            except Exception:
+                poor_queries.append((qid, query_text))
+
+        # Sample successful queries for balanced oracle labels (1:2 ratio)
+        sampled_success: List = []
+        if successful_queries:
+            n_success_sample = max(len(poor_queries) // 2, 10)
+            sampled_success = random.sample(
+                successful_queries,
+                min(n_success_sample, len(successful_queries)),
+            )
+            queries_to_label = poor_queries + sampled_success
+        else:
+            queries_to_label = poor_queries
+
+        print(
+            f"        Scoring {len(queries_to_label)} queries with {llm_name} "
+            f"({len(poor_queries)} poor, {len(sampled_success)} successful sampled; {status})..."
+        )
+
         labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
         labeled = 0
-        for i, (qid, query_text) in enumerate(queries, 1):
+        for i, (qid, query_text) in enumerate(queries_to_label, 1):
             try:
                 labeler.label(query_id=qid, query=query_text)
                 labeled += 1
                 if labeled % 10 == 0 or labeled == 1:
-                    print(f"        [{labeled}/{len(queries)}] scored...", flush=True)
+                    print(f"        [{labeled}/{len(queries_to_label)}] scored...", flush=True)
             except Exception as e:
-                print(f"        [{i}/{len(queries)}] FAILED: {e}", flush=True)
+                print(f"        [{i}/{len(queries_to_label)}] FAILED: {e}", flush=True)
 
         total = existing + labeled
         can_train = "ready to train" if total >= 300 else f"{300 - total} more needed to train"
