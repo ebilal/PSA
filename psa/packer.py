@@ -16,7 +16,7 @@ on raw retrieval results.
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .memory_object import MemoryObject, MemoryStore, MemoryType
 
@@ -105,7 +105,7 @@ def _format_memory_item(
     """Render a MemoryObject as a bullet point with optional source context."""
     parts = [mo.title]
     if mo.body and mo.body != mo.title:
-        body = mo.body if len(mo.body) <= max_body_chars else mo.body[:max_body_chars - 3] + "..."
+        body = mo.body if len(mo.body) <= max_body_chars else mo.body[: max_body_chars - 3] + "..."
         parts.append(body)
     if mo.memory_type == MemoryType.EPISODIC and mo.success_label is not None:
         parts.append(f"outcome: {'success' if mo.success_label else 'failure'}")
@@ -126,9 +126,9 @@ def _compute_relevance(
         return [0.0] * len(memories)
     try:
         from .embeddings import EmbeddingModel
+
         return [
-            EmbeddingModel.cosine_similarity(query_vec, mo.embedding)
-            if mo.embedding else 0.0
+            EmbeddingModel.cosine_similarity(query_vec, mo.embedding) if mo.embedding else 0.0
             for mo in memories
         ]
     except Exception:
@@ -147,6 +147,7 @@ def _fetch_source_path(
         if source and source.source_path:
             # Show just the filename, not the full path
             import os
+
             return os.path.basename(source.source_path)
     except Exception:
         pass
@@ -319,6 +320,8 @@ class EvidencePacker:
         token_budget: int = 6000,
         query_vec: Optional[List[float]] = None,
         store: Optional[MemoryStore] = None,
+        selector_scores: Optional[Dict[int, float]] = None,
+        packer_weights: Optional[Tuple[float, float, float]] = None,
     ) -> PackedContext:
         """
         Pack MemoryObjects directly (used when memories are retrieved via PSA path).
@@ -340,12 +343,24 @@ class EvidencePacker:
         # Compute per-memory relevance to the query
         relevances = _compute_relevance(memories, query_vec)
 
-        # Combine relevance (primary) with quality (secondary) for ranking
-        scored = sorted(
-            zip(memories, relevances),
-            key=lambda pair: (pair[1] * 0.7 + pair[0].quality_score * 0.3),
-            reverse=True,
-        )
+        # Combine relevance with quality and optional selector scores for ranking
+        if selector_scores and packer_weights:
+            w_sel, w_cos, w_qual = packer_weights
+            scored = sorted(
+                zip(memories, relevances),
+                key=lambda pair: (
+                    w_sel * selector_scores.get(pair[0].primary_anchor_id, 0.0)
+                    + w_cos * pair[1]
+                    + w_qual * pair[0].quality_score
+                ),
+                reverse=True,
+            )
+        else:
+            scored = sorted(
+                zip(memories, relevances),
+                key=lambda pair: pair[1] * 0.7 + pair[0].quality_score * 0.3,
+                reverse=True,
+            )
 
         # Top N memories get source context and full body text
         TOP_N_WITH_SOURCE = 10

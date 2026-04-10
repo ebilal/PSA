@@ -150,10 +150,7 @@ def test_pack_memories_direct_failure_before_procedural(packer_direct):
 
 def test_pack_memories_direct_budget_enforcement(packer_direct):
     # Create many memories with long bodies
-    memories = [
-        _make_memory(MemoryType.SEMANTIC, f"Fact {i}", "word " * 200)
-        for i in range(50)
-    ]
+    memories = [_make_memory(MemoryType.SEMANTIC, f"Fact {i}", "word " * 200) for i in range(50)]
     packed = packer_direct.pack_memories_direct("query", memories, token_budget=1000)
     assert packed.token_count <= 1000 + 100
 
@@ -200,3 +197,21 @@ def test_token_count_approximate():
     # 400 chars ≈ 100 tokens
     text = "x" * 400
     assert _token_count(text) == 100
+
+
+def test_pack_memories_direct_accepts_selector_scores():
+    """pack_memories_direct should accept optional selector_scores dict."""
+    import inspect
+    from psa.packer import EvidencePacker
+
+    sig = inspect.signature(EvidencePacker.pack_memories_direct)
+    assert "selector_scores" in sig.parameters
+
+
+def test_pack_memories_direct_accepts_packer_weights():
+    """pack_memories_direct should accept optional packer_weights tuple."""
+    import inspect
+    from psa.packer import EvidencePacker
+
+    sig = inspect.signature(EvidencePacker.pack_memories_direct)
+    assert "packer_weights" in sig.parameters

@@ -123,6 +123,7 @@ class PSAPipeline:
 
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
+        self._packer_weights = (0.4, 0.3, 0.3)  # (selector, cosine, quality) — default balanced
 
     def query(
         self,
@@ -221,12 +222,21 @@ class PSAPipeline:
 
         # Step 5: Pack context
         t0 = time.perf_counter()
+
+        # Build anchor_id → selector_score map for packer weighting
+        selector_scores = {sa.anchor_id: sa.selector_score for sa in selected}
+        packer_weights = None
+        if self.selector.mode == "trained":
+            packer_weights = self._packer_weights
+
         packed = self._packer.pack_memories_direct(
             query=query,
             memories=memories,
             token_budget=self.token_budget,
             query_vec=query_vec,
             store=self.store,
+            selector_scores=selector_scores,
+            packer_weights=packer_weights,
         )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
