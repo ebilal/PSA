@@ -587,20 +587,85 @@ The selector trains and infers on **stable card text only** (name + meaning + te
 
 ---
 
-## MCP Server
+## MCP Server — Claude CLI Integration
 
-```bash
-claude mcp add psa -- uv run --project /path/to/PSA python -m psa.mcp_server
+PSA integrates with Claude Code as a memory server via MCP. When Claude calls
+`psa_atlas_search`, it receives a formatted context block drawn from your typed
+memory objects — identical to what `psa inspect` shows you.
+
+### Install
+
+```
+claude mcp add psa -- python -m psa.mcp_server
 ```
 
-### Tools
+This registers PSA as a persistent MCP server. Claude calls `psa_status` on
+session start, which returns the PALACE_PROTOCOL instructing Claude to call
+`psa_atlas_search` before answering about any past decision or event.
 
-- `psa_atlas_search` — full pipeline query → packed context
-- `psa_store_memory` — add a typed memory object directly
-- `psa_atlas_status` — version, anchor count, memory count
-- `psa_list_anchors` — anchor cards + utilization
-- `psa_atlas_health` — novelty rate, skew, rebuild recommendation
-- `psa_rebuild_atlas` — trigger rebuild
+### What Claude receives
+
+`psa_atlas_search` runs the full pipeline and returns formatted context like:
+
+```
+PSA MEMORY CONTEXT — what auth pattern did we use?
+============================================================
+
+FAILURE WARNINGS
+- Auth token stored in localStorage — caused XSS exposure in March
+
+PROCEDURAL GUIDANCE
+- Always validate JWT expiry server-side before trusting claims
+
+FACTS & CONCEPTS
+- RS256 signed JWTs with 15-minute expiry and refresh tokens
+```
+
+### Available MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `psa_atlas_search` | Full pipeline query — retrieves and packs relevant memories |
+| `psa_store_memory` | Store a typed memory object directly |
+| `psa_status` | Palace overview + wake-up protocol |
+| `psa_atlas_status` | Atlas version, anchor count, memory count |
+| `psa_atlas_health` | Health report (novelty rate, utilization skew) |
+| `psa_list_anchors` | All anchors with utilization stats |
+| `psa_rebuild_atlas` | Trigger atlas rebuild |
+| `psa_search` | Legacy ChromaDB semantic search |
+| `psa_add_drawer` | Store raw content in the legacy palace |
+
+## Observability — Inspect What Claude Sees
+
+See exactly what context PSA injects into Claude's context window for any query:
+
+```bash
+psa inspect "what auth pattern did we use?"
+```
+
+Output:
+```
+Query: 'what auth pattern did we use?'
+Tenant: default  |  Run: 20260410T143201_a3f91c
+
+CONTEXT INJECTED (847 tokens / 6,000 budget)
+────────────────────────────────────────────────────────────
+PSA MEMORY CONTEXT — what auth pattern did we use?
+...
+────────────────────────────────────────────────────────────
+Anchors selected (2/24): auth-jwt-pattern, session-security-incidents
+Timing: embed 12ms | retrieve 34ms | select 8ms | fetch 5ms | pack 3ms | total 62ms
+```
+
+Add `--verbose` to see all 24 anchor candidates with BM25/dense/selector scores.
+
+Every `psa inspect` call is logged to `~/.psa/tenants/{tenant_id}/query_log.jsonl`:
+
+```bash
+psa log list                              # recent queries
+psa log show 20260410T143201_a3f91c       # full entry as JSON
+psa log diff --query "auth pattern"       # diff last 2 runs for same query
+```
 
 ---
 

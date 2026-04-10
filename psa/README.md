@@ -1,40 +1,44 @@
-# mempalace/ — Core Package
+# psa/ — Core Package
 
-The Python package that powers MemPalace. All modules, all logic.
+The Python package that powers PSA.
 
 ## Modules
 
 | Module | What it does |
 |--------|-------------|
-| `cli.py` | CLI entry point — routes to mine, search, init, compress, wake-up |
-| `config.py` | Configuration loading — `~/.mempalace/config.json`, env vars, defaults |
-| `normalize.py` | Converts 5 chat formats (Claude Code JSONL, Claude.ai JSON, ChatGPT JSON, Slack JSON, plain text) to standard transcript format |
-| `miner.py` | Project file ingest — scans directories, chunks by paragraph, stores to ChromaDB |
-| `convo_miner.py` | Conversation ingest — chunks by exchange pair (Q+A), detects rooms from content |
-| `searcher.py` | Semantic search via ChromaDB vectors — filters by wing/room, returns verbatim + scores |
-| `layers.py` | 4-layer memory stack: L0 (identity), L1 (critical facts), L2 (room recall), L3 (deep search) |
-| `dialect.py` | AAAK compression — entity codes, emotion markers, 30x lossless ratio |
-| `knowledge_graph.py` | Temporal entity-relationship graph — SQLite, time-filtered queries, fact invalidation |
-| `palace_graph.py` | Room-based navigation graph — BFS traversal, tunnel detection across wings |
-| `mcp_server.py` | MCP server — 19 tools, AAAK auto-teach, Palace Protocol, agent diary |
-| `onboarding.py` | Guided first-run setup — asks about people/projects, generates AAAK bootstrap + wing config |
-| `entity_registry.py` | Entity code registry — maps names to AAAK codes, handles ambiguous names |
-| `entity_detector.py` | Auto-detect people and projects from file content |
-| `general_extractor.py` | Classifies text into 5 memory types (decision, preference, milestone, problem, emotional) |
-| `room_detector_local.py` | Maps folders to room names using 70+ patterns — no API |
-| `spellcheck.py` | Name-aware spellcheck — won't "correct" proper nouns in your entity registry |
-| `split_mega_files.py` | Splits concatenated transcript files into per-session files |
+| `cli.py` | CLI entry point — routes mine, search, inspect, atlas, train, benchmark |
+| `config.py` | Configuration — env vars, `~/.psa/config.json`, defaults |
+| `memory_object.py` | `MemoryObject` dataclass and `MemoryStore` SQLite backend |
+| `pipeline.py` | `PSAPipeline` — retriever → selector → packer |
+| `retriever.py` | `AnchorRetriever` — BM25 + dense hybrid, RRF fusion |
+| `selector.py` | `AnchorSelector` — cosine baseline or trained cross-encoder |
+| `packer.py` | `EvidencePacker` — role-organized sections under token budget |
+| `atlas.py` | `AtlasBuilder` + `AtlasManager` — spherical k-means clustering |
+| `anchor.py` | `AnchorCard` + `AnchorIndex` — FAISS index over anchor centroids |
+| `embeddings.py` | `EmbeddingModel` — BAAI/bge-base-en-v1.5, 768-dim, L2-normalized |
+| `inspect.py` | `inspect_query()` — full pipeline trace + query log for observability |
+| `mcp_server.py` | MCP server for Claude and other MCP-compatible agents |
+| `miner.py` | Project file ingest — scans dirs, chunks, stores to SQLite |
+| `convo_miner.py` | Conversation ingest — chunks by exchange pair, stores to SQLite |
+| `consolidation.py` | LLM-driven memory extraction — chunks, calls LLM, filters, deduplicates |
+| `normalize.py` | Converts chat formats (Claude Code, Claude.ai, ChatGPT, Slack, plain text) |
+| `searcher.py` | ChromaDB semantic search (legacy palace path) |
+| `tenant.py` | Tenant directory management |
+| `llm.py` | Unified LLM caller — local (Ollama) + cloud (LiteLLM) with fallback |
+| `entity_registry.py` | Entity code registry |
+| `entity_detector.py` | Auto-detects people and projects from file content |
+| `health.py` | Atlas health checks |
+| `lifecycle.py` | Nightly lifecycle pipeline — label, train, rebuild |
+| `forgetting.py` | Retention scoring and memory expiry |
+| `spellcheck.py` | Name-aware spellcheck |
+| `split_mega_files.py` | Splits concatenated transcript files |
+| `migrate.py` | Migrates ChromaDB palace to PSA MemoryStore |
+| `hooks_cli.py` | Claude Code hook handlers |
+| `version.py` | Package version |
 
-## Architecture
+## Sub-packages
 
-```
-User → CLI → miner/convo_miner → ChromaDB (palace)
-                                     ↕
-                              knowledge_graph (SQLite)
-                                     ↕
-User → MCP Server → searcher → results
-                  → kg_query → entity facts
-                  → diary    → agent journal
-```
-
-The palace (ChromaDB) stores verbatim content. The knowledge graph (SQLite) stores structured relationships. The MCP server exposes both to any AI tool.
+| Sub-package | What it does |
+|-------------|-------------|
+| `training/` | Selector training: oracle labeler, data generator, train script |
+| `benchmarks/` | Benchmark harnesses: LongMemEval ingest / run / score |
