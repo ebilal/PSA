@@ -13,8 +13,7 @@ Usage:
 import logging
 from typing import List, Optional
 
-import numpy as np
-
+from .embeddings import EmbeddingModel
 from .llm import call_llm
 from .memory_object import MemoryObject
 
@@ -23,16 +22,6 @@ logger = logging.getLogger("psa.synthesizer")
 MAX_MEMORIES_DEFAULT = 30
 TOKEN_BUDGET_DEFAULT = 700
 CHARS_PER_TOKEN = 4
-
-
-def _cosine_sim(a: List[float], b: List[float]) -> float:
-    va = np.asarray(a, dtype=np.float32)
-    vb = np.asarray(b, dtype=np.float32)
-    norm_a = np.linalg.norm(va)
-    norm_b = np.linalg.norm(vb)
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
 class AnchorSynthesizer:
@@ -81,7 +70,9 @@ class AnchorSynthesizer:
         if query_vec is not None:
             ranked = sorted(
                 memories,
-                key=lambda m: _cosine_sim(m.embedding, query_vec) if m.embedding else 0.0,
+                key=lambda m: (
+                    EmbeddingModel.cosine_similarity(m.embedding, query_vec) if m.embedding else 0.0
+                ),
                 reverse=True,
             )
         else:
@@ -97,9 +88,21 @@ class AnchorSynthesizer:
             memory_lines.append(line)
 
         memory_text = "\n".join(memory_lines)
-        max_input_chars = max_memories * 250
+        # Cap input to avoid overrunning LLM context.
+        # Reserve ~2x the output budget for prompt overhead; remaining space for memories.
+        max_input_tokens = max(token_budget * 4, 2000)  # generous input budget
+        max_input_chars = max_input_tokens * CHARS_PER_TOKEN
         if len(memory_text) > max_input_chars:
-            memory_text = memory_text[:max_input_chars]
+            # Trim whole lines rather than mid-sentence
+            lines = memory_text.split("\n")
+            trimmed_lines = []
+            chars = 0
+            for line in lines:
+                if chars + len(line) + 1 > max_input_chars:
+                    break
+                trimmed_lines.append(line)
+                chars += len(line) + 1
+            memory_text = "\n".join(trimmed_lines)
 
         prompt = (
             f"You are synthesizing memory context for an AI assistant.\n\n"
