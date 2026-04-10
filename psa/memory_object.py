@@ -384,19 +384,38 @@ class MemoryStore:
         blob = self._encode_embedding(mo.embedding)
         dim = len(mo.embedding) if mo.embedding else None
         return (
-            mo.memory_object_id, mo.tenant_id, mo.memory_type.value,
-            mo.title, mo.body, mo.summary,
-            json.dumps(mo.source_ids), json.dumps(mo.evidence_chunk_ids),
+            mo.memory_object_id,
+            mo.tenant_id,
+            mo.memory_type.value,
+            mo.title,
+            mo.body,
+            mo.summary,
+            json.dumps(mo.source_ids),
+            json.dumps(mo.evidence_chunk_ids),
             json.dumps([asdict(s) for s in mo.evidence_spans]),
-            mo.classification_reason, mo.created_at, mo.updated_at,
-            blob, dim, mo.embedding_ref,
-            mo.primary_anchor_id, json.dumps(mo.secondary_anchor_ids),
-            mo.assignment_confidence, mo.task_type, json.dumps(mo.tool_names),
+            mo.classification_reason,
+            mo.created_at,
+            mo.updated_at,
+            blob,
+            dim,
+            mo.embedding_ref,
+            mo.primary_anchor_id,
+            json.dumps(mo.secondary_anchor_ids),
+            mo.assignment_confidence,
+            mo.task_type,
+            json.dumps(mo.tool_names),
             (1 if mo.success_label else 0) if mo.success_label is not None else None,
-            mo.quality_score, mo.validity_interval, mo.acl_scope,
-            1 if mo.is_duplicate else 0, mo.duplicate_of,
-            mo.select_count, mo.pack_count, mo.last_selected, mo.last_packed,
-            1 if mo.is_archived else 0, mo.archived_at,
+            mo.quality_score,
+            mo.validity_interval,
+            mo.acl_scope,
+            1 if mo.is_duplicate else 0,
+            mo.duplicate_of,
+            mo.select_count,
+            mo.pack_count,
+            mo.last_selected,
+            mo.last_packed,
+            1 if mo.is_archived else 0,
+            mo.archived_at,
         )
 
     def batch_add(self, memories: List[MemoryObject]) -> List[str]:
@@ -554,7 +573,9 @@ class MemoryStore:
             ).fetchall()
         return [self._row_to_memory_object(r) for r in rows]
 
-    def get_by_source_id(self, source_id: str, tenant_id: Optional[str] = None) -> Optional[MemoryObject]:
+    def get_by_source_id(
+        self, source_id: str, tenant_id: Optional[str] = None
+    ) -> Optional[MemoryObject]:
         """Return the first MemoryObject linked to a given source_id, or None."""
         if tenant_id:
             query = """
@@ -573,6 +594,54 @@ class MemoryStore:
         with self._connect() as conn:
             row = conn.execute(query, params).fetchone()
         return self._row_to_memory_object(row) if row else None
+
+    def get_by_source_session(
+        self, session_id: str, tenant_id: Optional[str] = None
+    ) -> List[MemoryObject]:
+        """
+        Return all MemoryObjects whose source records have a source_path containing session_id.
+
+        Used by backtrack_gold_anchors() to find which anchors contain memories
+        from a known ground-truth session (e.g. LongMemEval answer_session_ids).
+        """
+        with self._connect() as conn:
+            # Find source_ids for raw_sources whose path contains the session_id
+            if tenant_id:
+                source_rows = conn.execute(
+                    "SELECT source_id FROM raw_sources WHERE source_path LIKE ? AND tenant_id = ?",
+                    (f"%{session_id}%", tenant_id),
+                ).fetchall()
+            else:
+                source_rows = conn.execute(
+                    "SELECT source_id FROM raw_sources WHERE source_path LIKE ?",
+                    (f"%{session_id}%",),
+                ).fetchall()
+
+            if not source_rows:
+                return []
+
+            source_ids = [r["source_id"] for r in source_rows]
+
+            # Find memory_objects linked to any of those source_ids
+            placeholders = ",".join("?" * len(source_ids))
+            if tenant_id:
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT mo.* FROM memory_objects mo, json_each(mo.source_ids_json) je
+                    WHERE je.value IN ({placeholders}) AND mo.tenant_id = ?
+                    """,
+                    (*source_ids, tenant_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT mo.* FROM memory_objects mo, json_each(mo.source_ids_json) je
+                    WHERE je.value IN ({placeholders})
+                    """,
+                    source_ids,
+                ).fetchall()
+
+        return [self._row_to_memory_object(r) for r in rows]
 
     def update_anchor_assignment(
         self,
@@ -672,9 +741,7 @@ class MemoryStore:
 
     # ── Lifecycle / forgetting ──────────────────────────────────────────────
 
-    def query_by_anchor_for_pruning(
-        self, tenant_id: str, anchor_id: int
-    ) -> List[MemoryObject]:
+    def query_by_anchor_for_pruning(self, tenant_id: str, anchor_id: int) -> List[MemoryObject]:
         """Return ALL non-archived memories for an anchor, ordered worst-first."""
         with self._connect() as conn:
             rows = conn.execute(
@@ -708,6 +775,7 @@ class MemoryStore:
     def delete_old_archived(self, tenant_id: str, older_than_days: int = 90) -> int:
         """Hard-delete memories archived more than older_than_days ago."""
         from datetime import timedelta
+
         cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
         conn = self._connect()
         cur = conn.execute(
