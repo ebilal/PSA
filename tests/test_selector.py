@@ -1,6 +1,6 @@
 """Tests for psa.selector — AnchorSelector (cosine mode) and check_training_gates."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -8,10 +8,12 @@ from psa.anchor import AnchorCard
 from psa.retriever import AnchorCandidate
 from psa.selector import (
     AnchorSelector,
+    DEFAULT_MAX_K,
     SelectedAnchor,
-    TrainingGateStatus,
+    TRAINED_THRESHOLD_MAX,
     check_training_gates,
     _cosine_select,
+    _trained_select,
 )
 
 
@@ -108,7 +110,7 @@ def test_selector_selects_candidates():
     candidates = [_make_candidate(i, float(5 - i)) for i in range(5)]
     selected = sel.select(query="auth", candidates=candidates)
     assert len(selected) >= 1
-    assert len(selected) <= 4
+    assert len(selected) <= DEFAULT_MAX_K
 
 
 def test_selector_returns_selected_anchor_type():
@@ -230,3 +232,66 @@ def test_gates_status_fields():
     assert status.held_out_count == 300
     assert status.shortlist_recall_24 == 0.97
     assert "single_anchor" in status.query_family_counts
+
+
+# ── New constant / fallback tests ─────────────────────────────────────────────
+
+
+def test_default_max_k_is_6():
+    assert DEFAULT_MAX_K == 6
+
+
+def test_trained_threshold_max_is_025():
+    assert TRAINED_THRESHOLD_MAX == 0.25
+
+
+def test_trained_select_fallback_on_zero_anchors():
+    """When cross-encoder scores are all below threshold, top-1 is returned as fallback."""
+    candidates = [
+        _make_candidate(0, 0.9),
+        _make_candidate(1, 0.8),
+        _make_candidate(2, 0.7),
+    ]
+
+    mock_ce = MagicMock()
+    # All scores well below threshold
+    mock_ce.predict.return_value = [0.05, 0.03, 0.01]
+
+    selected = _trained_select(
+        query="what is the answer",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.3,
+    )
+
+    # Fallback: exactly 1 anchor returned (the top-scoring one)
+    assert len(selected) == 1
+    assert selected[0].mode == "trained"
+
+
+def test_trained_select_respects_threshold_when_above():
+    """Scores above threshold are all selected; no fallback triggered."""
+    candidates = [
+        _make_candidate(0, 0.9),
+        _make_candidate(1, 0.8),
+        _make_candidate(2, 0.7),
+    ]
+
+    mock_ce = MagicMock()
+    # All scores above threshold=0.3
+    mock_ce.predict.return_value = [0.9, 0.8, 0.7]
+
+    selected = _trained_select(
+        query="what is the answer",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.3,
+    )
+
+    assert len(selected) == 3
+    assert all(s.mode == "trained" for s in selected)
+    # Sorted descending by score
+    scores = [s.selector_score for s in selected]
+    assert scores == sorted(scores, reverse=True)

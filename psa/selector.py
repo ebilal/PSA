@@ -21,7 +21,7 @@ the gap to readiness.
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from .retriever import AnchorCandidate
 
@@ -29,12 +29,15 @@ logger = logging.getLogger("psa.selector")
 
 # ── Selector config ───────────────────────────────────────────────────────────
 
-DEFAULT_MAX_K = 4        # maximum anchors to return
-DEFAULT_THRESHOLD = 0.0  # cosine sims to centroids are always 0.4-0.7; threshold is only useful in trained mode
+DEFAULT_MAX_K = 6  # maximum anchors to return
+DEFAULT_THRESHOLD = (
+    0.0  # cosine sims to centroids are always 0.4-0.7; threshold is only useful in trained mode
+)
 
 # Trained mode settings
-TRAINED_MAX_SEQ = 320    # max input tokens for cross-encoder
+TRAINED_MAX_SEQ = 320  # max input tokens for cross-encoder
 TRAINED_THRESHOLD_DEFAULT = 0.3  # score threshold in trained mode
+TRAINED_THRESHOLD_MAX = 0.25  # fallback cap: if all scores below this, still return top-1
 
 
 # ── Dataclass ─────────────────────────────────────────────────────────────────
@@ -46,7 +49,7 @@ class SelectedAnchor:
 
     anchor_id: int
     selector_score: float
-    mode: str   # "cosine" | "trained"
+    mode: str  # "cosine" | "trained"
     candidate: AnchorCandidate
 
 
@@ -96,6 +99,7 @@ def _load_cross_encoder(model_path: str):
     """Load a fine-tuned cross-encoder from disk."""
     try:
         from sentence_transformers.cross_encoder import CrossEncoder
+
         return CrossEncoder(model_path, max_length=TRAINED_MAX_SEQ)
     except ImportError:
         raise ImportError(
@@ -125,15 +129,13 @@ def _trained_select(
     except Exception as e:
         logger.warning("Cross-encoder prediction failed (%s); falling back to cosine", e)
         return _cosine_select(
-            query_vec=[],        # unused by _cosine_select (sorts by dense_score)
+            query_vec=[],  # unused by _cosine_select (sorts by dense_score)
             candidates=candidates,
             max_k=max_k,
-            threshold=0.0,      # no threshold in fallback — always return top-k
+            threshold=0.0,  # no threshold in fallback — always return top-k
         )
 
-    scored = sorted(
-        zip(candidates, scores), key=lambda x: x[1], reverse=True
-    )
+    scored = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
 
     selected = []
     for cand, score in scored[:max_k]:
@@ -145,6 +147,25 @@ def _trained_select(
                 selector_score=float(score),
                 mode="trained",
                 candidate=cand,
+            )
+        )
+
+    # Zero-anchor fallback: always return at least the top-1 candidate so the
+    # packer is never handed an empty anchor list (65% of queries were failing
+    # the threshold when the cross-encoder was poorly calibrated).
+    if not selected and scored:
+        top_cand, top_score = scored[0]
+        logger.debug(
+            "Trained selector threshold rejected all candidates; "
+            "returning top-1 fallback (score=%.4f)",
+            float(top_score),
+        )
+        selected.append(
+            SelectedAnchor(
+                anchor_id=top_cand.anchor_id,
+                selector_score=float(top_score),
+                mode="trained",
+                candidate=top_cand,
             )
         )
 
@@ -241,7 +262,12 @@ class AnchorSelector:
         return cls(mode="cosine", max_k=max_k)
 
     @classmethod
-    def trained(cls, model_path: str, threshold: float = TRAINED_THRESHOLD_DEFAULT, max_k: int = DEFAULT_MAX_K) -> "AnchorSelector":
+    def trained(
+        cls,
+        model_path: str,
+        threshold: float = TRAINED_THRESHOLD_DEFAULT,
+        max_k: int = DEFAULT_MAX_K,
+    ) -> "AnchorSelector":
         """Convenience constructor for trained mode."""
         return cls(mode="trained", model_path=model_path, threshold=threshold, max_k=max_k)
 
@@ -279,19 +305,13 @@ def check_training_gates(
     reasons = []
 
     if oracle_count < oracle_min:
-        reasons.append(
-            f"oracle_count {oracle_count} < {oracle_min} required"
-        )
+        reasons.append(f"oracle_count {oracle_count} < {oracle_min} required")
 
     if held_out_count is not None and held_out_count < held_out_min:
-        reasons.append(
-            f"held_out_count {held_out_count} < {held_out_min} required"
-        )
+        reasons.append(f"held_out_count {held_out_count} < {held_out_min} required")
 
     if shortlist_recall_24 is not None and shortlist_recall_24 < recall_min:
-        reasons.append(
-            f"shortlist recall@24 {shortlist_recall_24:.3f} < {recall_min:.3f} required"
-        )
+        reasons.append(f"shortlist recall@24 {shortlist_recall_24:.3f} < {recall_min:.3f} required")
     elif shortlist_recall_24 is None:
         reasons.append("shortlist recall@24 not yet measured")
 
