@@ -136,8 +136,10 @@ class InspectResult:
         }
 
 
-def _run_id(query: str) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+def _run_id(query: str, now: Optional[datetime] = None) -> str:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    ts = now.strftime("%Y%m%dT%H%M%S")
     q_hash = hashlib.md5(query.encode(), usedforsecurity=False).hexdigest()[:6]
     return f"{ts}_{q_hash}"
 
@@ -147,12 +149,12 @@ def _log_path(tenant_id: str, base_dir: Optional[str] = None) -> str:
         tenant_dir = os.path.join(base_dir, "tenants", tenant_id)
     else:
         tenant_dir = os.path.expanduser(f"~/.psa/tenants/{tenant_id}")
-    os.makedirs(tenant_dir, exist_ok=True)
     return os.path.join(tenant_dir, "query_log.jsonl")
 
 
 def _append_log(result: "InspectResult", base_dir: Optional[str] = None) -> None:
     path = _log_path(result.tenant_id, base_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(result.to_dict()) + "\n")
 
@@ -222,8 +224,9 @@ def inspect_query(
         for sec in result.packed_context.sections
     ]
 
+    now = datetime.now(timezone.utc)
     inspect_result = InspectResult(
-        run_id=_run_id(query),
+        run_id=_run_id(query, now),
         query=query,
         tenant_id=tenant_id,
         context_text=result.text,
@@ -233,7 +236,7 @@ def inspect_query(
         selected_anchor_ids=list(selected_ids),
         candidates=candidates,
         timing=result.timing,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=now.isoformat(),
     )
 
     if write_log:
@@ -258,5 +261,5 @@ def load_log(
                 try:
                     entries.append(json.loads(line))
                 except json.JSONDecodeError:
-                    pass
+                    logger.warning("Skipping malformed line in query log: %s", path)
     return list(reversed(entries))
