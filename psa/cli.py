@@ -1365,6 +1365,8 @@ def main():
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)
     p_lme_score.add_argument("--method", default="both", choices=["exact", "llm", "both"])
+    p_lme_oracle = lme_sub.add_parser("oracle-label", help="Run full oracle labeling on results")
+    p_lme_oracle.add_argument("--results", default=None, help="Results JSONL (auto-detects latest)")
 
     # migrate
     p_migrate = sub.add_parser(
