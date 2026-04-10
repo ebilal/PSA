@@ -38,6 +38,7 @@ EPOCHS = 3
 MAX_SEQ_LEN = 320
 WARMUP_RATIO = 0.1
 MARGIN_LOSS_WEIGHT = 0.2
+THRESHOLD_MAX_CAP = 0.25
 
 
 # ── Training record ───────────────────────────────────────────────────────────
@@ -388,31 +389,36 @@ class SelectorTrainer:
 
     def _compute_threshold(self, model, val_data_path: str) -> float:
         """
-        Find threshold tau via Youden's J (sensitivity + specificity - 1).
-        Returns the optimal decision boundary.
+        Find threshold tau via F-beta (beta=2, recall-weighted).
+        Threshold is capped at THRESHOLD_MAX_CAP to prevent over-filtering.
         """
         examples = _load_training_data(val_data_path)
         if not examples:
-            return 0.3
-        pairs = [(ex["query"], ex["anchor_card"]) for ex in examples]
-        labels = [ex["label"] for ex in examples]
+            return 0.15
+        pairs = [(ex["query"], ex["anchor_card"]) for ex in examples if ex.get("label") is not None]
+        labels = [ex["label"] for ex in examples if ex.get("label") is not None]
+        if not pairs:
+            return 0.15
         scores = model.predict(pairs)
 
-        best_tau = 0.3
-        best_j = -1.0
+        beta = 2.0
+        beta_sq = beta * beta
+        best_tau = 0.15
+        best_fbeta = -1.0
+
         for tau in [i / 20 for i in range(1, 20)]:
             tp = sum(1 for s, lbl in zip(scores, labels) if s >= tau and lbl == 1)
-            tn = sum(1 for s, lbl in zip(scores, labels) if s < tau and lbl == 0)
             fp = sum(1 for s, lbl in zip(scores, labels) if s >= tau and lbl == 0)
             fn = sum(1 for s, lbl in zip(scores, labels) if s < tau and lbl == 1)
-            sens = tp / max(tp + fn, 1)
-            spec = tn / max(tn + fp, 1)
-            j = sens + spec - 1
-            if j > best_j:
-                best_j = j
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            denom = (beta_sq * precision) + recall
+            fbeta = ((1 + beta_sq) * precision * recall / denom) if denom > 0 else 0.0
+            if fbeta > best_fbeta:
+                best_fbeta = fbeta
                 best_tau = tau
 
-        return best_tau
+        return min(best_tau, THRESHOLD_MAX_CAP)
 
 
 if __name__ == "__main__":
