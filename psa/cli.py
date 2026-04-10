@@ -748,18 +748,72 @@ def cmd_log(args):
         _print_log_diff(e_old, e_new)
 
 
+def _cmd_longmemeval(args):
+    """Handle longmemeval benchmark subcommands."""
+    from .benchmarks.longmemeval import ingest, run, score
+
+    lme_action = getattr(args, "lme_action", None)
+    tenant_id = getattr(args, "tenant", "longmemeval_bench")
+
+    if lme_action == "ingest":
+        print(f"Ingesting LongMemEval sessions into tenant '{tenant_id}'...")
+        ingest(tenant_id=tenant_id)
+        print("Done. Run 'psa benchmark longmemeval run' to benchmark.")
+
+    elif lme_action == "run":
+        split = getattr(args, "split", "val")
+        limit = getattr(args, "limit", None)
+        print(f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions)...")
+        out_path = run(split=split, limit=limit, tenant_id=tenant_id)
+        print(f"Results: {out_path}")
+        print("Run 'psa benchmark longmemeval score' next.")
+
+    elif lme_action == "score":
+        results_file = getattr(args, "results", None)
+        method = getattr(args, "method", "both")
+
+        if not results_file:
+            import glob
+            results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
+            files = sorted(glob.glob(os.path.join(results_dir, "results_*.jsonl")))
+            if not files:
+                print("No results files found. Run 'psa benchmark longmemeval run' first.")
+                sys.exit(1)
+            results_file = files[-1]
+            print(f"Scoring: {results_file}")
+
+        stats = score(results_file, method=method, tenant_id=tenant_id)
+        print(f"\nLongMemEval Score")
+        print(f"  Questions:     {stats['n_questions']}")
+        print(f"  Exact F1:      {stats['exact_f1']:.3f}")
+        if "llm_score" in stats:
+            print(f"  LLM-as-judge:  {stats['llm_score']:.3f}")
+        print(f"\nOracle labels written: {stats['oracle_labels_written']}")
+        print(f"  -> {stats['oracle_labels_path']}")
+        print("\nRun 'psa train' to train the selector on these labels.")
+
+    else:
+        print("Usage: psa benchmark longmemeval ingest|run|score")
+        sys.exit(1)
+
+
 def cmd_benchmark(args):
-    """Compare PSA pipeline vs raw ChromaDB search."""
-    print("PSA benchmark mode — comparing PSA pipeline vs raw ChromaDB search.")
-    print("(Full benchmarking requires a populated palace and atlas. Run 'psa mine' and 'psa atlas build' first.)")
-
-    tenant_id = getattr(args, "tenant", "default")
-    query = getattr(args, "query", None)
-
-    if not query:
-        print("Usage: psa benchmark --query 'your query here'")
+    """Benchmark commands — longmemeval harness or quick PSA vs ChromaDB comparison."""
+    bench_cmd = getattr(args, "bench_cmd", None)
+    if bench_cmd == "longmemeval":
+        _cmd_longmemeval(args)
         return
 
+    query = getattr(args, "query", None)
+    if not query:
+        print("Usage: psa benchmark --query 'your query here'")
+        print("       psa benchmark longmemeval ingest|run|score")
+        return
+
+    print("PSA benchmark mode — comparing PSA pipeline vs raw ChromaDB search.")
+    print("(Requires a populated palace and atlas. Run 'psa mine' and 'psa atlas build' first.)")
+
+    tenant_id = getattr(args, "tenant", "default")
     try:
         from .searcher import search_memories
         from .config import MempalaceConfig
@@ -1155,12 +1209,22 @@ def main():
 
     # benchmark
     p_benchmark = sub.add_parser(
-        "benchmark", help="Compare PSA pipeline vs raw ChromaDB search"
+        "benchmark", help="Benchmark commands (longmemeval harness or --query for quick comparison)"
     )
-    p_benchmark.add_argument("--query", required=True, help="Query to compare")
-    p_benchmark.add_argument(
-        "--tenant", default="default", help="Tenant identifier (default: 'default')"
-    )
+    p_benchmark.add_argument("--query", default=None, help="Quick query comparison (PSA vs ChromaDB)")
+    p_benchmark.add_argument("--tenant", default="default", help="Tenant identifier (default: 'default')")
+    bench_sub = p_benchmark.add_subparsers(dest="bench_cmd")
+
+    p_lme = bench_sub.add_parser("longmemeval", help="LongMemEval benchmark harness")
+    p_lme.add_argument("--tenant", default="longmemeval_bench", help="Tenant for benchmark data (default: longmemeval_bench)")
+    lme_sub = p_lme.add_subparsers(dest="lme_action")
+    lme_sub.add_parser("ingest", help="Download dataset and ingest sessions into PSA")
+    p_lme_run = lme_sub.add_parser("run", help="Run questions through PSA, generate answers")
+    p_lme_run.add_argument("--split", default="val", choices=["val", "test"])
+    p_lme_run.add_argument("--limit", type=int, default=None)
+    p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
+    p_lme_score.add_argument("--results", default=None)
+    p_lme_score.add_argument("--method", default="both", choices=["exact", "llm", "both"])
 
     # migrate
     p_migrate = sub.add_parser(
