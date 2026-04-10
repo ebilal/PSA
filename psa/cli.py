@@ -693,6 +693,7 @@ def _print_log_diff(old: dict, new: dict) -> None:
 
 def cmd_log(args):
     """Manage the PSA query inspection log."""
+    import json
     from .inspect import load_log
 
     tenant_id = getattr(args, "tenant", "default")
@@ -720,8 +721,7 @@ def cmd_log(args):
         if match is None:
             print(f"No log entry with run_id '{run_id}'.")
             sys.exit(1)
-        import json as _json
-        print(_json.dumps(match, indent=2))
+        print(json.dumps(match, indent=2))
 
     elif action == "diff":
         entries = load_log(tenant_id=tenant_id)
@@ -1136,19 +1136,19 @@ def main():
     # inspect
     p_inspect = sub.add_parser("inspect", help="Inspect what context PSA injects for a query")
     p_inspect.add_argument("query", help="Query string to inspect")
-    p_inspect.add_argument("--tenant", default="default")
+    p_inspect.add_argument("--tenant", default="default", help="Tenant identifier (default: 'default')")
     p_inspect.add_argument("--token-budget", dest="token_budget", type=int, default=6000)
     p_inspect.add_argument("--verbose", action="store_true", help="Show full trace with all candidates")
 
     # log
     p_log = sub.add_parser("log", help="Manage the PSA query inspection log")
-    p_log.add_argument("--tenant", default="default")
+    p_log.add_argument("--tenant", default="default", help="Tenant identifier (default: 'default')")
     log_sub = p_log.add_subparsers(dest="log_action")
     p_log_list = log_sub.add_parser("list", help="List recent logged queries")
     p_log_list.add_argument("-n", type=int, default=20)
     p_log_show = log_sub.add_parser("show", help="Show a log entry by run ID")
     p_log_show.add_argument("run_id")
-    p_log_diff = log_sub.add_parser("diff", help="Diff two log entries")
+    p_log_diff = log_sub.add_parser("diff", help="Diff two log entries (run_id_a is baseline, run_id_b is newer)")
     p_log_diff.add_argument("--query", default=None)
     p_log_diff.add_argument("run_id_a", nargs="?", default=None)
     p_log_diff.add_argument("run_id_b", nargs="?", default=None)
