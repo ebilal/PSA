@@ -267,10 +267,8 @@ def test_from_tenant_loads_threshold_tau(tmp_path):
         assert pipeline.selector.threshold == 0.42
 
 
-def test_pipeline_query_uses_synthesizer_when_available(pipeline, monkeypatch):
+def test_pipeline_query_uses_synthesizer_when_available(pipeline):
     """When synthesizer succeeds, result text comes from synthesis."""
-    from unittest.mock import patch
-
     with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
         MockSynth.return_value.synthesize.return_value = "Synthesized narrative text."
         # Re-create pipeline to pick up patched AnchorSynthesizer
@@ -285,14 +283,11 @@ def test_pipeline_query_uses_synthesizer_when_available(pipeline, monkeypatch):
             tenant_id=pipeline.tenant_id,
         )
         result = p.query("test query")
-    # synthesis output is embedded in the packed context
-    assert isinstance(result.text, str)
+    assert result.text == "Synthesized narrative text."
 
 
-def test_pipeline_query_falls_back_to_packer_on_synthesis_failure(pipeline, monkeypatch):
+def test_pipeline_query_falls_back_to_packer_on_synthesis_failure(pipeline):
     """When synthesizer raises, pipeline falls back to packer without crashing."""
-    from unittest.mock import patch
-
     with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
         MockSynth.return_value.synthesize.side_effect = RuntimeError("LLM timeout")
         from psa.pipeline import PSAPipeline

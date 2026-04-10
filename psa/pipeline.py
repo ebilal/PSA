@@ -198,10 +198,7 @@ class PSAPipeline:
         if self.atlas.fingerprint_store is not None:
             for sa in selected:
                 self.atlas.fingerprint_store.append(sa.anchor_id, query)
-            try:
-                self.atlas.fingerprint_store.save()
-            except Exception:
-                logger.debug("Failed to save fingerprints", exc_info=True)
+            self.atlas.fingerprint_store.save()
 
         # No anchors met the threshold — nothing relevant in memory
         if not selected:
@@ -237,7 +234,7 @@ class PSAPipeline:
                 query=query,
                 memories=memories,
                 query_vec=query_vec,
-                token_budget=700,
+                token_budget=self.token_budget,
             )
             packed = PackedContext(
                 query=query,
