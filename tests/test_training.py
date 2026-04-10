@@ -408,6 +408,14 @@ def test_selector_version_round_trip():
     assert restored.query_family_mix["single_anchor"] == 3000
 
 
+def test_training_dependencies_importable():
+    """All packages required by SelectorTrainer.train() must be importable."""
+    import torch  # noqa: F401
+    from sentence_transformers.cross_encoder import CrossEncoder  # noqa: F401
+    import datasets  # noqa: F401
+    import accelerate  # noqa: F401
+
+
 def test_selector_version_to_dict_keys():
     sv = SelectorVersion(
         version=1, atlas_version=1, embedding_model="m", runtime_model_id="r",

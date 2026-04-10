@@ -42,7 +42,7 @@ psa = "psa:main"
 # PSA atlas and pipeline (core PSA feature set)
 atlas = ["scikit-learn>=1.0", "faiss-cpu>=1.7"]
 # Selector training
-training = ["torch>=2.0", "sentence-transformers>=2.2"]
+training = ["torch>=2.0", "sentence-transformers>=2.2", "datasets>=2.0", "accelerate>=1.1.0"]
 # Legacy palace migration from ChromaDB
 migration = ["chromadb>=0.5.0,<0.7"]
 # Legacy palace raw storage (backward compat)
