@@ -26,7 +26,7 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("psa.training.data_generator")
 
@@ -45,6 +45,8 @@ QUERY_FAMILIES = [
 MIX_SYNTHETIC = 0.60
 MIX_HARD_NEG = 0.20
 MIX_ADVERSARIAL = 0.20
+
+MIN_POSITIVE_RATIO = 0.25
 
 # ── Adversarial rewrite patterns ──────────────────────────────────────────────
 
@@ -153,6 +155,29 @@ class DataGenerator:
         examples.extend(
             self._generate_adversarial(n_adversarial)
         )
+
+        # 4. Enforce minimum positive ratio
+        positives = [e for e in examples if e.label == 1]
+        negatives = [e for e in examples if e.label == 0]
+        pos_ratio = len(positives) / len(examples) if examples else 0
+
+        if pos_ratio < 0.10:
+            logger.warning(
+                "Very low positive ratio (%.1f%%) — oracle labels may lack "
+                "winning_oracle_set entries. Training quality will be poor.",
+                pos_ratio * 100,
+            )
+
+        if positives and pos_ratio < MIN_POSITIVE_RATIO:
+            target_pos = int(len(negatives) * MIN_POSITIVE_RATIO / (1 - MIN_POSITIVE_RATIO))
+            extra_needed = target_pos - len(positives)
+            if extra_needed > 0:
+                oversampled = [self.rng.choice(positives) for _ in range(extra_needed)]
+                examples = positives + oversampled + negatives
+                logger.info(
+                    "Oversampled %d positives to reach %.0f%% positive ratio.",
+                    extra_needed, MIN_POSITIVE_RATIO * 100,
+                )
 
         self.rng.shuffle(examples)
 
