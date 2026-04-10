@@ -168,7 +168,7 @@ def _sample_record():
         "question": "Where did Alice go on vacation?",
         "answer_generated": "She went to Paris.",
         "answer_gold": "Alice went to London.",
-        "selected_anchor_ids": ["anchor_1", "anchor_2"],
+        "selected_anchor_ids": [1, 2],
         "context_text": "Some context here.",
         "tokens_used": 100,
         "token_budget": 6000,
@@ -183,7 +183,7 @@ def test_make_oracle_label_fields():
     assert label["query"] == record["question"]
     assert label["atlas_version"] == -1
     assert label["runtime_model_id"] == "longmemeval"
-    assert label["candidate_anchor_ids"] == ["anchor_1", "anchor_2"]
+    assert label["candidate_anchor_ids"] == [1, 2]
     assert label["winning_oracle_score"] == pytest.approx(0.1)
     assert label["is_high_complexity"] is False
     assert label["metadata"]["source"] == "longmemeval"

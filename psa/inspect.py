@@ -246,7 +246,7 @@ def inspect_query(
         tokens_used=result.token_count,
         token_budget=token_budget,
         sections=sections,
-        selected_anchor_ids=list(selected_ids),
+        selected_anchor_ids=sorted(selected_ids),
         candidates=candidates,
         timing=result.timing,
         timestamp=now.isoformat(),

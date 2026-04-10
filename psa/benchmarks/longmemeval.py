@@ -63,15 +63,25 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
     tm.get_or_create(tenant_id)
     cfg = MempalaceConfig()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for session_id, messages in sessions.items():
-            session_path = os.path.join(tmpdir, f"{session_id}.jsonl")
-            _write_session_jsonl(session_path, session_id, messages)
+    # Set PSA_TENANT_ID so that _mine_convos_psa writes to the benchmark tenant,
+    # not the user's configured default tenant.
+    prev_tenant = os.environ.get("PSA_TENANT_ID")
+    os.environ["PSA_TENANT_ID"] = tenant_id
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for session_id, messages in sessions.items():
+                session_path = os.path.join(tmpdir, f"{session_id}.jsonl")
+                _write_session_jsonl(session_path, session_id, messages)
 
-        mine_convos(
-            convo_dir=tmpdir,
-            palace_path=cfg.palace_path,
-        )
+            mine_convos(
+                convo_dir=tmpdir,
+                palace_path=cfg.palace_path,
+            )
+    finally:
+        if prev_tenant is None:
+            os.environ.pop("PSA_TENANT_ID", None)
+        else:
+            os.environ["PSA_TENANT_ID"] = prev_tenant
 
     logger.info("Ingestion complete. Building atlas...")
     _build_atlas(tenant_id)
@@ -130,6 +140,12 @@ def run(
     logger.info("Loading LongMemEval dataset (split=%s)...", split)
     ds = load_dataset(HF_DATASET, split="train")
     examples = [e for e in ds if e.get("split", "val") == split]
+    if not examples:
+        logger.warning(
+            "No examples found for split=%r. "
+            "Check that the dataset records have a 'split' field matching this value.",
+            split,
+        )
     if limit:
         examples = examples[:limit]
 
