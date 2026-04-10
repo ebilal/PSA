@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from .anchor import AnchorCard, AnchorIndex
+from .fingerprints import FingerprintStore
 from .memory_object import MemoryObject, MemoryStore
 
 logger = logging.getLogger("psa.atlas")
@@ -82,6 +83,7 @@ class Atlas:
     stats: AtlasStats
     anchor_dir: str  # absolute path where this atlas is stored
     cards: List[AnchorCard] = field(default_factory=list)
+    fingerprint_store: Optional[FingerprintStore] = field(default=None)
 
     def assign_memory(
         self, memory: MemoryObject
@@ -548,10 +550,17 @@ class AtlasBuilder:
             old_active_cards = [c for c in previous_atlas.cards if getattr(c, "status", "active") == "active"]
         matched = _match_anchors(old_active_cards, centroids) if old_active_cards else [None] * k
 
+        # Load fingerprints from previous atlas for inheritance
+        old_fingerprints = None
+        if previous_atlas is not None:
+            old_fingerprints = FingerprintStore(previous_atlas.anchor_dir)
+
         # Track next fresh anchor_id (above all existing IDs)
         max_existing_id = max((c.anchor_id for c in old_active_cards), default=-1) if old_active_cards else -1
 
         fresh_id_counter = max(k, max_existing_id + 1)
+
+        _pending_inherit: List[tuple] = []  # (old_anchor_id, new_anchor_id) pairs for fingerprint inheritance
 
         for cluster_id in range(k):
             cluster_mems = cluster_memories.get(cluster_id, [])
@@ -574,6 +583,8 @@ class AtlasBuilder:
                     is_novelty=False,
                     status="active",
                 )
+                if old_fingerprints is not None:
+                    _pending_inherit.append((old_card.anchor_id, card.anchor_id))
             else:
                 # Fresh cluster: generate semantic card via Qwen
                 card = _generate_card_via_qwen(
@@ -672,6 +683,17 @@ class AtlasBuilder:
                 os.path.expanduser(f"~/.psa/tenants/{self.tenant_id}"),
                 f"atlas_v{version}",
             )
+
+        # Build fingerprint store for new atlas, inheriting from old where matched
+        os.makedirs(output_dir, exist_ok=True)
+        new_fingerprints = FingerprintStore(output_dir)
+        if old_fingerprints is not None:
+            for old_id, new_id in _pending_inherit:
+                new_fingerprints.inherit_from(
+                    old_anchor_id=old_id,
+                    new_anchor_id=new_id,
+                )
+
         atlas = Atlas(
             version=version,
             tenant_id=self.tenant_id,
@@ -681,6 +703,8 @@ class AtlasBuilder:
             cards=cards,
         )
         atlas.save()
+        atlas.fingerprint_store = new_fingerprints
+        new_fingerprints.save()
 
         logger.info(
             "Atlas v%d built: %d learned + %d novelty anchors, stability=%.3f",
@@ -738,7 +762,9 @@ class AtlasManager:
         if not os.path.exists(atlas_dir):
             return None
         try:
-            return Atlas.load(atlas_dir)
+            atlas = Atlas.load(atlas_dir)
+            atlas.fingerprint_store = FingerprintStore(atlas.anchor_dir)
+            return atlas
         except Exception as e:
             logger.warning("Failed to load atlas v%d: %s", v, e)
             return None
