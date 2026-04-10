@@ -21,6 +21,9 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ..pipeline import PSAPipeline
+from ..training.oracle_labeler import OracleLabeler, backtrack_gold_anchors
+
 logger = logging.getLogger("psa.benchmarks.longmemeval")
 
 BENCH_TENANT = "longmemeval_bench"
@@ -140,7 +143,6 @@ def run(
     except ImportError:
         raise ImportError("Install huggingface_hub: pip install huggingface_hub")
 
-    from ..pipeline import PSAPipeline
     from ..llm import call_llm
 
     logger.info("Loading LongMemEval dataset (split=%s)...", split)
@@ -320,9 +322,6 @@ def oracle_label(
 
     Returns the number of oracle labels written.
     """
-    from ..training.oracle_labeler import OracleLabeler
-    from ..pipeline import PSAPipeline
-
     records = _load_results(results_path)
     if not records:
         raise ValueError(f"No records found in {results_path}")
@@ -343,8 +342,19 @@ def oracle_label(
     for i, record in enumerate(records):
         query_id = record.get("question_id", f"lme_q_{i:04d}")
         query = record["question"]
+        answer_session_ids = record.get("answer_session_ids", [])
         try:
-            labeler.label(query_id=query_id, query=query)
+            gold_anchor_ids = backtrack_gold_anchors(
+                answer_session_ids=answer_session_ids,
+                store=pipeline.store,
+                atlas=pipeline.atlas,
+                tenant_id=tenant_id,
+            )
+            labeler.label(
+                query_id=query_id,
+                query=query,
+                gold_anchor_ids=gold_anchor_ids if gold_anchor_ids else None,
+            )
             written += 1
         except Exception as e:
             logger.warning("Oracle labeling failed for q=%s: %s", record.get("question_id"), e)
