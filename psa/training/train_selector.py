@@ -300,11 +300,11 @@ class SelectorTrainer:
             val_score = self._evaluate(model, val_data_path)
             logger.info("Val task success: %.3f", val_score)
 
-        # Compute threshold tau (Youden's J on val positives/negatives)
+        # Compute threshold tau via F-beta calibration (val set) or safe default
         tau = (
             self._compute_threshold(model, val_data_path)
             if val_data_path and os.path.exists(val_data_path)
-            else 0.3
+            else THRESHOLD_MAX_CAP
         )
         print(f"        Selector v{version} saved.  threshold τ={tau:.2f}", flush=True)
 

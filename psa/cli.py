@@ -549,11 +549,21 @@ def cmd_train(args):
     n_written = gen.generate(output_path=training_path, n_examples=max(1000, label_count * 20))
     print(f"  Generated {n_written} training examples.")
 
+    # Split off 15% as val set for threshold calibration
+    import random as _random
+    val_path = os.path.join(tenant.root_dir, "training", "val_data.jsonl")
+    with open(training_path) as fh:
+        all_lines = [ln for ln in fh if ln.strip()]
+    _random.shuffle(all_lines)
+    val_size = max(50, int(0.15 * len(all_lines)))
+    with open(val_path, "w") as fh:
+        fh.writelines(all_lines[:val_size])
+
     # Train
     output_dir = os.path.join(tenant.root_dir, "models", "selector_latest")
     trainer = SelectorTrainer(output_dir=output_dir, atlas_version=atlas.version)
     try:
-        sv = trainer.train(train_data_path=training_path)
+        sv = trainer.train(train_data_path=training_path, val_data_path=val_path)
         print(f"  Selector trained → {sv.model_path}")
 
         # Activate

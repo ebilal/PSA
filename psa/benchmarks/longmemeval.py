@@ -178,7 +178,10 @@ def run(
 
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}_{ts}.jsonl")
+    weights_tag = ""
+    if packer_weights:
+        weights_tag = "_w" + "-".join(f"{w:.2f}" for w in packer_weights)
+    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}{weights_tag}_{ts}.jsonl")
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, example in enumerate(examples):
