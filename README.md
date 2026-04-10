@@ -51,13 +51,19 @@ Raw source records are **immutable** — the derived memory objects are indexes 
 psa search "query"
     │
     ├── embed query (bge-base-en-v1.5)
-    ├── AnchorRetriever — BM25 + dense, fused via RRF → top-24 anchor candidates
+    ├── AnchorRetriever — BM25 + dense, fused via RRF → top-32 anchor candidates
+    │     BM25 index includes anchor names, meanings, include_terms, generated
+    │     query patterns, and accumulated real-query fingerprints
     ├── AnchorSelector — cosine baseline or trained cross-encoder → 1–4 anchors
-    ├── rank memories by query relevance (cosine similarity)
-    └── EvidencePacker — role-organized sections, 6000-token budget
+    │     Cross-encoder input: (query, anchor_card_with_query_patterns)
+    ├── fetch MemoryObjects for selected anchors
+    └── AnchorSynthesizer — one LLM call → coherent narrative paragraph (~700 tokens)
+          Fallback: EvidencePacker role-organized sections if LLM unavailable
 ```
 
-Packed context sections in priority order: `FAILURE WARNINGS → PROCEDURAL GUIDANCE → TOOL-USE NOTES → RELEVANT EPISODES → FACTS & CONCEPTS`.
+Each anchor card includes `generated_query_patterns` — 10–15 example questions seeded at atlas build time that describe what queries the anchor is likely to answer. At inference time, real queries that match an anchor above a relevance threshold are accumulated as `query_fingerprint` entries (capped at 50 per anchor, FIFO), further enriching BM25 retrieval over time.
+
+`AnchorSynthesizer` produces one coherent narrative paragraph (~700 tokens) from the selected anchors' memories, replacing ranked memory bullets. If the LLM is unavailable, it falls back to `EvidencePacker` role-organized sections.
 
 ### Atlas
 

@@ -131,7 +131,6 @@ def run(
     token_budget: int = 6000,
     selector_mode: str = "cosine",
     selector_model_path: Optional[str] = None,
-    packer_weights: Optional[tuple] = None,
 ) -> str:
     """
     Run each LongMemEval question through PSA and generate answers.
@@ -175,15 +174,9 @@ def run(
             f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
         )
 
-    if packer_weights:
-        pipeline._packer_weights = packer_weights
-
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    weights_tag = ""
-    if packer_weights:
-        weights_tag = "_w" + "-".join(f"{w:.2f}" for w in packer_weights)
-    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}{weights_tag}_{ts}.jsonl")
+    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}_{ts}.jsonl")
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, example in enumerate(examples):

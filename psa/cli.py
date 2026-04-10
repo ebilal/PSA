@@ -551,6 +551,7 @@ def cmd_train(args):
 
     # Split off 15% as val set for threshold calibration
     import random as _random
+
     val_path = os.path.join(tenant.root_dir, "training", "val_data.jsonl")
     with open(training_path) as fh:
         all_lines = [ln for ln in fh if ln.strip()]
@@ -823,15 +824,9 @@ def _cmd_longmemeval(args):
         limit = getattr(args, "limit", None)
         selector_mode = getattr(args, "selector", "cosine")
         selector_model_path = getattr(args, "selector_model", None)
-        packer_weights_str = getattr(args, "packer_weights", None)
-        packer_weights = None
-        if packer_weights_str:
-            parts = packer_weights_str.split(",")
-            packer_weights = tuple(float(p) for p in parts)
         print(
             f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions, "
-            f"selector={selector_mode}"
-            f"{f', weights={packer_weights}' if packer_weights else ''})..."
+            f"selector={selector_mode})..."
         )
         out_path = run(
             split=split,
@@ -839,7 +834,6 @@ def _cmd_longmemeval(args):
             tenant_id=tenant_id,
             selector_mode=selector_mode,
             selector_model_path=selector_model_path,
-            packer_weights=packer_weights,
         )
         print(f"Results: {out_path}")
         print("Run 'psa benchmark longmemeval score' next.")
@@ -1378,11 +1372,6 @@ def main():
         "--selector-model",
         default=None,
         help="Path to trained selector model (auto-detected if omitted)",
-    )
-    p_lme_run.add_argument(
-        "--packer-weights",
-        default=None,
-        help="Packer weight tuple: selector,cosine,quality (e.g., '0.5,0.3,0.2')",
     )
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)
