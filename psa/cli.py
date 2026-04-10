@@ -648,6 +648,106 @@ def _lifecycle_uninstall():
         print("No launchd plist found. Nothing to uninstall.")
 
 
+def cmd_inspect(args):
+    """Inspect what context PSA injects for a query."""
+    from .inspect import inspect_query
+
+    query = args.query
+    tenant_id = getattr(args, "tenant", "default")
+    token_budget = getattr(args, "token_budget", 6000)
+    verbose = getattr(args, "verbose", False)
+
+    try:
+        result = inspect_query(query, tenant_id=tenant_id, token_budget=token_budget)
+        if verbose:
+            print(result.render_verbose())
+        else:
+            print(result.render_brief())
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("Run 'psa atlas build' to build an atlas first.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _print_log_diff(old: dict, new: dict) -> None:
+    """Print a human-readable diff between two log entries."""
+    print(f"DIFF: {old['run_id']} -> {new['run_id']}")
+    print(f"Query: {new['query']!r}")
+    old_tok = old.get("tokens_used", 0)
+    new_tok = new.get("tokens_used", 0)
+    print(f"Tokens: {old_tok} -> {new_tok} ({new_tok - old_tok:+d})")
+    old_sel = set(old.get("selected_anchor_ids", []))
+    new_sel = set(new.get("selected_anchor_ids", []))
+    added = new_sel - old_sel
+    removed = old_sel - new_sel
+    if added:
+        print(f"Anchors added:   {sorted(added)}")
+    if removed:
+        print(f"Anchors removed: {sorted(removed)}")
+    if not added and not removed:
+        print("Anchors: unchanged")
+
+
+def cmd_log(args):
+    """Manage the PSA query inspection log."""
+    from .inspect import load_log
+
+    tenant_id = getattr(args, "tenant", "default")
+    action = getattr(args, "log_action", None)
+
+    if action == "list" or action is None:
+        n = getattr(args, "n", 20)
+        entries = load_log(tenant_id=tenant_id)
+        if not entries:
+            print(f"No log entries for tenant '{tenant_id}'.")
+            return
+        print(f"Recent queries for tenant '{tenant_id}' (newest first):")
+        for e in entries[:n]:
+            ts = e.get("timestamp", "?")[:19].replace("T", " ")
+            tokens = e.get("tokens_used", 0)
+            budget = e.get("token_budget", 0)
+            run_id = e.get("run_id", "?")
+            query = e.get("query", "?")
+            print(f"  [{ts}] {run_id}  {tokens}/{budget} tok  {query!r}")
+
+    elif action == "show":
+        run_id = args.run_id
+        entries = load_log(tenant_id=tenant_id)
+        match = next((e for e in entries if e.get("run_id") == run_id), None)
+        if match is None:
+            print(f"No log entry with run_id '{run_id}'.")
+            sys.exit(1)
+        import json as _json
+        print(_json.dumps(match, indent=2))
+
+    elif action == "diff":
+        entries = load_log(tenant_id=tenant_id)
+        query_filter = getattr(args, "query", None)
+        run_id_a = getattr(args, "run_id_a", None)
+        run_id_b = getattr(args, "run_id_b", None)
+
+        if query_filter:
+            matches = [e for e in entries if e.get("query") == query_filter]
+            if len(matches) < 2:
+                print(f"Need at least 2 log entries for query {query_filter!r}. Found {len(matches)}.")
+                sys.exit(1)
+            e_new, e_old = matches[0], matches[1]
+        elif run_id_a and run_id_b:
+            e_old = next((e for e in entries if e.get("run_id") == run_id_a), None)
+            e_new = next((e for e in entries if e.get("run_id") == run_id_b), None)
+            if not e_old or not e_new:
+                print("Could not find both run IDs.")
+                sys.exit(1)
+        else:
+            print("Provide --query or two run IDs.")
+            sys.exit(1)
+
+        _print_log_diff(e_old, e_new)
+
+
 def cmd_benchmark(args):
     """Compare PSA pipeline vs raw ChromaDB search."""
     print("PSA benchmark mode — comparing PSA pipeline vs raw ChromaDB search.")
@@ -1033,6 +1133,26 @@ def main():
     p_train.add_argument("--tenant", default="default", help="Tenant identifier")
     p_train.add_argument("--force", action="store_true", help="Train even if gates are not met")
 
+    # inspect
+    p_inspect = sub.add_parser("inspect", help="Inspect what context PSA injects for a query")
+    p_inspect.add_argument("query", help="Query string to inspect")
+    p_inspect.add_argument("--tenant", default="default")
+    p_inspect.add_argument("--token-budget", dest="token_budget", type=int, default=6000)
+    p_inspect.add_argument("--verbose", action="store_true", help="Show full trace with all candidates")
+
+    # log
+    p_log = sub.add_parser("log", help="Manage the PSA query inspection log")
+    p_log.add_argument("--tenant", default="default")
+    log_sub = p_log.add_subparsers(dest="log_action")
+    p_log_list = log_sub.add_parser("list", help="List recent logged queries")
+    p_log_list.add_argument("-n", type=int, default=20)
+    p_log_show = log_sub.add_parser("show", help="Show a log entry by run ID")
+    p_log_show.add_argument("run_id")
+    p_log_diff = log_sub.add_parser("diff", help="Diff two log entries")
+    p_log_diff.add_argument("--query", default=None)
+    p_log_diff.add_argument("run_id_a", nargs="?", default=None)
+    p_log_diff.add_argument("run_id_b", nargs="?", default=None)
+
     # benchmark
     p_benchmark = sub.add_parser(
         "benchmark", help="Compare PSA pipeline vs raw ChromaDB search"
@@ -1154,6 +1274,8 @@ def main():
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,
+        "inspect": cmd_inspect,
+        "log": cmd_log,
         "benchmark": cmd_benchmark,
         "migrate": cmd_migrate,
     }
