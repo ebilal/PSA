@@ -52,8 +52,14 @@ class AnchorCard:
         """
         Stable text used by selector (training + inference).
 
-        Does not include volatile prototype examples, so the selector
-        remains valid across atlas rebuilds that refresh examples.
+        'Stable' means the same text is produced at training time and at
+        inference time for a given atlas version. Does not include volatile
+        prototype examples (refreshed on rebuild) or query_fingerprint
+        (accumulated at runtime, too dynamic for training targets).
+
+        Includes generated_query_patterns because they are seeded at atlas
+        build time and locked to that atlas version. When a new atlas is
+        built the selector is retrained against the new cards.
         """
         parts = [f"Anchor: {self.name}", f"Meaning: {self.meaning}"]
         if self.include_terms:
@@ -84,9 +90,12 @@ class AnchorCard:
 
     @classmethod
     def from_dict(cls, d: dict) -> "AnchorCard":
-        d = dict(d)  # shallow copy — don't mutate caller's dict
+        import dataclasses
+        d = dict(d)
         d.setdefault("generated_query_patterns", [])
         d.setdefault("query_fingerprint", [])
+        known = {f.name for f in dataclasses.fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         return cls(**d)
 
 

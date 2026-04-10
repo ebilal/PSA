@@ -282,6 +282,19 @@ def test_to_card_text_includes_query_fingerprint():
     assert "a real user query" in text
 
 
+def test_from_dict_ignores_unknown_keys():
+    """Extra keys in persisted dict (e.g., from future versions) must be silently dropped."""
+    d = {
+        "anchor_id": 1, "name": "test", "meaning": "test",
+        "memory_types": [], "include_terms": [], "exclude_terms": [],
+        "prototype_examples": [], "near_but_different": [],
+        "centroid": [0.0] * 768,
+        "future_field_not_in_dataclass": "some_value",  # unknown key
+    }
+    card = AnchorCard.from_dict(d)
+    assert card.anchor_id == 1
+
+
 def test_from_dict_backward_compat_missing_query_fields():
     """Old atlas JSON without new fields should load without KeyError."""
     old_dict = {
