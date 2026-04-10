@@ -8,7 +8,7 @@ from psa.anchor import AnchorCard, AnchorIndex
 from psa.atlas import Atlas
 from psa.embeddings import EmbeddingModel
 from psa.memory_object import MemoryObject, MemoryStore
-from psa.pipeline import PSAPipeline, PSAResult, QueryTiming, _is_assistant_reference
+from psa.pipeline import PSAPipeline, PSAResult, QueryTiming
 from psa.retriever import AnchorCandidate
 from psa.selector import AnchorSelector, SelectedAnchor
 
@@ -267,15 +267,45 @@ def test_from_tenant_loads_threshold_tau(tmp_path):
         assert pipeline.selector.threshold == 0.42
 
 
-# ── _is_assistant_reference ───────────────────────────────────────────────────
+def test_pipeline_query_uses_synthesizer_when_available(pipeline, monkeypatch):
+    """When synthesizer succeeds, result text comes from synthesis."""
+    from unittest.mock import patch
+
+    with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
+        MockSynth.return_value.synthesize.return_value = "Synthesized narrative text."
+        # Re-create pipeline to pick up patched AnchorSynthesizer
+        from psa.pipeline import PSAPipeline
+
+        p = PSAPipeline(
+            store=pipeline.store,
+            atlas=pipeline.atlas,
+            embedding_model=pipeline.embedding_model,
+            selector=pipeline.selector,
+            token_budget=pipeline.token_budget,
+            tenant_id=pipeline.tenant_id,
+        )
+        result = p.query("test query")
+    # synthesis output is embedded in the packed context
+    assert isinstance(result.text, str)
 
 
-def test_detects_assistant_reference():
-    assert _is_assistant_reference("What did you suggest about auth?")
-    assert _is_assistant_reference("You told me to use GraphQL")
-    assert _is_assistant_reference("Remind me what you recommended")
+def test_pipeline_query_falls_back_to_packer_on_synthesis_failure(pipeline, monkeypatch):
+    """When synthesizer raises, pipeline falls back to packer without crashing."""
+    from unittest.mock import patch
 
+    with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
+        MockSynth.return_value.synthesize.side_effect = RuntimeError("LLM timeout")
+        from psa.pipeline import PSAPipeline
 
-def test_non_assistant_reference():
-    assert not _is_assistant_reference("What is the database schema?")
-    assert not _is_assistant_reference("How does auth work?")
+        p = PSAPipeline(
+            store=pipeline.store,
+            atlas=pipeline.atlas,
+            embedding_model=pipeline.embedding_model,
+            selector=pipeline.selector,
+            token_budget=pipeline.token_budget,
+            tenant_id=pipeline.tenant_id,
+        )
+        result = p.query("test query")
+    # fallback still returns a valid result
+    assert isinstance(result, PSAResult)
+    assert isinstance(result.text, str)

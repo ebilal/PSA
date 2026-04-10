@@ -28,34 +28,10 @@ from .memory_object import MemoryObject, MemoryStore
 from .packer import EvidencePacker, PackedContext
 from .retriever import AnchorCandidate, AnchorRetriever
 from .selector import AnchorSelector, SelectedAnchor
+from .synthesizer import AnchorSynthesizer
 from .tenant import TenantManager
 
 logger = logging.getLogger("psa.pipeline")
-
-_ASSISTANT_TRIGGERS = [
-    "you suggested",
-    "you told me",
-    "you mentioned",
-    "you said",
-    "you recommended",
-    "remind me what you",
-    "you provided",
-    "you listed",
-    "you gave me",
-    "you described",
-    "what did you",
-    "you came up with",
-    "you helped me",
-    "you explained",
-    "can you remind me",
-    "you identified",
-]
-
-
-def _is_assistant_reference(query: str) -> bool:
-    """Detect queries asking about what the AI previously said."""
-    q = query.lower()
-    return any(t in q for t in _ASSISTANT_TRIGGERS)
 
 
 # ── Timing ────────────────────────────────────────────────────────────────────
@@ -148,7 +124,7 @@ class PSAPipeline:
 
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
-        self._packer_weights = (0.4, 0.3, 0.3)  # (selector, cosine, quality) — default balanced
+        self._synthesizer = AnchorSynthesizer()
 
     def query(
         self,
@@ -218,6 +194,15 @@ class PSAPipeline:
 
         logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
 
+        # Accumulate query fingerprints for above-threshold selected anchors
+        if self.atlas.fingerprint_store is not None:
+            for sa in selected:
+                self.atlas.fingerprint_store.append(sa.anchor_id, query)
+            try:
+                self.atlas.fingerprint_store.save()
+            except Exception:
+                logger.debug("Failed to save fingerprints", exc_info=True)
+
         # No anchors met the threshold — nothing relevant in memory
         if not selected:
             packed = PackedContext(
@@ -245,25 +230,32 @@ class PSAPipeline:
 
         logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
 
-        # Step 5: Pack context
+        # Step 5: Synthesize context
         t0 = time.perf_counter()
-
-        # Build anchor_id → selector_score map for packer weighting
-        selector_scores = {sa.anchor_id: sa.selector_score for sa in selected}
-        packer_weights = None
-        if self.selector.mode == "trained":
-            packer_weights = self._packer_weights
-
-        packed = self._packer.pack_memories_direct(
-            query=query,
-            memories=memories,
-            token_budget=self.token_budget,
-            query_vec=query_vec,
-            store=self.store,
-            selector_scores=selector_scores,
-            packer_weights=packer_weights,
-            include_assistant_turns=_is_assistant_reference(query),
-        )
+        try:
+            synthesis_text = self._synthesizer.synthesize(
+                query=query,
+                memories=memories,
+                query_vec=query_vec,
+                token_budget=700,
+            )
+            packed = PackedContext(
+                query=query,
+                text=synthesis_text,
+                token_count=len(synthesis_text) // 4,
+                memory_ids=[m.memory_object_id for m in memories],
+                sections=[],
+                untyped_count=0,
+            )
+        except Exception:
+            logger.debug("Synthesis failed, falling back to packer", exc_info=True)
+            packed = self._packer.pack_memories_direct(
+                query=query,
+                memories=memories,
+                token_budget=self.token_budget,
+                query_vec=query_vec,
+                store=self.store,
+            )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
         # Record usage telemetry: these memories made it into packed context
