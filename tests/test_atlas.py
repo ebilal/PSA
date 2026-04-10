@@ -30,6 +30,7 @@ from psa.atlas import (
     AtlasCorpusTooSmall,
     AtlasManager,
     AtlasUnstable,
+    _generate_card_via_qwen as _real_generate_card_via_qwen,
     _l2_normalize_rows,
     _spherical_kmeans,
     _stability_score,
@@ -387,3 +388,45 @@ def test_assign_memory_routes_distant_to_novelty(tmp_dir, small_k):
     else:
         # Normal routing — just verify valid anchor
         assert primary_id in (novelty_ids | learned_ids)
+
+
+# ── _generate_card_via_qwen query_patterns ───────────────────────────────────
+
+
+def test_generate_card_has_query_patterns(monkeypatch):
+    """_generate_card_via_qwen should populate generated_query_patterns from LLM response."""
+    import json
+    from unittest.mock import MagicMock
+
+    import psa.llm as llm_module
+
+    mock_response = json.dumps({
+        "name": "auth-patterns",
+        "meaning": "Authentication design choices.",
+        "include_terms": ["auth", "token"],
+        "exclude_terms": ["ui"],
+        "query_patterns": [
+            "What auth library did we use?",
+            "How do tokens expire?",
+        ],
+    })
+
+    monkeypatch.setattr(llm_module, "call_llm", lambda **kw: mock_response)
+
+    mo = MagicMock(spec=MemoryObject)
+    mo.title = "JWT setup"
+    mo.summary = "We use JWT."
+    mo.memory_type = MemoryType.PROCEDURAL
+
+    # Call the real implementation directly (captured at module import time,
+    # before conftest's autouse fixture replaces atlas_mod._generate_card_via_qwen
+    # with a stub).
+    card = _real_generate_card_via_qwen(
+        anchor_id=1,
+        centroid=[0.0] * 768,
+        sample_memories=[mo],
+    )
+    assert card.generated_query_patterns == [
+        "What auth library did we use?",
+        "How do tokens expire?",
+    ]

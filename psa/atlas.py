@@ -343,7 +343,8 @@ def _generate_card_via_qwen(
         '  "name": "short-kebab-case-name (2-4 words, descriptive)",\n'
         '  "meaning": "1-2 sentences describing what this region of memory covers",\n'
         '  "include_terms": ["up to 8 keywords that signal membership"],\n'
-        '  "exclude_terms": ["up to 4 keywords that signal non-membership"]\n'
+        '  "exclude_terms": ["up to 4 keywords that signal non-membership"],\n'
+        '  "query_patterns": ["10-15 specific questions a user might ask that this cluster can answer"]\n'
         '}'
     )
 
@@ -353,7 +354,7 @@ def _generate_card_via_qwen(
         content = call_llm(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=256,
+            max_tokens=512,
             timeout=60,
         )
         result = _json.loads(content)
@@ -362,6 +363,7 @@ def _generate_card_via_qwen(
         meaning = result.get("meaning", f"A cluster of {len(sample_memories)} memories.")
         include_terms = result.get("include_terms", [])[:8]
         exclude_terms = result.get("exclude_terms", [])[:4]
+        query_patterns = result.get("query_patterns", [])[:15]
 
         logger.debug("Generated card for anchor %d: %s — %s", anchor_id, name, meaning)
 
@@ -376,6 +378,7 @@ def _generate_card_via_qwen(
         )
         include_terms = []
         exclude_terms = []
+        query_patterns = []
 
     return AnchorCard(
         anchor_id=anchor_id,
@@ -389,6 +392,7 @@ def _generate_card_via_qwen(
         centroid=centroid,
         memory_count=len(sample_memories),
         is_novelty=is_novelty,
+        generated_query_patterns=query_patterns,
     )
 
 
