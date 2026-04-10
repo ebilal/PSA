@@ -1,10 +1,7 @@
 """test_benchmarks.py — Unit tests for benchmark harness utilities."""
 
 import json
-import os
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def _make_result_record(question_id="q1", answer_session_ids=None):
