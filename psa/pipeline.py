@@ -32,6 +32,31 @@ from .tenant import TenantManager
 
 logger = logging.getLogger("psa.pipeline")
 
+_ASSISTANT_TRIGGERS = [
+    "you suggested",
+    "you told me",
+    "you mentioned",
+    "you said",
+    "you recommended",
+    "remind me what you",
+    "you provided",
+    "you listed",
+    "you gave me",
+    "you described",
+    "what did you",
+    "you came up with",
+    "you helped me",
+    "you explained",
+    "can you remind me",
+    "you identified",
+]
+
+
+def _is_assistant_reference(query: str) -> bool:
+    """Detect queries asking about what the AI previously said."""
+    q = query.lower()
+    return any(t in q for t in _ASSISTANT_TRIGGERS)
+
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 
@@ -237,6 +262,7 @@ class PSAPipeline:
             store=self.store,
             selector_scores=selector_scores,
             packer_weights=packer_weights,
+            include_assistant_turns=_is_assistant_reference(query),
         )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 

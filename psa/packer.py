@@ -395,6 +395,7 @@ class EvidencePacker:
         store: Optional[MemoryStore] = None,
         selector_scores: Optional[Dict[int, float]] = None,
         packer_weights: Optional[Tuple[float, float, float]] = None,
+        include_assistant_turns: bool = False,
     ) -> PackedContext:
         """
         Pack MemoryObjects directly (used when memories are retrieved via PSA path).
