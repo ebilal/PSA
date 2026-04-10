@@ -42,6 +42,7 @@ _DEFAULT_CONFIG = {
     "cloud_api_version": "2024-12-01-preview",
     "local_endpoint": "http://localhost:11434/v1/chat/completions",
     "local_model": "qwen2.5:7b",
+    "local_fallback": True,
 }
 
 _config_cache = None
@@ -191,11 +192,12 @@ def call_llm(
             logger.debug("Cloud LLM failed: %s. Trying local.", e)
             errors.append(f"cloud ({config['cloud_model']}): {e}")
 
-    # Fall back to local
-    try:
-        return _call_local(messages, temperature, max_tokens, json_mode, timeout)
-    except Exception as e:
-        errors.append(f"local ({config['local_model']}): {e}")
+    # Fall back to local (unless disabled)
+    if config.get("local_fallback", True):
+        try:
+            return _call_local(messages, temperature, max_tokens, json_mode, timeout)
+        except Exception as e:
+            errors.append(f"local ({config['local_model']}): {e}")
 
     raise RuntimeError(f"All LLM endpoints failed: {'; '.join(errors)}")
 

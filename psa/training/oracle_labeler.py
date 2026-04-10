@@ -206,7 +206,7 @@ def _call_qwen_proxy_batch(
     n = len(candidate_sets)
 
     def _post(messages: List[dict]) -> str:
-        return call_llm(messages=messages, temperature=0.0, max_tokens=64 * n + 64, timeout=timeout)
+        return call_llm(messages=messages, temperature=0.0, max_tokens=128 * n + 128, timeout=timeout)
 
     def _parse_scores(raw_sets: list, indices: List[int]) -> Dict[int, Dict[str, float]]:
         """Return {original_index: scores} for items that parse successfully."""
