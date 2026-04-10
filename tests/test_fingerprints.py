@@ -21,7 +21,7 @@ def test_fingerprint_store_fifo_eviction(tmp_path):
         store.append(1, f"query {i}")
     result = store.get(1)
     assert len(result) == 50
-    assert result[0] == "query 5"   # oldest 5 evicted
+    assert result[0] == "query 5"  # oldest 5 evicted
     assert result[-1] == "query 54"
 
 

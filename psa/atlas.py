@@ -38,9 +38,9 @@ V1_LEARNED_ANCHORS = 224
 V1_NOVELTY_ANCHORS = 32
 V1_TOTAL_ANCHORS = V1_LEARNED_ANCHORS + V1_NOVELTY_ANCHORS  # 256
 
-N_SEEDS = 3               # number of k-means seeds for stability check
-MAX_ITERATIONS = 200      # maximum k-means iterations per seed
-CONVERGENCE_TOL = 1e-4    # centroid shift threshold for convergence
+N_SEEDS = 3  # number of k-means seeds for stability check
+MAX_ITERATIONS = 200  # maximum k-means iterations per seed
+CONVERGENCE_TOL = 1e-4  # centroid shift threshold for convergence
 STABILITY_THRESHOLD = 0.40  # max allowed instability across seeds (loosened for small corpora)
 NOVELTY_DISTANCE_THRESHOLD = 0.3  # cosine distance to nearest learned anchor → novelty
 
@@ -85,9 +85,7 @@ class Atlas:
     cards: List[AnchorCard] = field(default_factory=list)
     fingerprint_store: Optional[FingerprintStore] = field(default=None)
 
-    def assign_memory(
-        self, memory: MemoryObject
-    ) -> Tuple[int, Optional[int], float]:
+    def assign_memory(self, memory: MemoryObject) -> Tuple[int, Optional[int], float]:
         """
         Assign a memory object to anchor(s).
 
@@ -112,7 +110,9 @@ class Atlas:
                 break
 
         # If best learned anchor is too far, route to nearest novelty anchor
-        if best_learned_score is not None and best_learned_score < (1.0 - NOVELTY_DISTANCE_THRESHOLD):
+        if best_learned_score is not None and best_learned_score < (
+            1.0 - NOVELTY_DISTANCE_THRESHOLD
+        ):
             emb = np.asarray(memory.embedding, dtype=np.float32)
             novelty_ids, novelty_centroids = self._get_novelty_centroids()
             if len(novelty_centroids) > 0:
@@ -333,21 +333,20 @@ def _generate_card_via_qwen(
         prefix = "These memories belong to the same semantic cluster"
 
     samples_text = "\n".join(
-        f"- [{m.memory_type.value}] {m.title}: {m.summary[:150]}"
-        for m in sample_memories[:10]
+        f"- [{m.memory_type.value}] {m.title}: {m.summary[:150]}" for m in sample_memories[:10]
     )
 
     prompt = (
         f"{prefix}. Analyze them and produce a semantic description.\n\n"
         f"Sample memories:\n{samples_text}\n\n"
         "Return JSON with these fields:\n"
-        '{\n'
+        "{\n"
         '  "name": "short-kebab-case-name (2-4 words, descriptive)",\n'
         '  "meaning": "1-2 sentences describing what this region of memory covers",\n'
         '  "include_terms": ["up to 8 keywords that signal membership"],\n'
         '  "exclude_terms": ["up to 4 keywords that signal non-membership"],\n'
         '  "query_patterns": ["10-15 specific questions a user might ask that this cluster can answer"]\n'
-        '}'
+        "}"
     )
 
     try:
@@ -376,7 +375,7 @@ def _generate_card_via_qwen(
             "Low-density or outlier memories."
             if is_novelty
             else f"A cluster of {len(sample_memories)} memories. "
-                 f"Representative: {'; '.join(titles[:3])}."
+            f"Representative: {'; '.join(titles[:3])}."
         )
         include_terms = []
         exclude_terms = []
@@ -547,7 +546,9 @@ class AtlasBuilder:
         # Match new clusters to old anchors if a previous atlas exists
         old_active_cards = []
         if previous_atlas is not None:
-            old_active_cards = [c for c in previous_atlas.cards if getattr(c, "status", "active") == "active"]
+            old_active_cards = [
+                c for c in previous_atlas.cards if getattr(c, "status", "active") == "active"
+            ]
         matched = _match_anchors(old_active_cards, centroids) if old_active_cards else [None] * k
 
         # Load fingerprints from previous atlas for inheritance
@@ -556,11 +557,15 @@ class AtlasBuilder:
             old_fingerprints = FingerprintStore(previous_atlas.anchor_dir)
 
         # Track next fresh anchor_id (above all existing IDs)
-        max_existing_id = max((c.anchor_id for c in old_active_cards), default=-1) if old_active_cards else -1
+        max_existing_id = (
+            max((c.anchor_id for c in old_active_cards), default=-1) if old_active_cards else -1
+        )
 
         fresh_id_counter = max(k, max_existing_id + 1)
 
-        _pending_inherit: List[tuple] = []  # (old_anchor_id, new_anchor_id) pairs for fingerprint inheritance
+        _pending_inherit: List[
+            tuple
+        ] = []  # (old_anchor_id, new_anchor_id) pairs for fingerprint inheritance
 
         for cluster_id in range(k):
             cluster_mems = cluster_memories.get(cluster_id, [])
@@ -573,7 +578,9 @@ class AtlasBuilder:
                     anchor_id=old_card.anchor_id,
                     name=old_card.name,
                     meaning=old_card.meaning,
-                    memory_types=list({m.memory_type.value for m in cluster_mems[:10]}) if cluster_mems else old_card.memory_types,
+                    memory_types=list({m.memory_type.value for m in cluster_mems[:10]})
+                    if cluster_mems
+                    else old_card.memory_types,
                     include_terms=old_card.include_terms,
                     exclude_terms=old_card.exclude_terms,
                     prototype_examples=[m.title for m in cluster_mems[:5]],
@@ -657,14 +664,18 @@ class AtlasBuilder:
             row_sims = learned_sims[idx]
             top2 = np.argsort(row_sims)[::-1][:2]
             primary_id = cluster_to_anchor_id.get(int(top2[0]), int(top2[0]))
-            secondary_id = cluster_to_anchor_id.get(int(top2[1]), int(top2[1])) if len(top2) > 1 else None
+            secondary_id = (
+                cluster_to_anchor_id.get(int(top2[1]), int(top2[1])) if len(top2) > 1 else None
+            )
             confidence = float(row_sims[top2[0]])
-            updates.append({
-                "memory_object_id": mem.memory_object_id,
-                "primary_anchor_id": primary_id,
-                "secondary_anchor_ids": [secondary_id] if secondary_id is not None else [],
-                "confidence": confidence,
-            })
+            updates.append(
+                {
+                    "memory_object_id": mem.memory_object_id,
+                    "primary_anchor_id": primary_id,
+                    "secondary_anchor_ids": [secondary_id] if secondary_id is not None else [],
+                    "confidence": confidence,
+                }
+            )
         # Also assign novelty memories to their novelty anchors
         novelty_cards = [c for c in cards if c.is_novelty]
         updates_by_id = {u["memory_object_id"]: u for u in updates}
@@ -684,16 +695,6 @@ class AtlasBuilder:
                 f"atlas_v{version}",
             )
 
-        # Build fingerprint store for new atlas, inheriting from old where matched
-        os.makedirs(output_dir, exist_ok=True)
-        new_fingerprints = FingerprintStore(output_dir)
-        if old_fingerprints is not None:
-            for old_id, new_id in _pending_inherit:
-                new_fingerprints.inherit_from(
-                    old_anchor_id=old_id,
-                    new_anchor_id=new_id,
-                )
-
         atlas = Atlas(
             version=version,
             tenant_id=self.tenant_id,
@@ -702,7 +703,16 @@ class AtlasBuilder:
             anchor_dir=output_dir,
             cards=cards,
         )
-        atlas.save()
+        atlas.save()  # <-- atlas.save() already calls os.makedirs(self.anchor_dir)
+
+        # Build fingerprint store for new atlas, inheriting from old where matched
+        new_fingerprints = FingerprintStore(output_dir)
+        if old_fingerprints is not None:
+            for old_id, new_id in _pending_inherit:
+                new_fingerprints.inherit_from(
+                    old_anchor_id=old_id,
+                    new_anchor_id=new_id,
+                )
         atlas.fingerprint_store = new_fingerprints
         new_fingerprints.save()
 
@@ -741,11 +751,9 @@ class AtlasManager:
             return None
         versions = []
         for entry in os.listdir(self.tenant_dir):
-            if entry.startswith("atlas_v") and os.path.isdir(
-                os.path.join(self.tenant_dir, entry)
-            ):
+            if entry.startswith("atlas_v") and os.path.isdir(os.path.join(self.tenant_dir, entry)):
                 try:
-                    v = int(entry[len("atlas_v"):])
+                    v = int(entry[len("atlas_v") :])
                     meta = os.path.join(self.tenant_dir, entry, "atlas_meta.json")
                     if os.path.exists(meta):
                         versions.append(v)
