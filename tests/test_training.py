@@ -267,7 +267,7 @@ def test_data_generator_output_format(tmp_path):
     gen.generate(str(out), n_examples=20)
 
     with open(out) as f:
-        lines = [json.loads(l) for l in f if l.strip()]
+        lines = [json.loads(line) for line in f if line.strip()]
     assert len(lines) == 20
 
     for ex in lines:
@@ -288,7 +288,7 @@ def test_data_generator_mix_ratios(tmp_path):
     gen.generate(str(out), n_examples=100)
 
     with open(out) as f:
-        examples = [json.loads(l) for l in f if l.strip()]
+        examples = [json.loads(line) for line in f if line.strip()]
 
     by_type = {}
     for ex in examples:
@@ -314,7 +314,7 @@ def test_data_generator_adversarial_rewrites(tmp_path):
     gen.generate(str(out), n_examples=50)
 
     with open(out) as f:
-        examples = [json.loads(l) for l in f if l.strip()]
+        examples = [json.loads(line) for line in f if line.strip()]
 
     adversarials = [ex for ex in examples if ex["example_type"] == "adversarial"]
     assert len(adversarials) > 0
