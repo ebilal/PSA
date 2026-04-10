@@ -24,22 +24,24 @@ logger = logging.getLogger("psa.inspect")
 @dataclass
 class CandidateTrace:
     """Scored anchor candidate from the retriever."""
+
     anchor_id: int
     anchor_name: str
     bm25_score: float
     dense_score: float
     rrf_score: float
     selected: bool
-    selector_score: float   # from SelectedAnchor if selected; rrf_score otherwise
+    selector_score: float  # from SelectedAnchor if selected; rrf_score otherwise
 
 
 @dataclass
 class PackerSectionTrace:
     """One role section that made it into the packed context."""
-    role: str               # "FAILURE WARNINGS", "EPISODIC", etc. or "RAW CONTEXT"
+
+    role: str  # "FAILURE WARNINGS", "EPISODIC", etc. or "RAW CONTEXT"
     memory_count: int
     token_cost: int
-    items: List[str]        # actual text items packed
+    items: List[str]  # actual text items packed
 
 
 @dataclass
@@ -85,7 +87,9 @@ class InspectResult:
     def render_verbose(self) -> str:
         """Full trace: all candidates + scores, per-section breakdown."""
         lines = [self.render_brief(), ""]
-        lines.append(f"ANCHOR CANDIDATES ({len(self.candidates)} total, {len(self.selected_anchor_ids)} selected)")
+        lines.append(
+            f"ANCHOR CANDIDATES ({len(self.candidates)} total, {len(self.selected_anchor_ids)} selected)"
+        )
         for c in sorted(self.candidates, key=lambda x: x.rrf_score, reverse=True):
             mark = "Y" if c.selected else "N"
             lines.append(
@@ -112,16 +116,25 @@ class InspectResult:
             "tokens_used": self.tokens_used,
             "token_budget": self.token_budget,
             "sections": [
-                {"role": s.role, "memory_count": s.memory_count,
-                 "token_cost": s.token_cost, "items": s.items}
+                {
+                    "role": s.role,
+                    "memory_count": s.memory_count,
+                    "token_cost": s.token_cost,
+                    "items": s.items,
+                }
                 for s in self.sections
             ],
             "selected_anchor_ids": self.selected_anchor_ids,
             "candidates": [
-                {"anchor_id": c.anchor_id, "anchor_name": c.anchor_name,
-                 "bm25_score": c.bm25_score, "dense_score": c.dense_score,
-                 "rrf_score": c.rrf_score, "selected": c.selected,
-                 "selector_score": c.selector_score}
+                {
+                    "anchor_id": c.anchor_id,
+                    "anchor_name": c.anchor_name,
+                    "bm25_score": c.bm25_score,
+                    "dense_score": c.dense_score,
+                    "rrf_score": c.rrf_score,
+                    "selected": c.selected,
+                    "selector_score": c.selector_score,
+                }
                 for c in self.candidates
             ],
             "timing": {

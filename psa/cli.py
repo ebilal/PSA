@@ -46,7 +46,6 @@ from .config import MempalaceConfig
 
 def cmd_init(args):
     """Set up PSA for a directory — creates config and mines initial memories."""
-    import json
     from pathlib import Path
 
     project_dir = str(Path(args.dir).expanduser().resolve())
@@ -60,6 +59,7 @@ def cmd_init(args):
     # Optionally mine the directory now
     if not getattr(args, "skip_mine", False):
         from .miner import mine
+
         print(f"\n  Mining {project_dir}...")
         mine(
             project_dir=project_dir,
@@ -115,6 +115,7 @@ def cmd_search(args):
     tenant_id = cfg.tenant_id
     try:
         from .pipeline import PSAPipeline
+
         pipeline = PSAPipeline.from_tenant(
             tenant_id=tenant_id,
             token_budget=cfg.token_budget,
@@ -123,18 +124,24 @@ def cmd_search(args):
         result = pipeline.query(query)
         print(f"\n── PSA Search: {query!r} ──\n")
         print(result.text or "(no context found)")
-        print(f"\n[{len(result.selected_anchors)} anchors selected, "
-              f"{result.token_count} tokens, "
-              f"{result.timing.total_ms:.0f}ms]")
+        print(
+            f"\n[{len(result.selected_anchors)} anchors selected, "
+            f"{result.token_count} tokens, "
+            f"{result.timing.total_ms:.0f}ms]"
+        )
         return
     except FileNotFoundError:
         pass  # no atlas yet — fall through to raw search
     except Exception as e:
         import logging
-        logging.getLogger("psa.cli").warning("PSA pipeline failed, falling back to raw search: %s", e)
+
+        logging.getLogger("psa.cli").warning(
+            "PSA pipeline failed, falling back to raw search: %s", e
+        )
 
     # Fallback: raw ChromaDB search
     from .searcher import search, SearchError
+
     palace_path = os.path.expanduser(args.palace) if args.palace else cfg.palace_path
     try:
         search(
@@ -165,8 +172,8 @@ def cmd_wakeup(args):
         atlas = mgr.get_atlas()
 
         if atlas is None:
-            print(f"No PSA atlas built. Run 'psa atlas build' first.")
-            print(f"(For legacy wake-up: PSA_MODE=off psa legacy wake-up)")
+            print("No PSA atlas built. Run 'psa atlas build' first.")
+            print("(For legacy wake-up: PSA_MODE=off psa legacy wake-up)")
             return
 
         total = sum(
@@ -176,14 +183,16 @@ def cmd_wakeup(args):
         learned = sum(1 for c in atlas.cards if not c.is_novelty)
         novelty = sum(1 for c in atlas.cards if c.is_novelty)
         print(f"\n── PSA Session Wake-Up (tenant: {tenant_id}) ──")
-        print(f"  Atlas v{atlas.version}: {len(atlas.cards)} anchors "
-              f"({learned} learned, {novelty} novelty)")
+        print(
+            f"  Atlas v{atlas.version}: {len(atlas.cards)} anchors "
+            f"({learned} learned, {novelty} novelty)"
+        )
         print(f"  Memories indexed: {total}")
-        print(f"\nTop anchors by memory count:")
+        print("\nTop anchors by memory count:")
         sorted_cards = sorted(atlas.cards, key=lambda c: c.memory_count, reverse=True)
         for card in sorted_cards[:5]:
             print(f"  [{card.anchor_id}] {card.name} — {card.meaning[:60]}")
-        print(f"\nUse 'psa search <query>' to retrieve memories.")
+        print("\nUse 'psa search <query>' to retrieve memories.")
     except Exception as e:
         print(f"PSA wake-up failed: {e}")
         print("Run 'psa atlas build' first.")
@@ -323,8 +332,10 @@ def _cmd_atlas_build(args):
 
         atlas = mgr.rebuild(store)
         print(f"  Atlas v{atlas.version} built.")
-        print(f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
-              f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)")
+        print(
+            f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
+            f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)"
+        )
     except AtlasCorpusTooSmall as e:
         print(f"  Error: {e}")
         print("  Mine more content first ('psa mine <dir>') then try again.")
@@ -359,8 +370,10 @@ def _cmd_atlas_status(args):
             for c in atlas.cards
         )
         print(f"Atlas v{atlas.version} — tenant '{tenant_id}'")
-        print(f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
-              f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)")
+        print(
+            f"  Anchors: {len(atlas.cards)} ({sum(1 for c in atlas.cards if not c.is_novelty)} learned, "
+            f"{sum(1 for c in atlas.cards if c.is_novelty)} novelty)"
+        )
         print(f"  Memories indexed: {total}")
     except Exception as e:
         print(f"Error: {e}")
@@ -410,6 +423,7 @@ def cmd_label(args):
     # Reset: delete all existing labels
     if getattr(args, "reset", False):
         import glob
+
         label_files = glob.glob(os.path.join(tenant.root_dir, "training", "oracle_labels*.jsonl"))
         for f in label_files:
             os.remove(f)
@@ -417,7 +431,7 @@ def cmd_label(args):
         training_data = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
         if os.path.exists(training_data):
             os.remove(training_data)
-            print(f"  Deleted training_data.jsonl")
+            print("  Deleted training_data.jsonl")
         print("  Labels reset. Starting fresh.\n")
 
     # Count existing
@@ -427,7 +441,9 @@ def cmd_label(args):
             existing = sum(1 for line in f if line.strip())
 
     try:
-        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, psa_mode="primary", selector_mode="cosine")
+        pipeline = PSAPipeline.from_tenant(
+            tenant_id=tenant_id, psa_mode="primary", selector_mode="cosine"
+        )
     except FileNotFoundError:
         print(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
         return
@@ -436,6 +452,7 @@ def cmd_label(args):
 
     # Deduplicate against already-labeled
     import json
+
     labeled_ids = set()
     if os.path.exists(labels_path):
         with open(labels_path) as f:
@@ -450,13 +467,22 @@ def cmd_label(args):
     queries = available[:n_queries] if n_queries > 0 else available
 
     if not queries:
-        print(f"No new queries to label. {existing} labels exist, {len(all_queries)} total queries found.")
+        print(
+            f"No new queries to label. {existing} labels exist, {len(all_queries)} total queries found."
+        )
         return
 
     from .llm import _load_config as _llm_config
+
     llm_cfg = _llm_config()
-    llm_name = llm_cfg.get("cloud_model") if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key") else llm_cfg.get("local_model", "local")
-    print(f"Labeling {len(queries)} of {len(available)} available queries using {llm_name} ({existing} already labeled)...")
+    llm_name = (
+        llm_cfg.get("cloud_model")
+        if llm_cfg.get("provider") != "local" and llm_cfg.get("cloud_api_key")
+        else llm_cfg.get("local_model", "local")
+    )
+    print(
+        f"Labeling {len(queries)} of {len(available)} available queries using {llm_name} ({existing} already labeled)..."
+    )
     labeler = OracleLabeler(pipeline=pipeline, output_path=labels_path)
     labeled = 0
     for i, (qid, query_text) in enumerate(queries, 1):
@@ -479,7 +505,6 @@ def cmd_train(args):
     force = getattr(args, "force", False)
 
     from .tenant import TenantManager
-    from .memory_object import MemoryStore
     from .atlas import AtlasManager
     from .selector import check_training_gates
     from .training.data_generator import DataGenerator
@@ -487,7 +512,6 @@ def cmd_train(args):
 
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
-    store = MemoryStore(db_path=tenant.memory_db_path)
     atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
     atlas = atlas_mgr.get_atlas()
 
@@ -534,9 +558,10 @@ def cmd_train(args):
 
         # Activate
         from .lifecycle import LifecyclePipeline
+
         lp = LifecyclePipeline()
         lp._write_selector_mode(tenant.root_dir, "trained", sv.model_path)
-        print(f"  Activated trained selector.")
+        print("  Activated trained selector.")
     except Exception as e:
         print(f"  Training failed: {e}")
 
@@ -552,6 +577,7 @@ def cmd_lifecycle(args):
 
     if action == "run":
         from .lifecycle import LifecyclePipeline
+
         lp = LifecyclePipeline()
         force = getattr(args, "force_rebuild", False)
         label_batch = getattr(args, "label_batch", 0)
@@ -559,6 +585,7 @@ def cmd_lifecycle(args):
 
     elif action == "status":
         from .lifecycle import LifecyclePipeline
+
         lp = LifecyclePipeline()
         state = lp.status(tenant_id=tenant_id)
         print(f"\nLifecycle state (tenant: {tenant_id}):")
@@ -580,6 +607,7 @@ def _lifecycle_install(tenant_id: str, label_batch: int = 0):
     """Install macOS launchd plist for nightly lifecycle runs."""
     import subprocess
     import sys
+
     cfg = MempalaceConfig()
     hour = cfg.nightly_hour
     plist_name = "com.psa.lifecycle"
@@ -632,12 +660,13 @@ def _lifecycle_install(tenant_id: str, label_batch: int = 0):
     subprocess.run(["launchctl", "load", plist_path], check=False)
     print(f"Installed launchd plist at {plist_path}")
     print(f"Lifecycle will run daily at {hour}:00 for tenant '{tenant_id}'.")
-    print(f"Logs: ~/.psa/lifecycle.log")
+    print("Logs: ~/.psa/lifecycle.log")
 
 
 def _lifecycle_uninstall():
     """Remove macOS launchd plist."""
     import subprocess
+
     plist_name = "com.psa.lifecycle"
     plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}.plist")
     if os.path.exists(plist_path):
@@ -732,7 +761,9 @@ def cmd_log(args):
         if query_filter:
             matches = [e for e in entries if e.get("query") == query_filter]
             if len(matches) < 2:
-                print(f"Need at least 2 log entries for query {query_filter!r}. Found {len(matches)}.")
+                print(
+                    f"Need at least 2 log entries for query {query_filter!r}. Found {len(matches)}."
+                )
                 sys.exit(1)
             e_new, e_old = matches[0], matches[1]
         elif run_id_a and run_id_b:
@@ -774,6 +805,7 @@ def _cmd_longmemeval(args):
 
         if not results_file:
             import glob
+
             results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
             files = sorted(glob.glob(os.path.join(results_dir, "results_*.jsonl")))
             if not files:
@@ -783,7 +815,7 @@ def _cmd_longmemeval(args):
             print(f"Scoring: {results_file}")
 
         stats = score(results_file, method=method, tenant_id=tenant_id)
-        print(f"\nLongMemEval Score")
+        print("\nLongMemEval Score")
         print(f"  Questions:     {stats['n_questions']}")
         print(f"  Exact F1:      {stats['exact_f1']:.3f}")
         if "llm_score" in stats:
@@ -817,15 +849,17 @@ def cmd_benchmark(args):
     try:
         from .searcher import search_memories
         from .config import MempalaceConfig
+
         cfg = MempalaceConfig()
 
-        print(f"\n--- Raw ChromaDB search ---")
+        print("\n--- Raw ChromaDB search ---")
         raw_results = search_memories(query, n_results=5, palace_path=cfg.palace_path)
         for i, r in enumerate(raw_results.get("results", []), 1):
             print(f"  [{i}] {r.get('title', '?')} ({r.get('similarity', 0):.3f})")
 
-        print(f"\n--- PSA pipeline search ---")
+        print("\n--- PSA pipeline search ---")
         from .pipeline import PSAPipeline
+
         try:
             pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, psa_mode=cfg.psa_mode)
             result = pipeline.query(query)
@@ -856,7 +890,7 @@ def cmd_migrate(args):
             collection_name=collection,
             tenant_id=tenant_id,
         )
-        print(f"\n  Migration complete:")
+        print("\n  Migration complete:")
         print(f"    Total drawers: {stats.total}")
         print(f"    Migrated:      {stats.migrated}")
         print(f"    Skipped:       {stats.skipped} (already existed)")
@@ -890,7 +924,12 @@ def _legacy_wakeup(args):
     """Legacy L0+L1 wake-up via MemoryStack (requires layers.py)."""
     try:
         from .layers import MemoryStack
-        palace_path = os.path.expanduser(args.palace) if getattr(args, "palace", None) else MempalaceConfig().palace_path
+
+        palace_path = (
+            os.path.expanduser(args.palace)
+            if getattr(args, "palace", None)
+            else MempalaceConfig().palace_path
+        )
         stack = MemoryStack(palace_path=palace_path)
         text = stack.wake_up(wing=getattr(args, "wing", None))
         tokens = len(text) // 4
@@ -898,8 +937,10 @@ def _legacy_wakeup(args):
         print("=" * 50)
         print(text)
     except ImportError:
-        print("Legacy wake-up requires the MemoryStack layer (layers.py). "
-              "This file has been removed in PSA primary mode.")
+        print(
+            "Legacy wake-up requires the MemoryStack layer (layers.py). "
+            "This file has been removed in PSA primary mode."
+        )
         print("Use 'psa wake-up' for PSA atlas wake-up context.")
 
 
@@ -920,6 +961,7 @@ def cmd_instructions(args):
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
     import chromadb
+
     try:
         from .dialect import Dialect
     except ImportError:
@@ -1160,27 +1202,50 @@ def main():
     atlas_sub.add_parser("rebuild", help="Force rebuild the atlas (same as build)")
 
     # lifecycle
-    p_lifecycle = sub.add_parser("lifecycle", help="PSA lifecycle management (run, status, install, uninstall)")
+    p_lifecycle = sub.add_parser(
+        "lifecycle", help="PSA lifecycle management (run, status, install, uninstall)"
+    )
     p_lifecycle.add_argument(
         "--tenant", default="default", help="Tenant identifier (default: 'default')"
     )
     lifecycle_sub = p_lifecycle.add_subparsers(dest="lifecycle_action")
     p_lc_run = lifecycle_sub.add_parser("run", help="Run lifecycle pipeline manually")
     p_lc_run.add_argument("--force-rebuild", action="store_true", help="Force atlas rebuild")
-    p_lc_run.add_argument("--label-batch", type=int, default=0,
-                          help="Max queries to label per run (0 = all remaining up to 300, default: 0)")
+    p_lc_run.add_argument(
+        "--label-batch",
+        type=int,
+        default=0,
+        help="Max queries to label per run (0 = all remaining up to 300, default: 0)",
+    )
     lifecycle_sub.add_parser("status", help="Show lifecycle state")
-    p_lc_install = lifecycle_sub.add_parser("install", help="Install macOS launchd plist for nightly runs")
-    p_lc_install.add_argument("--label-batch", type=int, default=0,
-                              help="Max queries to label per nightly run (0 = all remaining, 30 = ~90 min)")
+    p_lc_install = lifecycle_sub.add_parser(
+        "install", help="Install macOS launchd plist for nightly runs"
+    )
+    p_lc_install.add_argument(
+        "--label-batch",
+        type=int,
+        default=0,
+        help="Max queries to label per nightly run (0 = all remaining, 30 = ~90 min)",
+    )
     lifecycle_sub.add_parser("uninstall", help="Remove macOS launchd plist")
 
     # label
     p_label = sub.add_parser("label", help="Run oracle labeling — score anchor sets for queries")
     p_label.add_argument("--tenant", default="default", help="Tenant identifier")
-    p_label.add_argument("--n-queries", type=int, default=0, help="Number of queries to label (0 = all available, default: all)")
-    p_label.add_argument("--sessions-dir", default=None, help="Path to Claude Code sessions (default: ~/.claude/projects)")
-    p_label.add_argument("--reset", action="store_true", help="Delete all existing labels and start from scratch")
+    p_label.add_argument(
+        "--n-queries",
+        type=int,
+        default=0,
+        help="Number of queries to label (0 = all available, default: all)",
+    )
+    p_label.add_argument(
+        "--sessions-dir",
+        default=None,
+        help="Path to Claude Code sessions (default: ~/.claude/projects)",
+    )
+    p_label.add_argument(
+        "--reset", action="store_true", help="Delete all existing labels and start from scratch"
+    )
 
     # train
     p_train = sub.add_parser("train", help="Train the selector model from oracle labels")
@@ -1190,9 +1255,13 @@ def main():
     # inspect
     p_inspect = sub.add_parser("inspect", help="Inspect what context PSA injects for a query")
     p_inspect.add_argument("query", help="Query string to inspect")
-    p_inspect.add_argument("--tenant", default="default", help="Tenant identifier (default: 'default')")
+    p_inspect.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
     p_inspect.add_argument("--token-budget", dest="token_budget", type=int, default=6000)
-    p_inspect.add_argument("--verbose", action="store_true", help="Show full trace with all candidates")
+    p_inspect.add_argument(
+        "--verbose", action="store_true", help="Show full trace with all candidates"
+    )
 
     # log
     p_log = sub.add_parser("log", help="Manage the PSA query inspection log")
@@ -1202,7 +1271,9 @@ def main():
     p_log_list.add_argument("-n", type=int, default=20)
     p_log_show = log_sub.add_parser("show", help="Show a log entry by run ID")
     p_log_show.add_argument("run_id")
-    p_log_diff = log_sub.add_parser("diff", help="Diff two log entries (run_id_a is baseline, run_id_b is newer)")
+    p_log_diff = log_sub.add_parser(
+        "diff", help="Diff two log entries (run_id_a is baseline, run_id_b is newer)"
+    )
     p_log_diff.add_argument("--query", default=None)
     p_log_diff.add_argument("run_id_a", nargs="?", default=None)
     p_log_diff.add_argument("run_id_b", nargs="?", default=None)
@@ -1211,12 +1282,20 @@ def main():
     p_benchmark = sub.add_parser(
         "benchmark", help="Benchmark commands (longmemeval harness or --query for quick comparison)"
     )
-    p_benchmark.add_argument("--query", default=None, help="Quick query comparison (PSA vs ChromaDB)")
-    p_benchmark.add_argument("--tenant", default="default", help="Tenant identifier (default: 'default')")
+    p_benchmark.add_argument(
+        "--query", default=None, help="Quick query comparison (PSA vs ChromaDB)"
+    )
+    p_benchmark.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
     bench_sub = p_benchmark.add_subparsers(dest="bench_cmd")
 
     p_lme = bench_sub.add_parser("longmemeval", help="LongMemEval benchmark harness")
-    p_lme.add_argument("--tenant", default="longmemeval_bench", help="Tenant for benchmark data (default: longmemeval_bench)")
+    p_lme.add_argument(
+        "--tenant",
+        default="longmemeval_bench",
+        help="Tenant for benchmark data (default: longmemeval_bench)",
+    )
     lme_sub = p_lme.add_subparsers(dest="lme_action")
     lme_sub.add_parser("ingest", help="Download dataset and ingest sessions into PSA")
     p_lme_run = lme_sub.add_parser("run", help="Run questions through PSA, generate answers")
