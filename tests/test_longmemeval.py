@@ -203,9 +203,7 @@ def test_make_oracle_label_query_id_is_stable():
 def test_make_oracle_label_query_id_format():
     record = _sample_record()
     label = _make_oracle_label(record, f1=0.1)
-    q_hash = hashlib.md5(
-        record["question"].encode(), usedforsecurity=False
-    ).hexdigest()[:8]
+    q_hash = hashlib.md5(record["question"].encode(), usedforsecurity=False).hexdigest()[:8]
     assert label["query_id"] == f"lme_{q_hash}"
 
 
@@ -247,7 +245,7 @@ def test_write_session_jsonl_correct_records(tmp_path):
     _write_session_jsonl(path, "sess_001", messages)
 
     with open(path, encoding="utf-8") as f:
-        lines = [l.strip() for l in f if l.strip()]
+        lines = [line.strip() for line in f if line.strip()]
 
     assert len(lines) == 2
     rec0 = json.loads(lines[0])
@@ -291,7 +289,9 @@ def _write_results_jsonl(path, records):
             f.write(json.dumps(r) + "\n")
 
 
-def _make_result_record(question_id="q_001", question="Q?", gold="gold answer", generated="gold answer", anchors=None):
+def _make_result_record(
+    question_id="q_001", question="Q?", gold="gold answer", generated="gold answer", anchors=None
+):
     return {
         "question_id": question_id,
         "question": question,
@@ -316,8 +316,8 @@ def test_score_exact_f1_perfect_match(tmp_path):
 
     assert result["exact_f1"] == pytest.approx(1.0)
     assert result["n_questions"] == 1
-    # Perfect match → f1=1.0 >= 0.3, so NO oracle label should be written
-    assert result["oracle_labels_written"] == 0
+    # Perfect match → f1=1.0 >= 0.5, so a SUCCESS oracle label is written
+    assert result["oracle_labels_written"] == 1
 
 
 def test_score_writes_oracle_labels_for_failures(tmp_path):
@@ -325,24 +325,31 @@ def test_score_writes_oracle_labels_for_failures(tmp_path):
     oracle_file = str(tmp_path / "oracle_labels.jsonl")
 
     records = [
-        _make_result_record(question_id="q_001", gold="correct answer", generated="correct answer"),  # perfect match
-        _make_result_record(question_id="q_002", gold="correct answer", generated="totally wrong"),   # failure
-        _make_result_record(question_id="q_003", gold="correct answer", generated="totally different"),  # failure
+        _make_result_record(
+            question_id="q_001", gold="correct answer", generated="correct answer"
+        ),  # perfect match
+        _make_result_record(
+            question_id="q_002", gold="correct answer", generated="totally wrong"
+        ),  # failure
+        _make_result_record(
+            question_id="q_003", gold="correct answer", generated="totally different"
+        ),  # failure
     ]
     _write_results_jsonl(results_file, records)
 
     with patch("psa.benchmarks.longmemeval._oracle_labels_path", return_value=oracle_file):
         result = score(results_file, method="exact", tenant_id="test_tenant")
 
-    assert result["oracle_labels_written"] == 2
+    # 2 failures (F1<0.3) + 1 success (F1>=0.5) = 3 oracle labels
+    assert result["oracle_labels_written"] == 3
     assert os.path.exists(oracle_file)
 
     with open(oracle_file) as f:
-        labels = [json.loads(l) for l in f if l.strip()]
-    assert len(labels) == 2
+        labels = [json.loads(line) for line in f if line.strip()]
+    assert len(labels) == 3
 
 
-def test_score_no_oracle_labels_for_perfect_match(tmp_path):
+def test_score_success_oracle_labels_for_perfect_match(tmp_path):
     results_file = str(tmp_path / "results.jsonl")
     oracle_file = str(tmp_path / "oracle_labels.jsonl")
 
@@ -355,12 +362,14 @@ def test_score_no_oracle_labels_for_perfect_match(tmp_path):
     with patch("psa.benchmarks.longmemeval._oracle_labels_path", return_value=oracle_file):
         result = score(results_file, method="exact", tenant_id="test_tenant")
 
-    assert result["oracle_labels_written"] == 0
-    # File may or may not exist; if it does, it should be empty
-    if os.path.exists(oracle_file):
-        with open(oracle_file) as f:
-            content = f.read().strip()
-        assert content == ""
+    # Perfect matches have F1=1.0 >= 0.5, so success labels are written
+    assert result["oracle_labels_written"] == 2
+    assert os.path.exists(oracle_file)
+    with open(oracle_file) as f:
+        labels = [json.loads(line) for line in f if line.strip()]
+    assert len(labels) == 2
+    # Verify these are success labels (winning_oracle_score >= 0.5)
+    assert all(lbl["winning_oracle_score"] >= 0.5 for lbl in labels)
 
 
 def test_score_exact_f1_computation(tmp_path):
@@ -370,7 +379,7 @@ def test_score_exact_f1_computation(tmp_path):
     # Two records: one perfect (f1=1.0), one no overlap (f1=0.0)
     records = [
         _make_result_record(gold="apple banana", generated="apple banana"),  # f1=1.0
-        _make_result_record(gold="apple banana", generated="cherry dog"),    # f1=0.0
+        _make_result_record(gold="apple banana", generated="cherry dog"),  # f1=0.0
     ]
     _write_results_jsonl(results_file, records)
 
@@ -433,7 +442,9 @@ def test_score_oracle_labels_path_patched(tmp_path):
     record = _make_result_record(gold="a", generated="z")  # failure
     _write_results_jsonl(results_file, [record])
 
-    with patch("psa.benchmarks.longmemeval._oracle_labels_path", return_value=oracle_file) as mock_path_fn:
+    with patch(
+        "psa.benchmarks.longmemeval._oracle_labels_path", return_value=oracle_file
+    ) as mock_path_fn:
         result = score(results_file, method="exact", tenant_id="test_tenant")
 
     mock_path_fn.assert_called_once_with("test_tenant")

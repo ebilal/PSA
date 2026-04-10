@@ -657,7 +657,20 @@ def _lifecycle_install(tenant_id: str, label_batch: int = 0):
     with open(plist_path, "w") as f:
         f.write(plist_content)
 
-    subprocess.run(["launchctl", "load", plist_path], check=False)
+    # Remove any previously loaded instance before loading
+    subprocess.run(
+        ["launchctl", "bootout", f"gui/{os.getuid()}/{plist_name}"],
+        check=False,
+        capture_output=True,
+    )
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist_path],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Warning: launchctl bootstrap failed: {result.stderr.strip()}")
     print(f"Installed launchd plist at {plist_path}")
     print(f"Lifecycle will run daily at {hour}:00 for tenant '{tenant_id}'.")
     print("Logs: ~/.psa/lifecycle.log")
@@ -670,7 +683,11 @@ def _lifecycle_uninstall():
     plist_name = "com.psa.lifecycle"
     plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}.plist")
     if os.path.exists(plist_path):
-        subprocess.run(["launchctl", "unload", plist_path], check=False)
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}/{plist_name}"],
+            check=False,
+            capture_output=True,
+        )
         os.remove(plist_path)
         print(f"Uninstalled launchd plist: {plist_path}")
     else:
@@ -794,8 +811,19 @@ def _cmd_longmemeval(args):
     elif lme_action == "run":
         split = getattr(args, "split", "val")
         limit = getattr(args, "limit", None)
-        print(f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions)...")
-        out_path = run(split=split, limit=limit, tenant_id=tenant_id)
+        selector_mode = getattr(args, "selector", "cosine")
+        selector_model_path = getattr(args, "selector_model", None)
+        print(
+            f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions, "
+            f"selector={selector_mode})..."
+        )
+        out_path = run(
+            split=split,
+            limit=limit,
+            tenant_id=tenant_id,
+            selector_mode=selector_mode,
+            selector_model_path=selector_model_path,
+        )
         print(f"Results: {out_path}")
         print("Run 'psa benchmark longmemeval score' next.")
 
@@ -1301,6 +1329,17 @@ def main():
     p_lme_run = lme_sub.add_parser("run", help="Run questions through PSA, generate answers")
     p_lme_run.add_argument("--split", default="val", choices=["val", "test"])
     p_lme_run.add_argument("--limit", type=int, default=None)
+    p_lme_run.add_argument(
+        "--selector",
+        default="cosine",
+        choices=["cosine", "trained"],
+        help="Selector mode: cosine (default) or trained cross-encoder",
+    )
+    p_lme_run.add_argument(
+        "--selector-model",
+        default=None,
+        help="Path to trained selector model (auto-detected if omitted)",
+    )
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)
     p_lme_score.add_argument("--method", default="both", choices=["exact", "llm", "both"])

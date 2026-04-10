@@ -201,6 +201,7 @@ class SelectorTrainer:
 
         # Select device: MPS (Apple Silicon) → CPU fallback (no CUDA assumed)
         import torch
+
         if torch.backends.mps.is_available():
             device = "mps"
         else:
@@ -219,27 +220,32 @@ class SelectorTrainer:
 
         class _PairExample:
             """Minimal object with .texts and .label for CrossEncoder.fit()."""
-            __slots__ = ('texts', 'label')
+
+            __slots__ = ("texts", "label")
+
             def __init__(self, texts, label):
                 self.texts = texts
                 self.label = label
 
         class PairDataset(TorchDataset):
             """Dataset returning _PairExample objects for CrossEncoder.fit()."""
+
             def __init__(self, examples):
                 self._data = [
                     _PairExample([ex["query"], ex["anchor_card"]], float(ex["label"]))
                     for ex in examples
+                    if ex.get("label") is not None
                 ]
+
             def __len__(self):
                 return len(self._data)
+
             def __getitem__(self, idx):
                 return self._data[idx]
 
         positives = by_type.get("positive", [])
         print(
-            f"        Training selector v{version}"
-            f" ({len(examples)} examples, device: {device})",
+            f"        Training selector v{version} ({len(examples)} examples, device: {device})",
             flush=True,
         )
 
@@ -248,7 +254,9 @@ class SelectorTrainer:
         # Phase 1: warm start (oracle positives + easy negatives)
         phase1 = positives + by_type.get("easy_negative", [])
         if phase1:
-            print(f"          Phase 1: warm start        ({len(phase1):4d} ex)...", end="", flush=True)
+            print(
+                f"          Phase 1: warm start        ({len(phase1):4d} ex)...", end="", flush=True
+            )
             last_loss = self._train_phase(model, PairDataset(phase1), epochs=1)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 1 done: loss=%.3f", last_loss)
@@ -256,8 +264,12 @@ class SelectorTrainer:
         # Phase 2: hard negatives + some positives (need both classes for loss)
         hard_negs = by_type.get("hard_negative", [])
         if hard_negs:
-            phase2 = hard_negs + positives[:len(hard_negs)]
-            print(f"          Phase 2: hard-negative      ({len(phase2):4d} ex)...", end="", flush=True)
+            phase2 = hard_negs + positives[: len(hard_negs)]
+            print(
+                f"          Phase 2: hard-negative      ({len(phase2):4d} ex)...",
+                end="",
+                flush=True,
+            )
             last_loss = self._train_phase(model, PairDataset(phase2), epochs=1)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 2 done: loss=%.3f", last_loss)
@@ -265,10 +277,14 @@ class SelectorTrainer:
         # Phase 3: adversarial hardening with balanced classes
         phase3 = by_type.get("adversarial", [])
         if phase3:
-            neg_for_p3 = hard_negs[:len(phase3)] if hard_negs else []
+            neg_for_p3 = hard_negs[: len(phase3)] if hard_negs else []
             phase3 = phase3 + neg_for_p3
             random.shuffle(phase3)
-            print(f"          Phase 3: adversarial         ({len(phase3):4d} ex)...", end="", flush=True)
+            print(
+                f"          Phase 3: adversarial         ({len(phase3):4d} ex)...",
+                end="",
+                flush=True,
+            )
             last_loss = self._train_phase(model, PairDataset(phase3), epochs=1)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 3 done: loss=%.3f", last_loss)
@@ -367,10 +383,7 @@ class SelectorTrainer:
         pairs = [(ex["query"], ex["anchor_card"]) for ex in examples]
         labels = [ex["label"] for ex in examples]
         scores = model.predict(pairs)
-        correct = sum(
-            1 for s, lbl in zip(scores, labels)
-            if (s >= 0.5) == bool(lbl)
-        )
+        correct = sum(1 for s, lbl in zip(scores, labels) if (s >= 0.5) == bool(lbl))
         return correct / len(labels)
 
     def _compute_threshold(self, model, val_data_path: str) -> float:
@@ -409,8 +422,12 @@ if __name__ == "__main__":
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
     parser.add_argument("--training-data", required=True, help="Path to training_data.jsonl")
     parser.add_argument("--output-dir", required=True, help="Directory to save the trained model")
-    parser.add_argument("--epochs", type=int, default=EPOCHS, help=f"Training epochs (default: {EPOCHS})")
-    parser.add_argument("--lr", type=float, default=LEARNING_RATE, help=f"Learning rate (default: {LEARNING_RATE})")
+    parser.add_argument(
+        "--epochs", type=int, default=EPOCHS, help=f"Training epochs (default: {EPOCHS})"
+    )
+    parser.add_argument(
+        "--lr", type=float, default=LEARNING_RATE, help=f"Learning rate (default: {LEARNING_RATE})"
+    )
     args = parser.parse_args()
 
     from psa.tenant import TenantManager

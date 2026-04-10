@@ -34,11 +34,11 @@ RESULTS_DIR_DEFAULT = os.path.expanduser("~/.psa/benchmarks/longmemeval")
 def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT) -> None:
     """Download LongMemEval and ingest all sessions into PSA."""
     try:
-        from datasets import load_dataset
+        from huggingface_hub import hf_hub_download
     except ImportError:
         raise ImportError(
-            "The 'datasets' library is required for LongMemEval ingestion.\n"
-            "Install with: pip install datasets"
+            "The 'huggingface_hub' library is required for LongMemEval ingestion.\n"
+            "Install with: pip install huggingface_hub"
         )
 
     from ..convo_miner import mine_convos
@@ -46,12 +46,15 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
     from ..tenant import TenantManager
 
     logger.info("Loading LongMemEval dataset from HuggingFace...")
-    ds = load_dataset(HF_DATASET, split="train")
+    data_path = hf_hub_download(HF_DATASET, "longmemeval_oracle", repo_type="dataset")
+    with open(data_path, encoding="utf-8") as f:
+        examples = json.load(f)
 
     sessions: Dict[str, List[Dict]] = {}
-    for example in ds:
+    for example in examples:
         for session_id, messages in zip(
-            example.get("session_ids", []), example.get("sessions", [])
+            example.get("haystack_session_ids", []),
+            example.get("haystack_sessions", []),
         ):
             if session_id not in sessions:
                 sessions[session_id] = messages
@@ -123,6 +126,8 @@ def run(
     tenant_id: str = BENCH_TENANT,
     results_dir: str = RESULTS_DIR_DEFAULT,
     token_budget: int = 6000,
+    selector_mode: str = "cosine",
+    selector_model_path: Optional[str] = None,
 ) -> str:
     """
     Run each LongMemEval question through PSA and generate answers.
@@ -130,29 +135,38 @@ def run(
     Returns the path to the results JSONL file.
     """
     try:
-        from datasets import load_dataset
+        from huggingface_hub import hf_hub_download
     except ImportError:
-        raise ImportError("Install datasets: pip install datasets")
+        raise ImportError("Install huggingface_hub: pip install huggingface_hub")
 
     from ..pipeline import PSAPipeline
     from ..llm import call_llm
 
     logger.info("Loading LongMemEval dataset (split=%s)...", split)
-    ds = load_dataset(HF_DATASET, split="train")
-    examples = [e for e in ds if e.get("split", "val") == split]
+    data_path = hf_hub_download(HF_DATASET, "longmemeval_oracle", repo_type="dataset")
+    with open(data_path, encoding="utf-8") as f:
+        all_examples = json.load(f)
+    examples = [e for e in all_examples if e.get("split", "val") == split]
     if not examples:
+        # Dataset may not have a split field — use all examples
         logger.warning(
-            "No examples found for split=%r. "
-            "Check that the dataset records have a 'split' field matching this value.",
+            "No examples found for split=%r; using all %d examples.",
             split,
+            len(all_examples),
         )
+        examples = all_examples
     if limit:
         examples = examples[:limit]
 
     logger.info("Running %d questions (tenant=%s)...", len(examples), tenant_id)
 
     try:
-        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, token_budget=token_budget)
+        pipeline = PSAPipeline.from_tenant(
+            tenant_id=tenant_id,
+            token_budget=token_budget,
+            selector_mode=selector_mode,
+            selector_model_path=selector_model_path,
+        )
     except FileNotFoundError:
         raise FileNotFoundError(
             f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
@@ -160,7 +174,7 @@ def run(
 
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    out_path = os.path.join(results_dir, f"results_{split}_{ts}.jsonl")
+    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}_{ts}.jsonl")
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, example in enumerate(examples):
@@ -249,6 +263,7 @@ def score(
         avg_llm = sum(valid) / len(valid) if valid else 0.0
 
     FAILURE_THRESHOLD = 0.3
+    SUCCESS_THRESHOLD = 0.5
     oracle_labels_written = 0
     oracle_path = _oracle_labels_path(tenant_id)
     os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
@@ -257,6 +272,11 @@ def score(
         for record, f1 in zip(records, exact_f1_scores):
             if f1 < FAILURE_THRESHOLD:
                 label = _make_oracle_label(record, f1)
+                f.write(json.dumps(label) + "\n")
+                oracle_labels_written += 1
+            elif f1 >= SUCCESS_THRESHOLD:
+                # Write success labels so training has positive examples
+                label = _make_oracle_label(record, f1, success=True)
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
 
@@ -281,10 +301,10 @@ def _load_results(path: str) -> List[Dict]:
     return records
 
 
-def _normalize_text(text: str) -> List[str]:
+def _normalize_text(text) -> List[str]:
     import re
 
-    return re.sub(r"[^\w\s]", " ", text.lower()).split()
+    return re.sub(r"[^\w\s]", " ", str(text).lower()).split()
 
 
 def _f1_score(gold: str, pred: str) -> float:
@@ -326,18 +346,19 @@ def _oracle_labels_path(tenant_id: str) -> str:
     return os.path.expanduser(f"~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl")
 
 
-def _make_oracle_label(record: Dict, f1: float) -> Dict:
-    """Create an oracle label for a failed question (failure-signal-only label)."""
+def _make_oracle_label(record: Dict, f1: float, success: bool = False) -> Dict:
+    """Create an oracle label for a question result."""
     now = datetime.now(timezone.utc).isoformat()
     q_hash = hashlib.md5(record["question"].encode(), usedforsecurity=False).hexdigest()[:8]
+    anchor_ids = record.get("selected_anchor_ids", [])
     return {
         "query_id": f"lme_{q_hash}",
         "query": record["question"],
         "atlas_version": -1,
         "runtime_model_id": "longmemeval",
-        "candidate_anchor_ids": record.get("selected_anchor_ids", []),
-        "all_sets": [],
-        "winning_oracle_set": [],
+        "candidate_anchor_ids": anchor_ids,
+        "all_sets": [anchor_ids] if success else [],
+        "winning_oracle_set": anchor_ids if success else [],
         "winning_oracle_score": f1,
         "labeled_at": now,
         "is_high_complexity": False,

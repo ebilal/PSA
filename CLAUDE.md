@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Source lives in `psa/` at repo root (flat hatchling layout, `packages = ["psa"]`). Entry point: `psa:main` → `cli.py`.
+
 ## Commands
 
 ```bash
@@ -21,6 +23,22 @@ uv run ruff format --check .
 ```
 
 Python is pinned to 3.13 via `.python-version`. CI tests Python 3.9, 3.11, 3.13. Coverage threshold is 30%.
+
+### CLI Subcommands
+
+| Command | Module | Purpose |
+|---------|--------|---------|
+| `psa mine <dir>` | `miner.py` / `convo_miner.py` | Ingest project files or conversation exports (`--mode convos`) |
+| `psa search "query"` | `cli.py` → `pipeline.py` | PSA pipeline query (or palace search if atlas absent) |
+| `psa atlas build\|status\|health` | `atlas.py` / `health.py` | Build atlas, show status, health report |
+| `psa lifecycle run` | `lifecycle.py` | Nightly pipeline: mine, prune, optionally rebuild atlas + retrain |
+| `psa label` / `psa train` | `training/` | Oracle labeling and selector training |
+| `psa inspect` / `psa log` | `inspect.py` | Inspect memories, view training/lifecycle logs |
+| `psa hook <harness> <event>` | `hooks_cli.py` | Session-start/stop/precompact hooks for Claude Code, Codex, etc. |
+| `psa instructions <cmd>` | `instructions_cli.py` | Print user-facing help docs |
+| `psa migrate` | `migrate.py` | Migrate ChromaDB palace → PSA MemoryStore |
+| `psa compress` / `psa split` | `consolidation.py` / `split_mega_files.py` | Re-consolidate or split mega-files |
+| `psa benchmark` | `benchmarks/` | Compare PSA pipeline vs raw ChromaDB search; LongMemEval |
 
 ## Architecture
 
@@ -94,6 +112,26 @@ Training data lives at `~/.psa/tenants/{tenant_id}/training/`:
 
 Selector trains once gates are met (≥300 oracle labels, ≥200 held-out queries, recall@24 ≥ 0.95). Model saved to `~/.psa/models/selector_v{N}/`.
 
+### Lifecycle & Forgetting
+
+`lifecycle.py` orchestrates a two-speed nightly pipeline: **fast path** (mine new sessions, per-anchor pruning) and **slow path** (rebuild atlas + retrain selector when health triggers). Run via `psa lifecycle run`.
+
+`forgetting.py` implements a 4-term forgetting score and two pruning strategies (per-anchor budget, global cap). Forgetting is soft (archive) first, hard-delete only after 90 days archived.
+
+### Entity Detection
+
+`entity_detector.py` auto-detects people and projects from file content (two-pass: extract candidates → score/classify). Used by `psa init` before mining. `entity_registry.py` persists the confirmed entity map as taxonomy for the miner.
+
+### Normalize & Hooks
+
+`normalize.py` converts chat exports (Claude JSON, ChatGPT, Claude Code JSONL, Codex JSONL, Slack JSON, plain text) to transcript format. No API key needed.
+
+`hooks_cli.py` implements session-start/stop/precompact hooks for Claude Code and Codex harnesses. Reads JSON from stdin, outputs JSON to stdout.
+
 ### Tests
 
 `tests/conftest.py` redirects `HOME` to a temp dir before any psa import to isolate state. MCP server tests (test_mcp_server.py) rely on module-level globals (`_client_cache`, `_collection_cache`) being reset between tests via monkeypatching. `test_atlas.py` patches `MIN_MEMORIES_FOR_ATLAS` to a small value for unit-scale tests. Use `MagicMock(spec=ClassName)` for PSA objects to avoid real model loading.
+
+### MCP Server
+
+`psa/mcp_server.py` — install via `claude mcp add psa -- python -m psa.mcp_server [--palace /path]`. Exposes read tools (`psa_status`, `psa_search`, `psa_list_wings`, `psa_list_rooms`, `psa_get_taxonomy`, `psa_check_duplicate`) and write tools (`psa_add_drawer`, `psa_delete_drawer`). When `psa_mode != "off"`, also exposes `psa_atlas_search` for full pipeline queries.
