@@ -11,9 +11,7 @@ Covers:
   always tested via monkeypatching the _use_faiss flag
 """
 
-import math
 import os
-import tempfile
 
 import numpy as np
 import pytest
@@ -197,3 +195,110 @@ def test_save_and_load(tmp_dir):
 def test_load_missing_path_raises(tmp_dir):
     with pytest.raises(FileNotFoundError):
         AnchorIndex.load(os.path.join(tmp_dir, "nonexistent"), dim=768)
+
+
+def test_anchor_card_has_generated_query_patterns_field():
+    card = AnchorCard(
+        anchor_id=1,
+        name="test",
+        meaning="test meaning",
+        memory_types=["semantic"],
+        include_terms=[],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.1] * 768,
+    )
+    assert hasattr(card, "generated_query_patterns")
+    assert card.generated_query_patterns == []
+
+
+def test_anchor_card_has_query_fingerprint_field():
+    card = AnchorCard(
+        anchor_id=1,
+        name="test",
+        meaning="test meaning",
+        memory_types=["semantic"],
+        include_terms=[],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.1] * 768,
+    )
+    assert hasattr(card, "query_fingerprint")
+    assert card.query_fingerprint == []
+
+
+def test_to_stable_card_text_includes_generated_query_patterns():
+    card = AnchorCard(
+        anchor_id=1,
+        name="schema-decisions",
+        meaning="Covers schema choices.",
+        memory_types=["semantic"],
+        include_terms=["migration"],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.0] * 768,
+        generated_query_patterns=["What did we decide about migrations?", "Why postgres?"],
+    )
+    text = card.to_stable_card_text()
+    assert "What did we decide about migrations?" in text
+    assert "Why postgres?" in text
+
+
+def test_to_stable_card_text_excludes_query_fingerprint():
+    card = AnchorCard(
+        anchor_id=1,
+        name="schema-decisions",
+        meaning="Covers schema choices.",
+        memory_types=["semantic"],
+        include_terms=[],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.0] * 768,
+        generated_query_patterns=[],
+        query_fingerprint=["a real user query"],
+    )
+    text = card.to_stable_card_text()
+    assert "a real user query" not in text
+
+
+def test_to_card_text_includes_query_fingerprint():
+    card = AnchorCard(
+        anchor_id=1,
+        name="schema-decisions",
+        meaning="Covers schema choices.",
+        memory_types=["semantic"],
+        include_terms=[],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.0] * 768,
+        query_fingerprint=["a real user query"],
+    )
+    text = card.to_card_text()
+    assert "a real user query" in text
+
+
+def test_from_dict_backward_compat_missing_query_fields():
+    """Old atlas JSON without new fields should load without KeyError."""
+    old_dict = {
+        "anchor_id": 99,
+        "name": "old-anchor",
+        "meaning": "old meaning",
+        "memory_types": ["semantic"],
+        "include_terms": [],
+        "exclude_terms": [],
+        "prototype_examples": [],
+        "near_but_different": [],
+        "centroid": [0.0] * 768,
+        "memory_count": 5,
+        "is_novelty": False,
+        "status": "active",
+        "metadata": {},
+    }
+    card = AnchorCard.from_dict(old_dict)
+    assert card.generated_query_patterns == []
+    assert card.query_fingerprint == []

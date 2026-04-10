@@ -45,6 +45,8 @@ class AnchorCard:
     is_novelty: bool = False  # True → novelty/overflow anchor
     status: str = "active"  # "active" | "retired"
     metadata: dict = field(default_factory=dict)
+    generated_query_patterns: List[str] = field(default_factory=list)
+    query_fingerprint: List[str] = field(default_factory=list)
 
     def to_stable_card_text(self) -> str:
         """
@@ -58,6 +60,10 @@ class AnchorCard:
             parts.append(f"Includes: {', '.join(self.include_terms[:8])}")
         if self.exclude_terms:
             parts.append(f"Excludes: {', '.join(self.exclude_terms[:4])}")
+        if self.generated_query_patterns:
+            parts.append("Example questions this anchor answers:")
+            for q in self.generated_query_patterns[:15]:
+                parts.append(f"  - {q}")
         return "\n".join(parts)
 
     def to_card_text(self) -> str:
@@ -67,6 +73,10 @@ class AnchorCard:
         text = self.to_stable_card_text()
         if self.prototype_examples:
             text += f"\nExamples: {'; '.join(self.prototype_examples[:3])}"
+        if self.query_fingerprint:
+            text += "\nRecent queries:\n" + "\n".join(
+                f"  - {q}" for q in self.query_fingerprint[-20:]
+            )
         return text
 
     def to_dict(self) -> dict:
@@ -74,6 +84,9 @@ class AnchorCard:
 
     @classmethod
     def from_dict(cls, d: dict) -> "AnchorCard":
+        d = dict(d)  # shallow copy — don't mutate caller's dict
+        d.setdefault("generated_query_patterns", [])
+        d.setdefault("query_fingerprint", [])
         return cls(**d)
 
 
