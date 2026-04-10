@@ -33,17 +33,17 @@ class AnchorCard:
     """
 
     anchor_id: int
-    name: str                          # short human-readable label
-    meaning: str                       # 1-3 sentence description of what belongs here
-    memory_types: List[str]            # dominant memory types in this region
-    include_terms: List[str]           # terms that signal membership
-    exclude_terms: List[str]           # terms that signal non-membership
-    prototype_examples: List[str]      # representative memory titles/summaries
-    near_but_different: List[str]      # titles that are close but belong elsewhere
-    centroid: List[float]              # L2-normalized centroid vector (dim=768)
-    memory_count: int = 0              # number of memories assigned to this anchor
-    is_novelty: bool = False           # True → novelty/overflow anchor
-    status: str = "active"             # "active" | "retired"
+    name: str  # short human-readable label
+    meaning: str  # 1-3 sentence description of what belongs here
+    memory_types: List[str]  # dominant memory types in this region
+    include_terms: List[str]  # terms that signal membership
+    exclude_terms: List[str]  # terms that signal non-membership
+    prototype_examples: List[str]  # representative memory titles/summaries
+    near_but_different: List[str]  # titles that are close but belong elsewhere
+    centroid: List[float]  # L2-normalized centroid vector (dim=768)
+    memory_count: int = 0  # number of memories assigned to this anchor
+    is_novelty: bool = False  # True → novelty/overflow anchor
+    status: str = "active"  # "active" | "retired"
     metadata: dict = field(default_factory=dict)
 
     def to_stable_card_text(self) -> str:
@@ -100,6 +100,7 @@ class AnchorIndex:
     def _try_init_faiss(self) -> bool:
         try:
             import faiss  # noqa: F401
+
             return True
         except ImportError:
             logger.debug("faiss-cpu not installed; using numpy dot-product for anchor search")
@@ -127,11 +128,12 @@ class AnchorIndex:
 
     def _build_faiss(self):
         import faiss
+
         idx = faiss.IndexFlatIP(self.dim)
         idx.add(self._centroids)
         self._faiss_index = idx
 
-    def search(self, query_vec: List[float], top_k: int = 24) -> List[Tuple[int, float]]:
+    def search(self, query_vec: List[float], top_k: int = 32) -> List[Tuple[int, float]]:
         """
         Find the top-k nearest anchors to a query vector.
 
@@ -162,8 +164,11 @@ class AnchorIndex:
 
         if self._use_faiss and self._faiss_index is not None:
             scores, indices = self._faiss_index.search(qvec, k)
-            return [(self._cards[i].anchor_id, float(scores[0][j]))
-                    for j, i in enumerate(indices[0]) if i >= 0]
+            return [
+                (self._cards[i].anchor_id, float(scores[0][j]))
+                for j, i in enumerate(indices[0])
+                if i >= 0
+            ]
         else:
             # numpy fallback
             sims = (self._centroids @ qvec.T).flatten()

@@ -19,12 +19,12 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .atlas import Atlas, AtlasManager
 from .embeddings import EmbeddingModel
-from .memory_object import MemoryObject, MemoryStore, MemoryType
+from .memory_object import MemoryObject, MemoryStore
 from .packer import EvidencePacker, PackedContext
 from .retriever import AnchorCandidate, AnchorRetriever
 from .selector import AnchorSelector, SelectedAnchor
@@ -127,7 +127,7 @@ class PSAPipeline:
     def query(
         self,
         query: str,
-        top_k_candidates: int = 24,
+        top_k_candidates: int = 32,
     ) -> PSAResult:
         """
         Run the full PSA query pipeline.
@@ -160,9 +160,7 @@ class PSAPipeline:
         )
         timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms
-        )
+        logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
 
         if not candidates:
             packed = PackedContext(
@@ -192,9 +190,7 @@ class PSAPipeline:
         )
         timing.select_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Selected %d anchors in %.1fms", len(selected), timing.select_ms
-        )
+        logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
 
         # No anchors met the threshold — nothing relevant in memory
         if not selected:
@@ -221,9 +217,7 @@ class PSAPipeline:
         memories = self._fetch_memories(selected)
         timing.fetch_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Fetched %d memories in %.1fms", len(memories), timing.fetch_ms
-        )
+        logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
 
         # Step 5: Pack context
         t0 = time.perf_counter()
@@ -243,9 +237,7 @@ class PSAPipeline:
             except Exception:
                 logger.debug("Failed to record packed telemetry", exc_info=True)
 
-        logger.debug(
-            "Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms
-        )
+        logger.debug("Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms)
         logger.info(
             "PSA query complete: %.1fms total (%d memories, %d tokens)",
             timing.total_ms,
@@ -389,8 +381,7 @@ class PSAPipeline:
         atlas = atlas_mgr.get_atlas()
         if atlas is None:
             raise FileNotFoundError(
-                f"No atlas found for tenant '{tenant_id}'. "
-                "Run 'psa atlas build' to build one."
+                f"No atlas found for tenant '{tenant_id}'. Run 'psa atlas build' to build one."
             )
 
         # Read lifecycle state for selector mode override
