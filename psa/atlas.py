@@ -585,6 +585,7 @@ class AtlasBuilder:
                     exclude_terms=old_card.exclude_terms,
                     prototype_examples=[m.title for m in cluster_mems[:5]],
                     near_but_different=old_card.near_but_different,
+                    generated_query_patterns=old_card.generated_query_patterns,
                     centroid=centroid_list,
                     memory_count=len(cluster_mems),
                     is_novelty=False,
@@ -714,6 +715,8 @@ class AtlasBuilder:
                     new_anchor_id=new_id,
                 )
         atlas.fingerprint_store = new_fingerprints
+        for card in atlas.cards:
+            card.query_fingerprint = atlas.fingerprint_store.get(card.anchor_id)
         new_fingerprints.save()
 
         logger.info(
@@ -772,6 +775,8 @@ class AtlasManager:
         try:
             atlas = Atlas.load(atlas_dir)
             atlas.fingerprint_store = FingerprintStore(atlas.anchor_dir)
+            for card in atlas.cards:
+                card.query_fingerprint = atlas.fingerprint_store.get(card.anchor_id)
             return atlas
         except Exception as e:
             logger.warning("Failed to load atlas v%d: %s", v, e)

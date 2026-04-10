@@ -116,6 +116,6 @@ class AnchorSynthesizer:
         return call_llm(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=token_budget,
+            max_tokens=min(token_budget, 800),
             json_mode=False,
         )

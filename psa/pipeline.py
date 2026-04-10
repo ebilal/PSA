@@ -195,7 +195,7 @@ class PSAPipeline:
         logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
 
         # Accumulate query fingerprints for above-threshold selected anchors
-        if self.atlas.fingerprint_store is not None:
+        if self.atlas.fingerprint_store is not None and selected:
             for sa in selected:
                 self.atlas.fingerprint_store.append(sa.anchor_id, query)
             self.atlas.fingerprint_store.save()
