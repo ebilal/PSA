@@ -312,16 +312,16 @@ def _generate_card_via_qwen(
     is_novelty: bool = False,
 ) -> AnchorCard:
     """
-    Generate a semantic AnchorCard using Qwen to analyze cluster contents.
+    Generate a semantic AnchorCard using an LLM to analyze cluster contents.
 
-    Sends sample memory titles and summaries to Qwen, which produces a
-    human-readable name, meaning, and include/exclude terms. Falls back to
-    a stub card if Qwen is unavailable.
+    Sends sample memory titles and summaries to the LLM, which produces a
+    human-readable name, meaning, include/exclude terms, and query_patterns
+    (example questions this anchor can answer). Falls back to a stub card
+    if the LLM is unavailable.
     """
     import json as _json
 
     titles = [m.title for m in sample_memories[:10]]
-    summaries = [m.summary for m in sample_memories[:10] if m.summary]
     memory_types = list({m.memory_type.value for m in sample_memories[:10]})
     prototypes = [m.title for m in sample_memories[:5]]
 

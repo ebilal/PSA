@@ -25,11 +25,9 @@ import pytest
 
 import psa.atlas as atlas_mod
 from psa.atlas import (
-    MIN_MEMORIES_FOR_ATLAS,
     AtlasBuilder,
     AtlasCorpusTooSmall,
     AtlasManager,
-    AtlasUnstable,
     _generate_card_via_qwen as _real_generate_card_via_qwen,
     _l2_normalize_rows,
     _spherical_kmeans,
@@ -280,7 +278,7 @@ def test_atlas_save_and_load(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
     atlas_dir = os.path.join(tmp_dir, "atlas_v1")
-    atlas = builder.build_atlas(version=1, output_dir=atlas_dir)
+    builder.build_atlas(version=1, output_dir=atlas_dir)
 
     loaded = atlas_mod.Atlas.load(atlas_dir)
     assert loaded.version == 1
@@ -430,3 +428,19 @@ def test_generate_card_has_query_patterns(monkeypatch):
         "What auth library did we use?",
         "How do tokens expire?",
     ]
+
+    # Verify the [:15] cap is enforced
+    mock_response_16 = json.dumps({
+        "name": "auth-patterns",
+        "meaning": "Auth stuff.",
+        "include_terms": [],
+        "exclude_terms": [],
+        "query_patterns": [f"question {i}?" for i in range(16)],
+    })
+    monkeypatch.setattr(llm_module, "call_llm", lambda **kw: mock_response_16)
+    card2 = _real_generate_card_via_qwen(
+        anchor_id=2,
+        centroid=[0.0] * 768,
+        sample_memories=[mo],
+    )
+    assert len(card2.generated_query_patterns) == 15
