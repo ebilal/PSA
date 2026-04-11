@@ -269,6 +269,25 @@ def score(
         valid = [s for s in llm_scores if s is not None]
         avg_llm = sum(valid) / len(valid) if valid else 0.0
 
+    # Backtrack gold anchors for all records (used for labels AND R@5).
+    gold_anchors_by_idx: Dict[int, set] = {}
+    try:
+        from ..pipeline import PSAPipeline
+        from ..training.oracle_labeler import backtrack_gold_anchors
+
+        _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+        for i, r in enumerate(records):
+            ans_ids = r.get("answer_session_ids", [])
+            if ans_ids:
+                gold = set(
+                    backtrack_gold_anchors(ans_ids, _pipeline.store, _pipeline.atlas, tenant_id)
+                )
+                if gold:
+                    gold_anchors_by_idx[i] = gold
+    except Exception:
+        logger.debug("Could not backtrack gold anchors", exc_info=True)
+
+    # Write oracle labels with gold anchor signal for selector training.
     FAILURE_THRESHOLD = 0.3
     SUCCESS_THRESHOLD = 0.5
     oracle_labels_written = 0
@@ -276,36 +295,31 @@ def score(
     os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
 
     with open(oracle_path, "a", encoding="utf-8") as f:
-        for record, f1 in zip(records, exact_f1_scores):
-            if f1 < FAILURE_THRESHOLD:
+        for i, (record, f1) in enumerate(zip(records, exact_f1_scores)):
+            gold = gold_anchors_by_idx.get(i)
+            selected = set(record.get("selected_anchor_ids", []))
+            if gold:
+                # Gold anchors known: winning_oracle_set = gold ∩ selected
+                winning = sorted(gold & selected) if (gold & selected) else []
+                label = _make_oracle_label(record, f1, winning_set=winning)
+                f.write(json.dumps(label) + "\n")
+                oracle_labels_written += 1
+            elif f1 < FAILURE_THRESHOLD:
                 label = _make_oracle_label(record, f1)
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
             elif f1 >= SUCCESS_THRESHOLD:
-                # Write success labels so training has positive examples
-                label = _make_oracle_label(record, f1, success=True)
+                label = _make_oracle_label(record, f1, winning_set=sorted(selected))
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
 
-    # Compute Recall@Anchors: did the selected anchors include any gold anchor?
-    # Gold anchors are backtracked from answer_session_ids via MemoryStore.
+    # Compute Recall@Anchors from already-backtracked gold anchors.
     recall_scores = []
-    try:
-        from ..pipeline import PSAPipeline
-        from ..training.oracle_labeler import backtrack_gold_anchors
-
-        _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
-        for r in records:
-            ans_ids = r.get("answer_session_ids", [])
-            selected = set(r.get("selected_anchor_ids", []))
-            if ans_ids and selected:
-                gold = set(
-                    backtrack_gold_anchors(ans_ids, _pipeline.store, _pipeline.atlas, tenant_id)
-                )
-                if gold:
-                    recall_scores.append(1.0 if gold & selected else 0.0)
-    except Exception:
-        logger.debug("Could not compute anchor recall", exc_info=True)
+    for i, r in enumerate(records):
+        gold = gold_anchors_by_idx.get(i)
+        selected = set(r.get("selected_anchor_ids", []))
+        if gold and selected:
+            recall_scores.append(1.0 if gold & selected else 0.0)
     avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else None
 
     result: Dict[str, Any] = {
@@ -453,8 +467,12 @@ def _oracle_labels_path(tenant_id: str) -> str:
     return os.path.expanduser(f"~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl")
 
 
-def _make_oracle_label(record: Dict, f1: float, success: bool = False) -> Dict:
-    """Create an oracle label for a question result."""
+def _make_oracle_label(record: Dict, f1: float, winning_set: Optional[List[int]] = None) -> Dict:
+    """Create an oracle label for a question result.
+
+    winning_set: anchor IDs that constitute the positive training signal.
+    When backtracked gold anchors are known, this is (gold ∩ selected).
+    """
     now = datetime.now(timezone.utc).isoformat()
     q_hash = hashlib.md5(record["question"].encode(), usedforsecurity=False).hexdigest()[:8]
     anchor_ids = record.get("selected_anchor_ids", [])
@@ -464,8 +482,8 @@ def _make_oracle_label(record: Dict, f1: float, success: bool = False) -> Dict:
         "atlas_version": -1,
         "runtime_model_id": "longmemeval",
         "candidate_anchor_ids": anchor_ids,
-        "all_sets": [anchor_ids] if success else [],
-        "winning_oracle_set": anchor_ids if success else [],
+        "all_sets": [winning_set] if winning_set else [],
+        "winning_oracle_set": winning_set or [],
         "winning_oracle_score": f1,
         "labeled_at": now,
         "is_high_complexity": False,
