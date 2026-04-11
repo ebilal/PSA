@@ -237,7 +237,7 @@ def test_write_session_jsonl_creates_file(tmp_path):
 
 
 def test_write_session_jsonl_correct_records(tmp_path):
-    path = str(tmp_path / "session.jsonl")
+    path = str(tmp_path / "session.json")
     messages = [
         {"role": "user", "content": "Hello there"},
         {"role": "assistant", "content": "Hi!"},
@@ -245,39 +245,33 @@ def test_write_session_jsonl_correct_records(tmp_path):
     _write_session_jsonl(path, "sess_001", messages)
 
     with open(path, encoding="utf-8") as f:
-        lines = [line.strip() for line in f if line.strip()]
+        records = json.load(f)
 
-    assert len(lines) == 2
-    rec0 = json.loads(lines[0])
-    rec1 = json.loads(lines[1])
-
-    assert rec0["type"] == "message"
-    assert rec0["role"] == "user"
-    assert rec0["content"] == "Hello there"
-    assert rec0["session_id"] == "sess_001"
-
-    assert rec1["role"] == "assistant"
-    assert rec1["content"] == "Hi!"
-    assert rec1["session_id"] == "sess_001"
+    assert len(records) == 2
+    assert records[0]["role"] == "user"
+    assert records[0]["content"] == "Hello there"
+    assert records[1]["role"] == "assistant"
+    assert records[1]["content"] == "Hi!"
 
 
 def test_write_session_jsonl_empty_messages(tmp_path):
-    path = str(tmp_path / "empty_session.jsonl")
+    path = str(tmp_path / "empty_session.json")
     _write_session_jsonl(path, "sess_empty", [])
     with open(path) as f:
-        content = f.read()
-    assert content == ""
+        records = json.load(f)
+    assert records == []
 
 
 def test_write_session_jsonl_missing_fields(tmp_path):
-    """Messages with missing role/content should use defaults."""
-    path = str(tmp_path / "session.jsonl")
-    messages = [{}]
+    """Messages with missing content are filtered out."""
+    path = str(tmp_path / "session.json")
+    messages = [{"role": "user", "content": ""}, {"role": "user", "content": "hello"}]
     _write_session_jsonl(path, "sess_x", messages)
     with open(path) as f:
-        rec = json.loads(f.read().strip())
-    assert rec["role"] == "user"
-    assert rec["content"] == ""
+        records = json.load(f)
+    # Empty content is filtered
+    assert len(records) == 1
+    assert records[0]["content"] == "hello"
 
 
 # ── score() ───────────────────────────────────────────────────────────────────
