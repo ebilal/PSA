@@ -386,6 +386,9 @@ class PSAPipeline:
         token_budget: int = 6000,
         selector_mode: str = "cosine",
         selector_model_path: Optional[str] = None,
+        selector_max_k: int = 6,
+        selector_min_k: Optional[int] = None,
+        selector_rerank_only: bool = False,
         psa_mode: str = "side-by-side",
         base_dir: Optional[str] = None,
     ) -> "PSAPipeline":
@@ -431,7 +434,13 @@ class PSAPipeline:
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 pass
 
-        selector_kwargs = dict(mode=selector_mode, model_path=selector_model_path)
+        selector_kwargs = dict(
+            mode=selector_mode,
+            model_path=selector_model_path,
+            max_k=selector_max_k,
+            min_k=selector_min_k,
+            rerank_only=selector_rerank_only,
+        )
         if selector_threshold is not None:
             selector_kwargs["threshold"] = selector_threshold
         selector = AnchorSelector(**selector_kwargs)

@@ -825,9 +825,14 @@ def _cmd_longmemeval(args):
         limit = getattr(args, "limit", None)
         selector_mode = getattr(args, "selector", "cosine")
         selector_model_path = getattr(args, "selector_model", None)
+        max_k = getattr(args, "max_k", 6)
+        min_k = getattr(args, "min_k", None)
+        rerank_only = getattr(args, "rerank_only", False)
         print(
             f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions, "
-            f"selector={selector_mode})..."
+            f"selector={selector_mode}, max_k={max_k}"
+            f"{f', min_k={min_k}' if min_k else ''}"
+            f"{', rerank_only' if rerank_only else ''})..."
         )
         out_path = run(
             split=split,
@@ -835,6 +840,9 @@ def _cmd_longmemeval(args):
             tenant_id=tenant_id,
             selector_mode=selector_mode,
             selector_model_path=selector_model_path,
+            max_k=max_k,
+            min_k=min_k,
+            rerank_only=rerank_only,
         )
         print(f"Results: {out_path}")
         print("Run 'psa benchmark longmemeval score' next.")
