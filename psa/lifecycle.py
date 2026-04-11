@@ -491,14 +491,28 @@ class LifecyclePipeline:
             return False
 
         # Generate training data from existing labels
-        training_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
+        examples_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
         anchor_cards = {c.anchor_id: c.to_stable_card_text() for c in atlas.cards}
         gen = DataGenerator(oracle_labels_path=labels_path, anchor_cards=anchor_cards)
-        n_written = gen.generate(output_path=training_path, n_examples=max(1000, label_count * 20))
+        n_written = gen.generate(output_path=examples_path, n_examples=max(1000, label_count * 20))
 
         if n_written < 100:
             logger.info("Only %d training examples generated. Staying in cosine mode.", n_written)
             return False
+
+        # Query-grouped train/val split (no leakage)
+        from .training.data_split import split_train_val
+
+        train_path = os.path.join(tenant.root_dir, "training", "train_data.jsonl")
+        val_path = os.path.join(tenant.root_dir, "training", "val_data.jsonl")
+        split_stats = split_train_val(examples_path, train_path, val_path)
+        logger.info(
+            "Train/val split: %d/%d queries, pos rate: train=%.1f%% val=%.1f%%",
+            split_stats["n_train_queries"],
+            split_stats["n_val_queries"],
+            split_stats["train_positive_rate"] * 100,
+            split_stats["val_positive_rate"] * 100,
+        )
 
         # Train
         selector_version = state.get("selector_version", 0) + 1
@@ -509,7 +523,9 @@ class LifecyclePipeline:
         )
 
         try:
-            sv = trainer.train(train_data_path=training_path, version=selector_version)
+            sv = trainer.train(
+                train_data_path=train_path, val_data_path=val_path, version=selector_version
+            )
             logger.info("Selector v%d trained → %s", sv.version, sv.model_path)
 
             # Activate trained selector (mutate state; saved by run())
