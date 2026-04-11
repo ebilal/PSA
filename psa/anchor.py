@@ -33,31 +33,43 @@ class AnchorCard:
     """
 
     anchor_id: int
-    name: str                          # short human-readable label
-    meaning: str                       # 1-3 sentence description of what belongs here
-    memory_types: List[str]            # dominant memory types in this region
-    include_terms: List[str]           # terms that signal membership
-    exclude_terms: List[str]           # terms that signal non-membership
-    prototype_examples: List[str]      # representative memory titles/summaries
-    near_but_different: List[str]      # titles that are close but belong elsewhere
-    centroid: List[float]              # L2-normalized centroid vector (dim=768)
-    memory_count: int = 0              # number of memories assigned to this anchor
-    is_novelty: bool = False           # True → novelty/overflow anchor
-    status: str = "active"             # "active" | "retired"
+    name: str  # short human-readable label
+    meaning: str  # 1-3 sentence description of what belongs here
+    memory_types: List[str]  # dominant memory types in this region
+    include_terms: List[str]  # terms that signal membership
+    exclude_terms: List[str]  # terms that signal non-membership
+    prototype_examples: List[str]  # representative memory titles/summaries
+    near_but_different: List[str]  # titles that are close but belong elsewhere
+    centroid: List[float]  # L2-normalized centroid vector (dim=768)
+    memory_count: int = 0  # number of memories assigned to this anchor
+    is_novelty: bool = False  # True → novelty/overflow anchor
+    status: str = "active"  # "active" | "retired"
     metadata: dict = field(default_factory=dict)
+    generated_query_patterns: List[str] = field(default_factory=list)
+    query_fingerprint: List[str] = field(default_factory=list)
 
     def to_stable_card_text(self) -> str:
         """
         Stable text used by selector (training + inference).
 
-        Does not include volatile prototype examples, so the selector
-        remains valid across atlas rebuilds that refresh examples.
+        'Stable' means the same text is produced at training time and at
+        inference time for a given atlas version. Does not include volatile
+        prototype examples (refreshed on rebuild) or query_fingerprint
+        (accumulated at runtime, too dynamic for training targets).
+
+        Includes generated_query_patterns because they are seeded at atlas
+        build time and locked to that atlas version. When a new atlas is
+        built the selector is retrained against the new cards.
         """
         parts = [f"Anchor: {self.name}", f"Meaning: {self.meaning}"]
         if self.include_terms:
             parts.append(f"Includes: {', '.join(self.include_terms[:8])}")
         if self.exclude_terms:
             parts.append(f"Excludes: {', '.join(self.exclude_terms[:4])}")
+        if self.generated_query_patterns:
+            parts.append("Example questions this anchor answers:")
+            for q in self.generated_query_patterns[:15]:
+                parts.append(f"  - {q}")
         return "\n".join(parts)
 
     def to_card_text(self) -> str:
@@ -67,6 +79,10 @@ class AnchorCard:
         text = self.to_stable_card_text()
         if self.prototype_examples:
             text += f"\nExamples: {'; '.join(self.prototype_examples[:3])}"
+        if self.query_fingerprint:
+            text += "\nRecent queries:\n" + "\n".join(
+                f"  - {q}" for q in self.query_fingerprint[-20:]
+            )
         return text
 
     def to_dict(self) -> dict:
@@ -74,6 +90,13 @@ class AnchorCard:
 
     @classmethod
     def from_dict(cls, d: dict) -> "AnchorCard":
+        import dataclasses
+
+        d = dict(d)
+        d.setdefault("generated_query_patterns", [])
+        d.setdefault("query_fingerprint", [])
+        known = {f.name for f in dataclasses.fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         return cls(**d)
 
 
@@ -100,6 +123,7 @@ class AnchorIndex:
     def _try_init_faiss(self) -> bool:
         try:
             import faiss  # noqa: F401
+
             return True
         except ImportError:
             logger.debug("faiss-cpu not installed; using numpy dot-product for anchor search")
@@ -127,11 +151,12 @@ class AnchorIndex:
 
     def _build_faiss(self):
         import faiss
+
         idx = faiss.IndexFlatIP(self.dim)
         idx.add(self._centroids)
         self._faiss_index = idx
 
-    def search(self, query_vec: List[float], top_k: int = 24) -> List[Tuple[int, float]]:
+    def search(self, query_vec: List[float], top_k: int = 32) -> List[Tuple[int, float]]:
         """
         Find the top-k nearest anchors to a query vector.
 
@@ -162,8 +187,11 @@ class AnchorIndex:
 
         if self._use_faiss and self._faiss_index is not None:
             scores, indices = self._faiss_index.search(qvec, k)
-            return [(self._cards[i].anchor_id, float(scores[0][j]))
-                    for j, i in enumerate(indices[0]) if i >= 0]
+            return [
+                (self._cards[i].anchor_id, float(scores[0][j]))
+                for j, i in enumerate(indices[0])
+                if i >= 0
+            ]
         else:
             # numpy fallback
             sims = (self._centroids @ qvec.T).flatten()

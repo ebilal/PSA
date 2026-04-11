@@ -25,11 +25,10 @@ import pytest
 
 import psa.atlas as atlas_mod
 from psa.atlas import (
-    MIN_MEMORIES_FOR_ATLAS,
     AtlasBuilder,
     AtlasCorpusTooSmall,
     AtlasManager,
-    AtlasUnstable,
+    _generate_card_via_qwen as _real_generate_card_via_qwen,
     _l2_normalize_rows,
     _spherical_kmeans,
     _stability_score,
@@ -172,16 +171,14 @@ def small_k(monkeypatch):
     monkeypatch.setattr(atlas_mod, "V1_NOVELTY_ANCHORS", 4)
     monkeypatch.setattr(atlas_mod, "V1_TOTAL_ANCHORS", 12)
     monkeypatch.setattr(atlas_mod, "MIN_MEMORIES_FOR_ATLAS", 50)
-    monkeypatch.setattr(atlas_mod, "N_SEEDS", 1)   # 1 seed → stability trivially passes
+    monkeypatch.setattr(atlas_mod, "N_SEEDS", 1)  # 1 seed → stability trivially passes
     monkeypatch.setattr(atlas_mod, "MAX_ITERATIONS", 30)
 
 
 def test_atlas_build_produces_correct_anchor_count(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     # 8 learned + 4 novelty = 12
     assert atlas.anchor_index.size == 12
     assert atlas.stats.n_anchors_learned == 8
@@ -191,9 +188,7 @@ def test_atlas_build_produces_correct_anchor_count(tmp_dir, small_k):
 def test_atlas_build_novelty_anchors_flagged(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     novelty_cards = [c for c in atlas.cards if c.is_novelty]
     assert len(novelty_cards) == 4
 
@@ -201,9 +196,7 @@ def test_atlas_build_novelty_anchors_flagged(tmp_dir, small_k):
 def test_atlas_build_updates_anchor_assignments(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     # All memories should have a primary_anchor_id assigned
     memories = store.get_all_with_embeddings("test")
     assigned = [m for m in memories if m.primary_anchor_id is not None]
@@ -213,9 +206,7 @@ def test_atlas_build_updates_anchor_assignments(tmp_dir, small_k):
 def test_atlas_stats_sane(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     assert atlas.stats.n_memories == 80
     assert atlas.stats.mean_cluster_size > 0
     assert atlas.stats.min_cluster_size >= 0
@@ -229,9 +220,7 @@ def test_atlas_stats_sane(tmp_dir, small_k):
 def test_atlas_assign_memory(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     # Create a fresh memory with an embedding
     rng = np.random.default_rng(999)
     embedding = rng.standard_normal(64).astype(np.float32)
@@ -256,9 +245,7 @@ def test_atlas_assign_memory(tmp_dir, small_k):
 def test_atlas_assign_memory_no_embedding_raises(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
     mo = MemoryObject.create(
         tenant_id="test",
         memory_type=MemoryType.SEMANTIC,
@@ -279,7 +266,7 @@ def test_atlas_save_and_load(tmp_dir, small_k):
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
     atlas_dir = os.path.join(tmp_dir, "atlas_v1")
-    atlas = builder.build_atlas(version=1, output_dir=atlas_dir)
+    builder.build_atlas(version=1, output_dir=atlas_dir)
 
     loaded = atlas_mod.Atlas.load(atlas_dir)
     assert loaded.version == 1
@@ -336,9 +323,7 @@ def test_assign_memory_routes_distant_to_novelty(tmp_dir, small_k):
     """Memories far from all learned anchors should route to a novelty anchor."""
     store = _make_store_with_memories(tmp_dir, n=80, dim=64)
     builder = AtlasBuilder(store=store, tenant_id="test")
-    atlas = builder.build_atlas(
-        version=1, output_dir=os.path.join(tmp_dir, "atlas_v1")
-    )
+    atlas = builder.build_atlas(version=1, output_dir=os.path.join(tmp_dir, "atlas_v1"))
 
     novelty_ids = {c.anchor_id for c in atlas.cards if c.is_novelty}
     learned_ids = {c.anchor_id for c in atlas.cards if not c.is_novelty}
@@ -369,10 +354,12 @@ def test_assign_memory_routes_distant_to_novelty(tmp_dir, small_k):
 
     # Compute best learned anchor score to know what routing should do
     from psa.atlas import NOVELTY_DISTANCE_THRESHOLD
+
     emb_arr = np.asarray(emb, dtype=np.float32)
     best_learned_score = max(
         float(emb_arr @ np.asarray(c.centroid, dtype=np.float32))
-        for c in atlas.cards if not c.is_novelty
+        for c in atlas.cards
+        if not c.is_novelty
     )
 
     primary_id, secondary_id, confidence = atlas.assign_memory(mo)
@@ -387,3 +374,65 @@ def test_assign_memory_routes_distant_to_novelty(tmp_dir, small_k):
     else:
         # Normal routing — just verify valid anchor
         assert primary_id in (novelty_ids | learned_ids)
+
+
+# ── _generate_card_via_qwen query_patterns ───────────────────────────────────
+
+
+def test_generate_card_has_query_patterns(monkeypatch):
+    """_generate_card_via_qwen should populate generated_query_patterns from LLM response."""
+    import json
+    from unittest.mock import MagicMock
+
+    import psa.llm as llm_module
+
+    mock_response = json.dumps(
+        {
+            "name": "auth-patterns",
+            "meaning": "Authentication design choices.",
+            "include_terms": ["auth", "token"],
+            "exclude_terms": ["ui"],
+            "query_patterns": [
+                "What auth library did we use?",
+                "How do tokens expire?",
+            ],
+        }
+    )
+
+    monkeypatch.setattr(llm_module, "call_llm", lambda **kw: mock_response)
+
+    mo = MagicMock(spec=MemoryObject)
+    mo.title = "JWT setup"
+    mo.summary = "We use JWT."
+    mo.memory_type = MemoryType.PROCEDURAL
+
+    # Call the real implementation directly (captured at module import time,
+    # before conftest's autouse fixture replaces atlas_mod._generate_card_via_qwen
+    # with a stub).
+    card = _real_generate_card_via_qwen(
+        anchor_id=1,
+        centroid=[0.0] * 768,
+        sample_memories=[mo],
+    )
+    assert card.generated_query_patterns == [
+        "What auth library did we use?",
+        "How do tokens expire?",
+    ]
+
+    # Verify the [:15] cap is enforced
+    mock_response_16 = json.dumps(
+        {
+            "name": "auth-patterns",
+            "meaning": "Auth stuff.",
+            "include_terms": [],
+            "exclude_terms": [],
+            "query_patterns": [f"question {i}?" for i in range(16)],
+        }
+    )
+    monkeypatch.setattr(llm_module, "call_llm", lambda **kw: mock_response_16)
+    card2 = _real_generate_card_via_qwen(
+        anchor_id=2,
+        centroid=[0.0] * 768,
+        sample_memories=[mo],
+    )
+    assert len(card2.generated_query_patterns) == 15

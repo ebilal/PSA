@@ -69,7 +69,7 @@ class MigrationStats:
 
     total: int = 0
     migrated: int = 0
-    skipped: int = 0   # already exists in MemoryStore
+    skipped: int = 0  # already exists in MemoryStore
     failed: int = 0
     errors: List[str] = field(default_factory=list)
 
@@ -120,15 +120,13 @@ def migrate_palace_to_psa(
         import chromadb
     except ImportError:
         raise ImportError(
-            "chromadb is required for palace migration. "
-            "Install it with: pip install chromadb"
+            "chromadb is required for palace migration. Install it with: pip install chromadb"
         )
 
     chroma_path = os.path.expanduser(chroma_path)
     if not os.path.exists(chroma_path):
         raise FileNotFoundError(
-            f"ChromaDB palace not found at '{chroma_path}'. "
-            "Check the path and try again."
+            f"ChromaDB palace not found at '{chroma_path}'. Check the path and try again."
         )
 
     client = chromadb.PersistentClient(path=chroma_path)
@@ -149,7 +147,9 @@ def migrate_palace_to_psa(
     # Get total count
     total = collection.count()
     stats.total = total
-    logger.info("Migrating %d drawers from '%s' → PSA tenant '%s'", total, collection_name, tenant_id)
+    logger.info(
+        "Migrating %d drawers from '%s' → PSA tenant '%s'", total, collection_name, tenant_id
+    )
 
     if total == 0:
         return stats
@@ -260,6 +260,7 @@ def get_palace_chroma_path() -> Optional[str]:
     """Return the ChromaDB palace path from PSA config, if configured."""
     try:
         from .config import MempalaceConfig
+
         cfg = MempalaceConfig()
         palace = getattr(cfg, "palace_path", None) or os.path.expanduser("~/.psa/palace")
         return palace if os.path.exists(palace) else None

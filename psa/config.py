@@ -14,11 +14,11 @@ DEFAULT_COLLECTION_NAME = "psa_drawers"
 
 # PSA-specific defaults
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
-DEFAULT_ATLAS_SIZE = 256          # 224 learned + 32 novelty anchors (V1 fixed)
-DEFAULT_TOKEN_BUDGET = 6000       # packed context token budget
+DEFAULT_ATLAS_SIZE = 256  # 224 learned + 32 novelty anchors (V1 fixed)
+DEFAULT_TOKEN_BUDGET = 6000  # packed context token budget
 DEFAULT_SELECTOR_THRESHOLD = 0.3  # minimum selector score to include an anchor
 DEFAULT_TENANT_ID = "default"
-DEFAULT_PSA_MODE = "primary"       # "off" | "side-by-side" | "primary"
+DEFAULT_PSA_MODE = "primary"  # "off" | "side-by-side" | "primary"
 
 # Lifecycle defaults
 DEFAULT_MAX_MEMORIES = 50_000
@@ -174,9 +174,9 @@ class MempalaceConfig:
     def tenant_id(self):
         """Active tenant identifier."""
         import re
-        tid = (
-            os.environ.get("PSA_TENANT_ID")
-            or self._file_config.get("tenant_id", DEFAULT_TENANT_ID)
+
+        tid = os.environ.get("PSA_TENANT_ID") or self._file_config.get(
+            "tenant_id", DEFAULT_TENANT_ID
         )
         if not re.match(r"^[a-z0-9_-]{1,64}$", tid):
             raise ValueError(
@@ -194,10 +194,7 @@ class MempalaceConfig:
         "side-by-side" — PSA runs alongside raw; results from both available
         "off"          — existing raw ChromaDB search only (legacy fallback)
         """
-        return (
-            os.environ.get("PSA_MODE")
-            or self._file_config.get("psa_mode", DEFAULT_PSA_MODE)
-        )
+        return os.environ.get("PSA_MODE") or self._file_config.get("psa_mode", DEFAULT_PSA_MODE)
 
     # ── Lifecycle settings ─────────────────────────────────────────────────
 

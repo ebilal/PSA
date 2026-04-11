@@ -543,17 +543,29 @@ def cmd_train(args):
     print(f"Training selector from {label_count} oracle labels...")
 
     # Generate training data
-    training_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
+    examples_path = os.path.join(tenant.root_dir, "training", "training_data.jsonl")
     anchor_cards = {c.anchor_id: c.to_stable_card_text() for c in atlas.cards}
     gen = DataGenerator(oracle_labels_path=labels_path, anchor_cards=anchor_cards)
-    n_written = gen.generate(output_path=training_path, n_examples=max(1000, label_count * 20))
+    n_written = gen.generate(output_path=examples_path, n_examples=max(1000, label_count * 20))
     print(f"  Generated {n_written} training examples.")
+
+    # Query-grouped train/val split (no leakage)
+    from .training.data_split import split_train_val
+
+    train_path = os.path.join(tenant.root_dir, "training", "train_data.jsonl")
+    val_path = os.path.join(tenant.root_dir, "training", "val_data.jsonl")
+    split_stats = split_train_val(examples_path, train_path, val_path)
+    print(
+        f"  Split: {split_stats['n_train_queries']}/{split_stats['n_val_queries']} queries, "
+        f"positive rate: train={split_stats['train_positive_rate']:.1%} "
+        f"val={split_stats['val_positive_rate']:.1%}"
+    )
 
     # Train
     output_dir = os.path.join(tenant.root_dir, "models", "selector_latest")
     trainer = SelectorTrainer(output_dir=output_dir, atlas_version=atlas.version)
     try:
-        sv = trainer.train(train_data_path=training_path)
+        sv = trainer.train(train_data_path=train_path, val_data_path=val_path)
         print(f"  Selector trained → {sv.model_path}")
 
         # Activate
@@ -657,7 +669,20 @@ def _lifecycle_install(tenant_id: str, label_batch: int = 0):
     with open(plist_path, "w") as f:
         f.write(plist_content)
 
-    subprocess.run(["launchctl", "load", plist_path], check=False)
+    # Remove any previously loaded instance before loading
+    subprocess.run(
+        ["launchctl", "bootout", f"gui/{os.getuid()}/{plist_name}"],
+        check=False,
+        capture_output=True,
+    )
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist_path],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Warning: launchctl bootstrap failed: {result.stderr.strip()}")
     print(f"Installed launchd plist at {plist_path}")
     print(f"Lifecycle will run daily at {hour}:00 for tenant '{tenant_id}'.")
     print("Logs: ~/.psa/lifecycle.log")
@@ -670,7 +695,11 @@ def _lifecycle_uninstall():
     plist_name = "com.psa.lifecycle"
     plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}.plist")
     if os.path.exists(plist_path):
-        subprocess.run(["launchctl", "unload", plist_path], check=False)
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}/{plist_name}"],
+            check=False,
+            capture_output=True,
+        )
         os.remove(plist_path)
         print(f"Uninstalled launchd plist: {plist_path}")
     else:
@@ -794,8 +823,27 @@ def _cmd_longmemeval(args):
     elif lme_action == "run":
         split = getattr(args, "split", "val")
         limit = getattr(args, "limit", None)
-        print(f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions)...")
-        out_path = run(split=split, limit=limit, tenant_id=tenant_id)
+        selector_mode = getattr(args, "selector", "cosine")
+        selector_model_path = getattr(args, "selector_model", None)
+        max_k = getattr(args, "max_k", 6)
+        min_k = getattr(args, "min_k", None)
+        rerank_only = getattr(args, "rerank_only", False)
+        print(
+            f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions, "
+            f"selector={selector_mode}, max_k={max_k}"
+            f"{f', min_k={min_k}' if min_k else ''}"
+            f"{', rerank_only' if rerank_only else ''})..."
+        )
+        out_path = run(
+            split=split,
+            limit=limit,
+            tenant_id=tenant_id,
+            selector_mode=selector_mode,
+            selector_model_path=selector_model_path,
+            max_k=max_k,
+            min_k=min_k,
+            rerank_only=rerank_only,
+        )
         print(f"Results: {out_path}")
         print("Run 'psa benchmark longmemeval score' next.")
 
@@ -818,14 +866,41 @@ def _cmd_longmemeval(args):
         print("\nLongMemEval Score")
         print(f"  Questions:     {stats['n_questions']}")
         print(f"  Exact F1:      {stats['exact_f1']:.3f}")
+        if "recall_at_5" in stats:
+            print(f"  R@5:           {stats['recall_at_5']:.3f}")
         if "llm_score" in stats:
             print(f"  LLM-as-judge:  {stats['llm_score']:.3f}")
+        if "anchor_count_distribution" in stats:
+            dist = stats["anchor_count_distribution"]
+            print(f"  Anchor distribution: {dict(sorted(dist.items()))}")
+        if "gold_hit_rate" in stats:
+            print(f"  Gold-hit rate: {stats['gold_hit_rate']:.3f}")
         print(f"\nOracle labels written: {stats['oracle_labels_written']}")
         print(f"  -> {stats['oracle_labels_path']}")
         print("\nRun 'psa train' to train the selector on these labels.")
 
+    elif lme_action == "oracle-label":
+        from .benchmarks.longmemeval import oracle_label
+
+        results_file = getattr(args, "results", None)
+        if not results_file:
+            import glob
+
+            results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
+            files = sorted(glob.glob(os.path.join(results_dir, "results_*.jsonl")))
+            if not files:
+                print("No results files found. Run 'psa benchmark longmemeval run' first.")
+                sys.exit(1)
+            results_file = files[-1]
+
+        print(f"Running oracle labeling on: {results_file}")
+        print("This uses LLM calls and may take 30-60 minutes...")
+        n = oracle_label(results_file, tenant_id=tenant_id)
+        print(f"\nOracle labels written: {n}")
+        print("Run 'psa train' to train the selector on these labels.")
+
     else:
-        print("Usage: psa benchmark longmemeval ingest|run|score")
+        print("Usage: psa benchmark longmemeval ingest|run|score|oracle-label")
         sys.exit(1)
 
 
@@ -1301,9 +1376,40 @@ def main():
     p_lme_run = lme_sub.add_parser("run", help="Run questions through PSA, generate answers")
     p_lme_run.add_argument("--split", default="val", choices=["val", "test"])
     p_lme_run.add_argument("--limit", type=int, default=None)
+    p_lme_run.add_argument(
+        "--selector",
+        default="cosine",
+        choices=["cosine", "trained"],
+        help="Selector mode: cosine (default) or trained cross-encoder",
+    )
+    p_lme_run.add_argument(
+        "--selector-model",
+        default=None,
+        help="Path to trained selector model (auto-detected if omitted)",
+    )
+    p_lme_run.add_argument(
+        "--max-k",
+        type=int,
+        default=6,
+        help="Maximum anchors to select (default: 6)",
+    )
+    p_lme_run.add_argument(
+        "--min-k",
+        type=int,
+        default=None,
+        help="Minimum anchors to select (backfill from top-scored if threshold filters too many)",
+    )
+    p_lme_run.add_argument(
+        "--rerank-only",
+        action="store_true",
+        default=False,
+        help="Ignore threshold, return top max-k reranked by cross-encoder",
+    )
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)
     p_lme_score.add_argument("--method", default="both", choices=["exact", "llm", "both"])
+    p_lme_oracle = lme_sub.add_parser("oracle-label", help="Run full oracle labeling on results")
+    p_lme_oracle.add_argument("--results", default=None, help="Results JSONL (auto-detects latest)")
 
     # migrate
     p_migrate = sub.add_parser(

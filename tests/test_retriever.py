@@ -1,7 +1,6 @@
 """Tests for psa.retriever — BM25Index, RRF fusion, AnchorRetriever."""
 
-import math
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -36,7 +35,6 @@ def _make_card(anchor_id: int, name: str, meaning: str = "") -> AnchorCard:
 
 def _make_atlas(cards):
     """Build a mock Atlas with the given cards and a real AnchorIndex."""
-    import numpy as np
 
     index = AnchorIndex(dim=4)
     # Give each card a distinct centroid
@@ -222,3 +220,10 @@ def test_bm25_cache_invalidated(small_atlas):
     assert retriever._bm25 is not None
     retriever.invalidate_bm25_cache()
     assert retriever._bm25 is None
+
+
+def test_retriever_default_top_k_is_32():
+    import inspect
+
+    sig = inspect.signature(AnchorRetriever.retrieve)
+    assert sig.parameters["top_k"].default == 32

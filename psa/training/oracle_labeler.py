@@ -19,7 +19,6 @@ Labeling records are stored as JSONL at:
 import json
 import logging
 import os
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from itertools import combinations
@@ -39,10 +38,10 @@ W_TOKEN_COST = -0.10
 
 # (max_size, max_combinations_to_evaluate)
 CANDIDATE_SET_SPECS = [
-    (1, 8),    # top-8 singles
-    (2, 10),   # top-10 pairs
-    (3, 5),    # top-5 triples
-    (4, 2),    # top-2 quadruples (high-complexity queries only)
+    (1, 8),  # top-8 singles
+    (2, 10),  # top-10 pairs
+    (3, 5),  # top-5 triples
+    (4, 2),  # top-2 quadruples (high-complexity queries only)
 ]
 
 EXPENSIVE_TOP_N = 3  # number of sets to pass to the expensive TaskSuccess stage
@@ -58,7 +57,7 @@ class CandidateSetScore:
     procedural_utility: float
     noise_penalty: float
     token_cost: float
-    task_success: Optional[float]   # None until expensive stage
+    task_success: Optional[float]  # None until expensive stage
     oracle_score: float
     packed_tokens: int
 
@@ -206,7 +205,9 @@ def _call_qwen_proxy_batch(
     n = len(candidate_sets)
 
     def _post(messages: List[dict]) -> str:
-        return call_llm(messages=messages, temperature=0.0, max_tokens=128 * n + 128, timeout=timeout)
+        return call_llm(
+            messages=messages, temperature=0.0, max_tokens=128 * n + 128, timeout=timeout
+        )
 
     def _parse_scores(raw_sets: list, indices: List[int]) -> Dict[int, Dict[str, float]]:
         """Return {original_index: scores} for items that parse successfully."""
@@ -233,8 +234,7 @@ def _call_qwen_proxy_batch(
         for cs in sets_subset:
             needed.update(cs)
         cards = "\n\n".join(
-            f"[anchor_{aid}]\n{anchor_cards_text.get(aid, '(no card)')}"
-            for aid in sorted(needed)
+            f"[anchor_{aid}]\n{anchor_cards_text.get(aid, '(no card)')}" for aid in sorted(needed)
         )
         p = (
             f"Query: {query}\n\n"
@@ -278,7 +278,9 @@ def _call_qwen_proxy_batch(
     # Fill any still-missing with zeros (give up after one retry)
     still_missing = [i for i in all_indices if i not in results]
     if still_missing:
-        logger.warning("%d sets could not be scored after retry; using zero scores", len(still_missing))
+        logger.warning(
+            "%d sets could not be scored after retry; using zero scores", len(still_missing)
+        )
         for i in still_missing:
             results[i] = dict(_ZERO_SCORES)
 
@@ -332,6 +334,47 @@ def _qwen_task_success(
         return 0.0
 
 
+def backtrack_gold_anchors(
+    answer_session_ids: List[str],
+    store: Any,
+    atlas: Any,
+    tenant_id: str = "default",
+) -> List[int]:
+    """
+    Derive gold anchor IDs from ground-truth session references.
+
+    For each answer session, find memory objects whose source records have
+    a source_path containing the session_id, then collect the anchor_ids
+    those memory objects are assigned to.
+
+    Deterministic — no LLM calls. Works for any dataset that provides
+    ground-truth source references (e.g., LongMemEval answer_session_ids).
+
+    Parameters
+    ----------
+    answer_session_ids:
+        Session IDs known to contain the answer (e.g., from LongMemEval).
+    store:
+        MemoryStore instance to query.
+    atlas:
+        Atlas instance (reserved for future use — not currently needed).
+    tenant_id:
+        Tenant whose memories to search.
+
+    Returns
+    -------
+    Deduplicated list of anchor IDs that contain memories from the answer sessions.
+    """
+    gold_anchor_ids: set = set()
+    for session_id in answer_session_ids:
+        memories = store.get_by_source_session(session_id, tenant_id=tenant_id)
+        for m in memories:
+            aid = getattr(m, "primary_anchor_id", None)
+            if aid is not None and aid >= 0:
+                gold_anchor_ids.add(aid)
+    return list(gold_anchor_ids)
+
+
 # ── OracleLabeler ──────────────────────────────────────────────────────────────
 
 
@@ -346,13 +389,13 @@ class OracleLabeler:
 
     def __init__(
         self,
-        pipeline,                         # PSAPipeline instance
-        output_path: str,                 # JSONL output file path
+        pipeline,  # PSAPipeline instance
+        output_path: str,  # JSONL output file path
         qwen_endpoint: str = "http://localhost:11434/v1/chat/completions",
         qwen_model: str = "qwen2.5:7b",
         runtime_model_id: str = "qwen2.5:7b",
-        task_success_fn=None,             # callable(query, packed_context) → float
-        use_task_success: bool = True,    # enable expensive stage by default
+        task_success_fn=None,  # callable(query, packed_context) → float
+        use_task_success: bool = True,  # enable expensive stage by default
     ):
         self.pipeline = pipeline
         self.output_path = output_path
@@ -403,17 +446,14 @@ class OracleLabeler:
         if not is_high_complexity:
             specs = [s for s in specs if s[0] < 4]
 
-        anchor_cards_text = {
-            c.anchor_id: c.card.to_card_text()
-            for c in candidates
-        }
+        anchor_cards_text = {c.anchor_id: c.card.to_card_text() for c in candidates}
 
         # Step 3: Cheap stage — score ALL candidate sets in ONE LLM call
         # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
         # time from ~16h to ~1h for 500 queries on an M4 Mac.
         all_combos: List[List[int]] = []
-        for (max_size, max_combos) in specs:
-            candidate_pool = candidate_ids[:max(8, max_size * 4)]
+        for max_size, max_combos in specs:
+            candidate_pool = candidate_ids[: max(8, max_size * 4)]
             combos = list(combinations(candidate_pool, max_size))[:max_combos]
             all_combos.extend(list(c) for c in combos)
 
@@ -427,9 +467,15 @@ class OracleLabeler:
 
         all_sets: List[CandidateSetScore] = []
         for combo_list, proxy in zip(all_combos, proxy_scores):
+            # When gold anchors are known, use deterministic set-overlap coverage
+            # instead of the noisy LLM proxy estimate.
+            if gold_anchor_ids:
+                support_cov = score_support_coverage(combo_list, gold_anchor_ids)
+            else:
+                support_cov = proxy["support_coverage"]
             # Compute preliminary oracle score (TaskSuccess=0 until expensive stage)
             score = oracle_score(
-                support_coverage=proxy["support_coverage"],
+                support_coverage=support_cov,
                 task_success=0.0,
                 procedural_utility=proxy["procedural_utility"],
                 noise_penalty=proxy["noise_penalty"],
@@ -438,7 +484,7 @@ class OracleLabeler:
             all_sets.append(
                 CandidateSetScore(
                     anchor_ids=combo_list,
-                    support_coverage=proxy["support_coverage"],
+                    support_coverage=support_cov,
                     procedural_utility=proxy["procedural_utility"],
                     noise_penalty=proxy["noise_penalty"],
                     token_cost=proxy["token_cost"],
@@ -579,7 +625,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="PSA oracle labeler — generate training labels")
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
-    parser.add_argument("--n-queries", type=int, default=300, help="Number of queries to label (default: 300, minimum gate)")
+    parser.add_argument(
+        "--n-queries",
+        type=int,
+        default=300,
+        help="Number of queries to label (default: 300, minimum gate)",
+    )
     parser.add_argument(
         "--output",
         default=None,
@@ -589,8 +640,8 @@ if __name__ == "__main__":
         "--sessions-dir",
         default=None,
         help="Path to Claude Code sessions dir (e.g. ~/.claude/projects). "
-             "When provided, real user messages from session JSONL files are used "
-             "as queries instead of memory titles. Better training signal.",
+        "When provided, real user messages from session JSONL files are used "
+        "as queries instead of memory titles. Better training signal.",
     )
     args = parser.parse_args()
 
@@ -610,13 +661,16 @@ if __name__ == "__main__":
     if args.sessions_dir:
         queries = _load_queries_from_sessions(args.sessions_dir)
         if not queries:
-            print(f"No usable user messages found in {args.sessions_dir}. "
-                  "Falling back to memory titles.")
+            print(
+                f"No usable user messages found in {args.sessions_dir}. "
+                "Falling back to memory titles."
+            )
             args.sessions_dir = None
 
     if not args.sessions_dir:
         # Self-supervised fallback: derive queries from memory titles + summaries
         from psa.memory_object import MemoryStore, MemoryType
+
         store = MemoryStore(db_path=tenant.memory_db_path)
         all_memories = []
         for mtype in MemoryType:
@@ -626,14 +680,13 @@ if __name__ == "__main__":
 
         if not all_memories:
             queries = [
-                (f"anchor_{c.anchor_id}", c.name + ". " + c.meaning)
-                for c in pipeline.atlas.cards
+                (f"anchor_{c.anchor_id}", c.name + ". " + c.meaning) for c in pipeline.atlas.cards
             ]
         else:
             queries = [(m.memory_object_id, m.title + ". " + m.summary) for m in all_memories]
 
     random.shuffle(queries)
-    queries = queries[:args.n_queries]
+    queries = queries[: args.n_queries]
 
     labeler = OracleLabeler(
         pipeline=pipeline,

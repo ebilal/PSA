@@ -1,26 +1,21 @@
 """Tests for psa.inspect — InspectResult construction and query_log."""
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from psa.anchor import AnchorCard, AnchorIndex
 from psa.atlas import Atlas
 from psa.embeddings import EmbeddingModel
 from psa.inspect import (
-    CandidateTrace,
     InspectResult,
-    PackerSectionTrace,
     _run_id,
     inspect_query,
     load_log,
 )
 from psa.memory_object import MemoryStore
-from psa.pipeline import PSAPipeline, QueryTiming
-from psa.retriever import AnchorCandidate
-from psa.selector import AnchorSelector, SelectedAnchor
+from psa.pipeline import PSAPipeline
+from psa.selector import AnchorSelector
 
 
 def _make_card(anchor_id: int, name: str = "auth") -> AnchorCard:
@@ -70,7 +65,7 @@ def test_run_id_format():
     rid = _run_id("my query")
     parts = rid.split("_")
     assert len(parts) == 2
-    assert len(parts[0]) == 15   # YYYYMMDDTHHmmSS
+    assert len(parts[0]) == 15  # YYYYMMDDTHHmmSS
     assert len(parts[1]) == 6
 
 
@@ -111,8 +106,18 @@ def test_inspect_result_to_dict_has_required_keys(tmp_path):
     with patch("psa.inspect.PSAPipeline.from_tenant", return_value=pipeline):
         result = inspect_query("test query", base_dir=str(tmp_path), write_log=False)
     d = result.to_dict()
-    for key in ("run_id", "query", "tenant_id", "context_text", "tokens_used",
-                 "token_budget", "sections", "selected_anchor_ids", "candidates", "timing"):
+    for key in (
+        "run_id",
+        "query",
+        "tenant_id",
+        "context_text",
+        "tokens_used",
+        "token_budget",
+        "sections",
+        "selected_anchor_ids",
+        "candidates",
+        "timing",
+    ):
         assert key in d, f"Missing key: {key}"
 
 

@@ -7,7 +7,7 @@ import pytest
 from psa.anchor import AnchorCard, AnchorIndex
 from psa.atlas import Atlas
 from psa.embeddings import EmbeddingModel
-from psa.memory_object import MemoryObject, MemoryStore, MemoryType
+from psa.memory_object import MemoryObject, MemoryStore
 from psa.pipeline import PSAPipeline, PSAResult, QueryTiming
 from psa.retriever import AnchorCandidate
 from psa.selector import AnchorSelector, SelectedAnchor
@@ -191,8 +191,9 @@ def test_pipeline_deduplicates_memories(mock_store, mock_atlas, mock_embedding_m
     )
 
     selected = [
-        SelectedAnchor(anchor_id=1, selector_score=0.9, mode="cosine",
-                       candidate=_make_candidate(1)),
+        SelectedAnchor(
+            anchor_id=1, selector_score=0.9, mode="cosine", candidate=_make_candidate(1)
+        ),
     ]
     memories = p._fetch_memories(selected)
     assert len(memories) == 1
@@ -203,11 +204,12 @@ def test_pipeline_deduplicates_memories(mock_store, mock_atlas, mock_embedding_m
 
 def test_from_tenant_raises_without_atlas(tmp_path):
     """from_tenant raises FileNotFoundError if no atlas is built."""
-    with patch("psa.pipeline.TenantManager") as mock_tm, \
-         patch("psa.pipeline.MemoryStore"), \
-         patch("psa.pipeline.EmbeddingModel"), \
-         patch("psa.pipeline.AtlasManager") as mock_am:
-
+    with (
+        patch("psa.pipeline.TenantManager") as mock_tm,
+        patch("psa.pipeline.MemoryStore"),
+        patch("psa.pipeline.EmbeddingModel"),
+        patch("psa.pipeline.AtlasManager") as mock_am,
+    ):
         mock_tenant = MagicMock()
         mock_tenant.root_dir = str(tmp_path)
         mock_tenant.memory_db_path = str(tmp_path / "memory.sqlite3")
@@ -225,11 +227,12 @@ def test_from_tenant_loads_threshold_tau(tmp_path):
     """from_tenant loads threshold_tau from selector_version.json."""
     import json
 
-    with patch("psa.pipeline.TenantManager") as mock_tm, \
-         patch("psa.pipeline.MemoryStore"), \
-         patch("psa.pipeline.EmbeddingModel"), \
-         patch("psa.pipeline.AtlasManager") as mock_am:
-
+    with (
+        patch("psa.pipeline.TenantManager") as mock_tm,
+        patch("psa.pipeline.MemoryStore"),
+        patch("psa.pipeline.EmbeddingModel"),
+        patch("psa.pipeline.AtlasManager") as mock_am,
+    ):
         mock_tenant = MagicMock()
         mock_tenant.root_dir = str(tmp_path)
         mock_tenant.memory_db_path = str(tmp_path / "memory.sqlite3")
@@ -262,3 +265,42 @@ def test_from_tenant_loads_threshold_tau(tmp_path):
 
         pipeline = PSAPipeline.from_tenant("test_tenant", base_dir=str(tmp_path))
         assert pipeline.selector.threshold == 0.42
+
+
+def test_pipeline_query_uses_synthesizer_when_available(pipeline):
+    """When synthesizer succeeds, result text comes from synthesis."""
+    with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
+        MockSynth.return_value.synthesize.return_value = "Synthesized narrative text."
+        # Re-create pipeline to pick up patched AnchorSynthesizer
+        from psa.pipeline import PSAPipeline
+
+        p = PSAPipeline(
+            store=pipeline.store,
+            atlas=pipeline.atlas,
+            embedding_model=pipeline.embedding_model,
+            selector=pipeline.selector,
+            token_budget=pipeline.token_budget,
+            tenant_id=pipeline.tenant_id,
+        )
+        result = p.query("test query")
+    assert result.text == "Synthesized narrative text."
+
+
+def test_pipeline_query_falls_back_to_packer_on_synthesis_failure(pipeline):
+    """When synthesizer raises, pipeline falls back to packer without crashing."""
+    with patch("psa.pipeline.AnchorSynthesizer") as MockSynth:
+        MockSynth.return_value.synthesize.side_effect = RuntimeError("LLM timeout")
+        from psa.pipeline import PSAPipeline
+
+        p = PSAPipeline(
+            store=pipeline.store,
+            atlas=pipeline.atlas,
+            embedding_model=pipeline.embedding_model,
+            selector=pipeline.selector,
+            token_budget=pipeline.token_budget,
+            tenant_id=pipeline.tenant_id,
+        )
+        result = p.query("test query")
+    # fallback still returns a valid result
+    assert isinstance(result, PSAResult)
+    assert isinstance(result.text, str)

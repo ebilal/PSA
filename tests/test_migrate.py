@@ -1,8 +1,6 @@
 """Tests for psa.migrate — migrate_palace_to_psa (non-destructive ChromaDB → PSA)."""
 
-import json
-import os
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -131,6 +129,7 @@ def test_migrate_drawer_infers_memory_type():
     stats = MigrationStats()
 
     captured_mo = []
+
     def capture_add(mo, embedding=None):
         captured_mo.append(mo)
 
@@ -248,11 +247,13 @@ def test_migrate_empty_collection(tmp_path):
     mock_tenant.memory_db_path = str(tmp_path / "memory.sqlite3")
 
     import chromadb as _chromadb
-    with patch.object(_chromadb, "PersistentClient", return_value=mock_client), \
-         patch("psa.migrate.TenantManager") as mock_tm, \
-         patch("psa.migrate.MemoryStore"), \
-         patch("psa.migrate.EmbeddingModel"):
 
+    with (
+        patch.object(_chromadb, "PersistentClient", return_value=mock_client),
+        patch("psa.migrate.TenantManager") as mock_tm,
+        patch("psa.migrate.MemoryStore"),
+        patch("psa.migrate.EmbeddingModel"),
+    ):
         mock_tm.return_value.get_or_create.return_value = mock_tenant
 
         stats = migrate_palace_to_psa(
@@ -273,6 +274,7 @@ def test_migrate_collection_not_found(tmp_path):
     palace_path.mkdir()
 
     import chromadb as _chromadb
+
     with patch.object(_chromadb, "PersistentClient", return_value=mock_client):
         with pytest.raises(ValueError, match="not found"):
             migrate_palace_to_psa(
@@ -287,7 +289,7 @@ def test_migrate_collection_not_found(tmp_path):
 
 def test_memory_store_get_by_source_id(tmp_path):
     """Verify get_by_source_id round-trips via the SQLite json_each query."""
-    from psa.memory_object import MemoryObject, MemoryStore, MemoryType
+    from psa.memory_object import MemoryStore, MemoryType
 
     db_path = str(tmp_path / "mem.sqlite3")
     store = MemoryStore(db_path=db_path)

@@ -35,12 +35,22 @@ def test_retrain_selector_mutates_state_dict():
         for i in range(350):
             f.write(f'{{"query_id": "{i}"}}\n')
 
-    with patch("psa.selector.check_training_gates") as mock_gates, \
-         patch("psa.training.data_generator.DataGenerator") as mock_gen_cls, \
-         patch("psa.training.train_selector.SelectorTrainer") as mock_trainer_cls:
-
+    with (
+        patch("psa.selector.check_training_gates") as mock_gates,
+        patch("psa.training.data_generator.DataGenerator") as mock_gen_cls,
+        patch("psa.training.train_selector.SelectorTrainer") as mock_trainer_cls,
+        patch("psa.training.data_split.split_train_val") as mock_split,
+    ):
         mock_gates.return_value = MagicMock(gates_met=True, blocking_reasons=[])
         mock_gen_cls.return_value.generate.return_value = 500
+        mock_split.return_value = {
+            "n_train_queries": 80,
+            "n_val_queries": 20,
+            "n_train_examples": 400,
+            "n_val_examples": 100,
+            "train_positive_rate": 0.5,
+            "val_positive_rate": 0.5,
+        }
         mock_trainer_cls.return_value.train.return_value = fake_sv
 
         result = lp._retrain_selector(tenant, store, atlas, state)

@@ -26,18 +26,18 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("psa.training.data_generator")
 
 # ── Query family definitions ──────────────────────────────────────────────────
 
 QUERY_FAMILIES = [
-    "single_anchor",   # factual, one anchor
-    "contrastive",     # boundary between two similar anchors
-    "compositional",   # two-anchor combination
-    "bridge",          # three-anchor chain
-    "experience",      # episodic "what worked?" queries
+    "single_anchor",  # factual, one anchor
+    "contrastive",  # boundary between two similar anchors
+    "compositional",  # two-anchor combination
+    "bridge",  # three-anchor chain
+    "experience",  # episodic "what worked?" queries
 ]
 
 # ── Data mix ──────────────────────────────────────────────────────────────────
@@ -45,6 +45,8 @@ QUERY_FAMILIES = [
 MIX_SYNTHETIC = 0.60
 MIX_HARD_NEG = 0.20
 MIX_ADVERSARIAL = 0.20
+
+MIN_POSITIVE_RATIO = 0.25
 
 # ── Adversarial rewrite patterns ──────────────────────────────────────────────
 
@@ -69,10 +71,10 @@ _ADVERSARIAL_TRANSFORMS = [
 class TrainingExample:
     query: str
     anchor_card: str
-    label: int             # 1 = positive (oracle anchor), 0 = negative
+    label: int  # 1 = positive (oracle anchor), 0 = negative
     anchor_id: int
     query_family: str
-    example_type: str      # "positive" | "hard_negative" | "easy_negative" | "adversarial"
+    example_type: str  # "positive" | "hard_negative" | "easy_negative" | "adversarial"
     source_query_id: Optional[str] = None
 
 
@@ -137,22 +139,38 @@ class DataGenerator:
         examples: List[TrainingExample] = []
 
         # 1. Synthetic positives from oracle labels
-        examples.extend(
-            self._generate_positives(n_synthetic // 2)
-        )
-        examples.extend(
-            self._generate_easy_negatives(n_synthetic // 2)
-        )
+        examples.extend(self._generate_positives(n_synthetic // 2))
+        examples.extend(self._generate_easy_negatives(n_synthetic // 2))
 
         # 2. Hard negatives
-        examples.extend(
-            self._generate_hard_negatives(n_hard_neg)
-        )
+        examples.extend(self._generate_hard_negatives(n_hard_neg))
 
         # 3. Adversarial rewrites
-        examples.extend(
-            self._generate_adversarial(n_adversarial)
-        )
+        examples.extend(self._generate_adversarial(n_adversarial))
+
+        # 4. Enforce minimum positive ratio
+        positives = [e for e in examples if e.label == 1]
+        negatives = [e for e in examples if e.label == 0]
+        pos_ratio = len(positives) / len(examples) if examples else 0
+
+        if pos_ratio < 0.10:
+            logger.warning(
+                "Very low positive ratio (%.1f%%) — oracle labels may lack "
+                "winning_oracle_set entries. Training quality will be poor.",
+                pos_ratio * 100,
+            )
+
+        if positives and pos_ratio < MIN_POSITIVE_RATIO:
+            target_pos = int(len(negatives) * MIN_POSITIVE_RATIO / (1 - MIN_POSITIVE_RATIO))
+            extra_needed = target_pos - len(positives)
+            if extra_needed > 0:
+                oversampled = [self.rng.choice(positives) for _ in range(extra_needed)]
+                examples = positives + oversampled + negatives
+                logger.info(
+                    "Oversampled %d positives to reach %.0f%% positive ratio.",
+                    extra_needed,
+                    MIN_POSITIVE_RATIO * 100,
+                )
 
         self.rng.shuffle(examples)
 
@@ -322,7 +340,9 @@ if __name__ == "__main__":
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
     parser.add_argument("--labels", required=True, help="Path to oracle_labels.jsonl")
     parser.add_argument("--output", required=True, help="Output JSONL path for training data")
-    parser.add_argument("--n-samples", type=int, default=1000, help="Total samples to generate (default: 1000)")
+    parser.add_argument(
+        "--n-samples", type=int, default=1000, help="Total samples to generate (default: 1000)"
+    )
     args = parser.parse_args()
 
     from psa.atlas import AtlasManager

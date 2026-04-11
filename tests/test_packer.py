@@ -10,9 +10,11 @@ Covers:
 - pack_memories_direct (Phase 3 path)
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from psa.memory_object import MemoryObject, MemoryType
+from psa.memory_object import EvidenceSpan, MemoryObject, MemoryType, RawSource
 from psa.packer import EvidencePacker, PackedContext, _token_count
 
 
@@ -150,10 +152,7 @@ def test_pack_memories_direct_failure_before_procedural(packer_direct):
 
 def test_pack_memories_direct_budget_enforcement(packer_direct):
     # Create many memories with long bodies
-    memories = [
-        _make_memory(MemoryType.SEMANTIC, f"Fact {i}", "word " * 200)
-        for i in range(50)
-    ]
+    memories = [_make_memory(MemoryType.SEMANTIC, f"Fact {i}", "word " * 200) for i in range(50)]
     packed = packer_direct.pack_memories_direct("query", memories, token_budget=1000)
     assert packed.token_count <= 1000 + 100
 
@@ -200,3 +199,53 @@ def test_token_count_approximate():
     # 400 chars ≈ 100 tokens
     text = "x" * 400
     assert _token_count(text) == 100
+
+
+# ── _fetch_evidence_text ──────────────────────────────────────────────────────
+
+
+def test_fetch_evidence_text_with_spans():
+    from psa.packer import _fetch_evidence_text
+
+    source = RawSource(
+        source_id="src1",
+        tenant_id="test",
+        source_type="conversation",
+        source_path="chat.jsonl",
+        title="chat",
+        full_text="Alice said she prefers PostgreSQL because of the JSONB support and extensibility.",
+        created_at="2026-01-01T00:00:00Z",
+    )
+    span = EvidenceSpan(source_id="src1", start_offset=20, end_offset=80)
+    store = MagicMock()
+    store.get_source.return_value = source
+    text = _fetch_evidence_text(store, [span], max_chars=500)
+    assert "PostgreSQL" in text
+
+
+def test_fetch_evidence_text_keyword_fallback():
+    from psa.packer import _fetch_evidence_text
+
+    source = RawSource(
+        source_id="src1",
+        tenant_id="test",
+        source_type="conversation",
+        source_path="chat.jsonl",
+        title="chat",
+        full_text="Some preamble. " * 20
+        + "The PostgreSQL migration was decided. "
+        + "Some epilogue. " * 20,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    store = MagicMock()
+    store.get_source.return_value = source
+    text = _fetch_evidence_text(
+        store, [], max_chars=500, body_hint="PostgreSQL migration", source_ids=["src1"]
+    )
+    assert "PostgreSQL" in text
+
+
+def test_fetch_evidence_text_no_store():
+    from psa.packer import _fetch_evidence_text
+
+    assert _fetch_evidence_text(None, []) is None

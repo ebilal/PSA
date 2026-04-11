@@ -53,6 +53,7 @@ class EmbeddingModel:
             _logging.getLogger("sentence_transformers").setLevel(_logging.ERROR)
             try:
                 from sentence_transformers import SentenceTransformer
+
                 self._model = SentenceTransformer(self._model_name)
             finally:
                 sys.stderr = old_stderr

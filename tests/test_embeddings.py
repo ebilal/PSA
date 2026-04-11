@@ -9,9 +9,7 @@ Covers:
 - ImportError when sentence-transformers is absent
 """
 
-import importlib
 import math
-import sys
 
 import pytest
 

@@ -8,9 +8,7 @@ Covers:
 """
 
 import json
-import os
-import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,13 +27,14 @@ from psa.training.oracle_labeler import (
 )
 from psa.training.data_generator import (
     DataGenerator,
-    MIX_ADVERSARIAL,
+    MIN_POSITIVE_RATIO,
     MIX_HARD_NEG,
     MIX_SYNTHETIC,
-    TrainingExample,
     _ADVERSARIAL_TRANSFORMS,
 )
 from psa.training.train_selector import (
+    THRESHOLD_MAX_CAP,
+    SelectorTrainer,
     SelectorVersion,
     _load_training_data,
     _split_by_example_type,
@@ -268,7 +267,7 @@ def test_data_generator_output_format(tmp_path):
     gen.generate(str(out), n_examples=20)
 
     with open(out) as f:
-        lines = [json.loads(l) for l in f if l.strip()]
+        lines = [json.loads(line) for line in f if line.strip()]
     assert len(lines) == 20
 
     for ex in lines:
@@ -289,7 +288,7 @@ def test_data_generator_mix_ratios(tmp_path):
     gen.generate(str(out), n_examples=100)
 
     with open(out) as f:
-        examples = [json.loads(l) for l in f if l.strip()]
+        examples = [json.loads(line) for line in f if line.strip()]
 
     by_type = {}
     for ex in examples:
@@ -315,7 +314,7 @@ def test_data_generator_adversarial_rewrites(tmp_path):
     gen.generate(str(out), n_examples=50)
 
     with open(out) as f:
-        examples = [json.loads(l) for l in f if l.strip()]
+        examples = [json.loads(line) for line in f if line.strip()]
 
     adversarials = [ex for ex in examples if ex["example_type"] == "adversarial"]
     assert len(adversarials) > 0
@@ -418,13 +417,86 @@ def test_training_dependencies_importable():
 
 def test_selector_version_to_dict_keys():
     sv = SelectorVersion(
-        version=1, atlas_version=1, embedding_model="m", runtime_model_id="r",
-        base_model="b", training_examples=100, val_task_success=0.8,
-        threshold_tau=0.3, trained_at="now", model_path="/tmp",
+        version=1,
+        atlas_version=1,
+        embedding_model="m",
+        runtime_model_id="r",
+        base_model="b",
+        training_examples=100,
+        val_task_success=0.8,
+        threshold_tau=0.3,
+        trained_at="now",
+        model_path="/tmp",
         query_family_mix={},
     )
     d = sv.to_dict()
-    for key in ("version", "atlas_version", "base_model", "training_examples",
-                "val_task_success", "threshold_tau", "trained_at", "model_path",
-                "query_family_mix"):
+    for key in (
+        "version",
+        "atlas_version",
+        "base_model",
+        "training_examples",
+        "val_task_success",
+        "threshold_tau",
+        "trained_at",
+        "model_path",
+        "query_family_mix",
+    ):
         assert key in d
+
+
+# ── _compute_threshold (F-beta) ───────────────────────────────────────────────
+
+
+def test_threshold_max_cap_constant():
+    assert THRESHOLD_MAX_CAP == 0.25
+
+
+def test_compute_threshold_never_exceeds_cap(tmp_path):
+    """With perfect separation, optimal tau is high; cap must bring it to <= 0.25."""
+    val_path = tmp_path / "val.jsonl"
+    with open(val_path, "w") as f:
+        for _ in range(50):
+            f.write(json.dumps({"query": "q", "anchor_card": "a", "label": 1}) + "\n")
+        for _ in range(50):
+            f.write(json.dumps({"query": "q", "anchor_card": "b", "label": 0}) + "\n")
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [0.9] * 50 + [0.1] * 50
+
+    trainer = SelectorTrainer(output_dir=str(tmp_path), atlas_version=1)
+    result = trainer._compute_threshold(mock_model, str(val_path))
+
+    assert result <= 0.25
+
+
+# ── MIN_POSITIVE_RATIO ────────────────────────────────────────────────────────
+
+
+def test_min_positive_ratio_constant():
+    assert MIN_POSITIVE_RATIO == 0.25
+
+
+def test_generate_warns_on_low_positives(tmp_path, caplog):
+    """When all oracle labels have empty winning_oracle_set, a warning is logged."""
+    import logging
+
+    path = tmp_path / "labels.jsonl"
+    with open(path, "w") as f:
+        for i in range(10):
+            label = {
+                "query_id": f"q{i}",
+                "query": f"How does feature {i} work?",
+                "winning_oracle_set": [],  # no positives
+                "candidate_anchor_ids": [i, i + 1, i + 2, i + 3],
+                "is_high_complexity": False,
+            }
+            f.write(json.dumps(label) + "\n")
+
+    cards = _make_anchor_cards()
+    gen = DataGenerator(oracle_labels_path=str(path), anchor_cards=cards)
+    out = tmp_path / "training.jsonl"
+
+    with caplog.at_level(logging.WARNING, logger="psa.training.data_generator"):
+        gen.generate(str(out), n_examples=50)
+
+    assert any("low positive ratio" in record.message.lower() for record in caplog.records)

@@ -19,15 +19,16 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .atlas import Atlas, AtlasManager
 from .embeddings import EmbeddingModel
-from .memory_object import MemoryObject, MemoryStore, MemoryType
+from .memory_object import MemoryObject, MemoryStore
 from .packer import EvidencePacker, PackedContext
 from .retriever import AnchorCandidate, AnchorRetriever
 from .selector import AnchorSelector, SelectedAnchor
+from .synthesizer import AnchorSynthesizer
 from .tenant import TenantManager
 
 logger = logging.getLogger("psa.pipeline")
@@ -123,11 +124,12 @@ class PSAPipeline:
 
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
+        self._synthesizer = AnchorSynthesizer()
 
     def query(
         self,
         query: str,
-        top_k_candidates: int = 24,
+        top_k_candidates: int = 32,
     ) -> PSAResult:
         """
         Run the full PSA query pipeline.
@@ -160,9 +162,7 @@ class PSAPipeline:
         )
         timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms
-        )
+        logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
 
         if not candidates:
             packed = PackedContext(
@@ -192,9 +192,13 @@ class PSAPipeline:
         )
         timing.select_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Selected %d anchors in %.1fms", len(selected), timing.select_ms
-        )
+        logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
+
+        # Accumulate query fingerprints for above-threshold selected anchors
+        if self.atlas.fingerprint_store is not None and selected:
+            for sa in selected:
+                self.atlas.fingerprint_store.append(sa.anchor_id, query)
+            self.atlas.fingerprint_store.save()
 
         # No anchors met the threshold — nothing relevant in memory
         if not selected:
@@ -221,19 +225,34 @@ class PSAPipeline:
         memories = self._fetch_memories(selected)
         timing.fetch_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug(
-            "Fetched %d memories in %.1fms", len(memories), timing.fetch_ms
-        )
+        logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
 
-        # Step 5: Pack context
+        # Step 5: Synthesize context
         t0 = time.perf_counter()
-        packed = self._packer.pack_memories_direct(
-            query=query,
-            memories=memories,
-            token_budget=self.token_budget,
-            query_vec=query_vec,
-            store=self.store,
-        )
+        try:
+            synthesis_text = self._synthesizer.synthesize(
+                query=query,
+                memories=memories,
+                query_vec=query_vec,
+                token_budget=self.token_budget,
+            )
+            packed = PackedContext(
+                query=query,
+                text=synthesis_text,
+                token_count=len(synthesis_text) // 4,
+                memory_ids=[m.memory_object_id for m in memories],
+                sections=[],
+                untyped_count=0,
+            )
+        except Exception:
+            logger.debug("Synthesis failed, falling back to packer", exc_info=True)
+            packed = self._packer.pack_memories_direct(
+                query=query,
+                memories=memories,
+                token_budget=self.token_budget,
+                query_vec=query_vec,
+                store=self.store,
+            )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
         # Record usage telemetry: these memories made it into packed context
@@ -243,9 +262,7 @@ class PSAPipeline:
             except Exception:
                 logger.debug("Failed to record packed telemetry", exc_info=True)
 
-        logger.debug(
-            "Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms
-        )
+        logger.debug("Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms)
         logger.info(
             "PSA query complete: %.1fms total (%d memories, %d tokens)",
             timing.total_ms,
@@ -369,6 +386,9 @@ class PSAPipeline:
         token_budget: int = 6000,
         selector_mode: str = "cosine",
         selector_model_path: Optional[str] = None,
+        selector_max_k: int = 6,
+        selector_min_k: Optional[int] = None,
+        selector_rerank_only: bool = False,
         psa_mode: str = "side-by-side",
         base_dir: Optional[str] = None,
     ) -> "PSAPipeline":
@@ -389,8 +409,7 @@ class PSAPipeline:
         atlas = atlas_mgr.get_atlas()
         if atlas is None:
             raise FileNotFoundError(
-                f"No atlas found for tenant '{tenant_id}'. "
-                "Run 'psa atlas build' to build one."
+                f"No atlas found for tenant '{tenant_id}'. Run 'psa atlas build' to build one."
             )
 
         # Read lifecycle state for selector mode override
@@ -415,7 +434,13 @@ class PSAPipeline:
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 pass
 
-        selector_kwargs = dict(mode=selector_mode, model_path=selector_model_path)
+        selector_kwargs = dict(
+            mode=selector_mode,
+            model_path=selector_model_path,
+            max_k=selector_max_k,
+            min_k=selector_min_k,
+            rerank_only=selector_rerank_only,
+        )
         if selector_threshold is not None:
             selector_kwargs["threshold"] = selector_threshold
         selector = AnchorSelector(**selector_kwargs)

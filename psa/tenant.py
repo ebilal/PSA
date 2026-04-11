@@ -68,7 +68,9 @@ class TenantManager:
     def _tenant_root(self, tenant_id: str) -> Path:
         return self._tenants_dir / tenant_id
 
-    def create(self, tenant_id: str, display_name: str = "", metadata: Optional[dict] = None) -> Tenant:
+    def create(
+        self, tenant_id: str, display_name: str = "", metadata: Optional[dict] = None
+    ) -> Tenant:
         """Create a new tenant directory structure. Idempotent."""
         _validate_tenant_id(tenant_id)
         root = self._tenant_root(tenant_id)
@@ -87,11 +89,16 @@ class TenantManager:
         meta_path = root / "tenant.json"
         if not meta_path.exists():
             import json
-            meta_path.write_text(json.dumps({
-                "tenant_id": tenant.tenant_id,
-                "display_name": tenant.display_name,
-                "created_at": tenant.created_at,
-            }))
+
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "tenant_id": tenant.tenant_id,
+                        "display_name": tenant.display_name,
+                        "created_at": tenant.created_at,
+                    }
+                )
+            )
         return tenant
 
     def get(self, tenant_id: str) -> Optional[Tenant]:
@@ -106,6 +113,7 @@ class TenantManager:
         created_at = ""
         if meta_path.exists():
             import json
+
             try:
                 meta = json.loads(meta_path.read_text())
                 display_name = meta.get("display_name", tenant_id)

@@ -21,6 +21,9 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ..pipeline import PSAPipeline
+from ..training.oracle_labeler import OracleLabeler, backtrack_gold_anchors
+
 logger = logging.getLogger("psa.benchmarks.longmemeval")
 
 BENCH_TENANT = "longmemeval_bench"
@@ -34,11 +37,11 @@ RESULTS_DIR_DEFAULT = os.path.expanduser("~/.psa/benchmarks/longmemeval")
 def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT) -> None:
     """Download LongMemEval and ingest all sessions into PSA."""
     try:
-        from datasets import load_dataset
+        from huggingface_hub import hf_hub_download
     except ImportError:
         raise ImportError(
-            "The 'datasets' library is required for LongMemEval ingestion.\n"
-            "Install with: pip install datasets"
+            "The 'huggingface_hub' library is required for LongMemEval ingestion.\n"
+            "Install with: pip install huggingface_hub"
         )
 
     from ..convo_miner import mine_convos
@@ -46,12 +49,15 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
     from ..tenant import TenantManager
 
     logger.info("Loading LongMemEval dataset from HuggingFace...")
-    ds = load_dataset(HF_DATASET, split="train")
+    data_path = hf_hub_download(HF_DATASET, "longmemeval_oracle", repo_type="dataset")
+    with open(data_path, encoding="utf-8") as f:
+        examples = json.load(f)
 
     sessions: Dict[str, List[Dict]] = {}
-    for example in ds:
+    for example in examples:
         for session_id, messages in zip(
-            example.get("session_ids", []), example.get("sessions", [])
+            example.get("haystack_session_ids", []),
+            example.get("haystack_sessions", []),
         ):
             if session_id not in sessions:
                 sessions[session_id] = messages
@@ -70,7 +76,7 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             for session_id, messages in sessions.items():
-                session_path = os.path.join(tmpdir, f"{session_id}.jsonl")
+                session_path = os.path.join(tmpdir, f"{session_id}.json")
                 _write_session_jsonl(session_path, session_id, messages)
 
             mine_convos(
@@ -89,16 +95,20 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
 
 
 def _write_session_jsonl(path: str, session_id: str, messages: List[Dict]) -> None:
-    """Write one session as Claude Code JSONL format for convo_miner."""
+    """Write one session as a flat JSON array for convo_miner / normalize.py.
+
+    Written as a JSON array of {role, content} objects, which normalize.py's
+    _try_claude_ai_json flat-list parser recognises correctly. Previously used
+    JSONL with type="message" which no parser matched, causing sessions to be
+    ingested as raw JSON text rather than dialogue.
+    """
+    records = [
+        {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+        for msg in messages
+        if msg.get("content", "")
+    ]
     with open(path, "w", encoding="utf-8") as f:
-        for msg in messages:
-            record = {
-                "type": "message",
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-                "session_id": session_id,
-            }
-            f.write(json.dumps(record) + "\n")
+        json.dump(records, f)
 
 
 def _build_atlas(tenant_id: str) -> None:
@@ -123,6 +133,11 @@ def run(
     tenant_id: str = BENCH_TENANT,
     results_dir: str = RESULTS_DIR_DEFAULT,
     token_budget: int = 6000,
+    selector_mode: str = "cosine",
+    selector_model_path: Optional[str] = None,
+    max_k: int = 6,
+    min_k: Optional[int] = None,
+    rerank_only: bool = False,
 ) -> str:
     """
     Run each LongMemEval question through PSA and generate answers.
@@ -130,37 +145,57 @@ def run(
     Returns the path to the results JSONL file.
     """
     try:
-        from datasets import load_dataset
+        from huggingface_hub import hf_hub_download
     except ImportError:
-        raise ImportError("Install datasets: pip install datasets")
+        raise ImportError("Install huggingface_hub: pip install huggingface_hub")
 
-    from ..pipeline import PSAPipeline
     from ..llm import call_llm
 
     logger.info("Loading LongMemEval dataset (split=%s)...", split)
-    ds = load_dataset(HF_DATASET, split="train")
-    examples = [e for e in ds if e.get("split", "val") == split]
+    data_path = hf_hub_download(HF_DATASET, "longmemeval_oracle", repo_type="dataset")
+    with open(data_path, encoding="utf-8") as f:
+        all_examples = json.load(f)
+    examples = [e for e in all_examples if e.get("split", "val") == split]
     if not examples:
+        # Dataset may not have a split field — use all examples
         logger.warning(
-            "No examples found for split=%r. "
-            "Check that the dataset records have a 'split' field matching this value.",
+            "No examples found for split=%r; using all %d examples.",
             split,
+            len(all_examples),
         )
+        examples = all_examples
     if limit:
         examples = examples[:limit]
 
     logger.info("Running %d questions (tenant=%s)...", len(examples), tenant_id)
 
     try:
-        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id, token_budget=token_budget)
+        pipeline = PSAPipeline.from_tenant(
+            tenant_id=tenant_id,
+            token_budget=token_budget,
+            selector_mode=selector_mode,
+            selector_model_path=selector_model_path,
+            selector_max_k=max_k,
+            selector_min_k=min_k,
+            selector_rerank_only=rerank_only,
+        )
     except FileNotFoundError:
         raise FileNotFoundError(
             f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
         )
 
+    # Build deterministic config label for filename
+    label_parts = [selector_mode]
+    if rerank_only:
+        label_parts.append("rerank")
+    elif min_k is not None:
+        label_parts.append(f"min{min_k}")
+    label_parts.append(f"k{max_k}")
+    config_label = "_".join(label_parts)
+
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    out_path = os.path.join(results_dir, f"results_{split}_{ts}.jsonl")
+    out_path = os.path.join(results_dir, f"results_{split}_{config_label}_{ts}.jsonl")
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, example in enumerate(examples):
@@ -189,6 +224,7 @@ def run(
                 "context_text": context_text,
                 "answer_generated": generated,
                 "answer_gold": gold_answer,
+                "answer_session_ids": example.get("answer_session_ids", []),
                 "tokens_used": result.token_count,
                 "token_budget": token_budget,
                 "selected_anchor_ids": [a.anchor_id for a in result.selected_anchors],
@@ -248,17 +284,68 @@ def score(
         valid = [s for s in llm_scores if s is not None]
         avg_llm = sum(valid) / len(valid) if valid else 0.0
 
+    # Backtrack gold anchors for all records (used for labels AND R@5).
+    gold_anchors_by_idx: Dict[int, set] = {}
+    try:
+        from ..pipeline import PSAPipeline
+        from ..training.oracle_labeler import backtrack_gold_anchors
+
+        _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+        for i, r in enumerate(records):
+            ans_ids = r.get("answer_session_ids", [])
+            if ans_ids:
+                gold = set(
+                    backtrack_gold_anchors(ans_ids, _pipeline.store, _pipeline.atlas, tenant_id)
+                )
+                if gold:
+                    gold_anchors_by_idx[i] = gold
+    except Exception:
+        logger.debug("Could not backtrack gold anchors", exc_info=True)
+
+    # Write oracle labels with gold anchor signal for selector training.
     FAILURE_THRESHOLD = 0.3
+    SUCCESS_THRESHOLD = 0.5
     oracle_labels_written = 0
     oracle_path = _oracle_labels_path(tenant_id)
     os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
 
     with open(oracle_path, "a", encoding="utf-8") as f:
-        for record, f1 in zip(records, exact_f1_scores):
-            if f1 < FAILURE_THRESHOLD:
+        for i, (record, f1) in enumerate(zip(records, exact_f1_scores)):
+            gold = gold_anchors_by_idx.get(i)
+            selected = set(record.get("selected_anchor_ids", []))
+            if gold:
+                # Gold anchors known: winning_oracle_set = gold ∩ selected
+                winning = sorted(gold & selected) if (gold & selected) else []
+                label = _make_oracle_label(record, f1, winning_set=winning)
+                f.write(json.dumps(label) + "\n")
+                oracle_labels_written += 1
+            elif f1 < FAILURE_THRESHOLD:
                 label = _make_oracle_label(record, f1)
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
+            elif f1 >= SUCCESS_THRESHOLD:
+                label = _make_oracle_label(record, f1, winning_set=sorted(selected))
+                f.write(json.dumps(label) + "\n")
+                oracle_labels_written += 1
+
+    # Compute Recall@Anchors from already-backtracked gold anchors.
+    recall_scores = []
+    for i, r in enumerate(records):
+        gold = gold_anchors_by_idx.get(i)
+        selected = set(r.get("selected_anchor_ids", []))
+        if gold and selected:
+            recall_scores.append(1.0 if gold & selected else 0.0)
+    avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else None
+
+    # Anchor count distribution
+    anchor_count_dist: Dict[int, int] = {}
+    for r in records:
+        n = len(r.get("selected_anchor_ids", []))
+        anchor_count_dist[n] = anchor_count_dist.get(n, 0) + 1
+
+    # Gold-hit rate (fraction of questions where selected anchors include a gold anchor)
+    gold_hit_count = sum(1 for s in recall_scores if s == 1.0)
+    gold_hit_rate = gold_hit_count / len(recall_scores) if recall_scores else None
 
     result: Dict[str, Any] = {
         "exact_f1": round(avg_exact_f1, 4),
@@ -268,7 +355,66 @@ def score(
     }
     if avg_llm is not None:
         result["llm_score"] = round(avg_llm, 4)
+    if avg_recall is not None:
+        result["recall_at_5"] = round(avg_recall, 4)
+    result["anchor_count_distribution"] = anchor_count_dist
+    if gold_hit_rate is not None:
+        result["gold_hit_rate"] = round(gold_hit_rate, 4)
     return result
+
+
+def oracle_label(
+    results_path: str,
+    tenant_id: str = BENCH_TENANT,
+) -> int:
+    """
+    Run the real OracleLabeler on benchmark results to produce proper
+    training labels with identified winning anchor sets.
+
+    Returns the number of oracle labels written.
+    """
+    records = _load_results(results_path)
+    if not records:
+        raise ValueError(f"No records found in {results_path}")
+
+    try:
+        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
+        )
+
+    oracle_path = _oracle_labels_path(tenant_id)
+    os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
+
+    labeler = OracleLabeler(pipeline=pipeline, output_path=oracle_path)
+
+    written = 0
+    for i, record in enumerate(records):
+        query_id = record.get("question_id", f"lme_q_{i:04d}")
+        query = record["question"]
+        answer_session_ids = record.get("answer_session_ids", [])
+        try:
+            gold_anchor_ids = backtrack_gold_anchors(
+                answer_session_ids=answer_session_ids,
+                store=pipeline.store,
+                atlas=pipeline.atlas,
+                tenant_id=tenant_id,
+            )
+            labeler.label(
+                query_id=query_id,
+                query=query,
+                gold_anchor_ids=gold_anchor_ids if gold_anchor_ids else None,
+            )
+            written += 1
+        except Exception as e:
+            logger.warning("Oracle labeling failed for q=%s: %s", record.get("question_id"), e)
+
+        if (i + 1) % 50 == 0:
+            logger.info("  %d / %d questions labeled", i + 1, len(records))
+
+    logger.info("Wrote %d oracle labels to %s", written, oracle_path)
+    return written
 
 
 def _load_results(path: str) -> List[Dict]:
@@ -281,10 +427,10 @@ def _load_results(path: str) -> List[Dict]:
     return records
 
 
-def _normalize_text(text: str) -> List[str]:
+def _normalize_text(text) -> List[str]:
     import re
 
-    return re.sub(r"[^\w\s]", " ", text.lower()).split()
+    return re.sub(r"[^\w\s]", " ", str(text).lower()).split()
 
 
 def _f1_score(gold: str, pred: str) -> float:
@@ -322,22 +468,50 @@ def _llm_judge(question: str, gold: str, generated: str, call_llm) -> Optional[f
         return None
 
 
+def _recall_at_k(
+    retrieved_source_paths: List[str],
+    answer_session_ids: List[str],
+    k: int = 5,
+) -> float:
+    """
+    Recall@k: did any answer session appear in the top-k retrieved sources?
+
+    retrieved_source_paths are filenames like "answer_abc_1.jsonl".
+    answer_session_ids are like "answer_abc_1".
+    Match by checking if any answer_session_id is a prefix of any retrieved path.
+    """
+    if not answer_session_ids:
+        return 0.0
+    top_k = retrieved_source_paths[:k]
+    for ans_id in answer_session_ids:
+        for path in top_k:
+            path_stem = path.rsplit(".", 1)[0] if "." in path else path
+            if path_stem == ans_id or ans_id in path:
+                return 1.0
+    return 0.0
+
+
 def _oracle_labels_path(tenant_id: str) -> str:
     return os.path.expanduser(f"~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl")
 
 
-def _make_oracle_label(record: Dict, f1: float) -> Dict:
-    """Create an oracle label for a failed question (failure-signal-only label)."""
+def _make_oracle_label(record: Dict, f1: float, winning_set: Optional[List[int]] = None) -> Dict:
+    """Create an oracle label for a question result.
+
+    winning_set: anchor IDs that constitute the positive training signal.
+    When backtracked gold anchors are known, this is (gold ∩ selected).
+    """
     now = datetime.now(timezone.utc).isoformat()
     q_hash = hashlib.md5(record["question"].encode(), usedforsecurity=False).hexdigest()[:8]
+    anchor_ids = record.get("selected_anchor_ids", [])
     return {
         "query_id": f"lme_{q_hash}",
         "query": record["question"],
         "atlas_version": -1,
         "runtime_model_id": "longmemeval",
-        "candidate_anchor_ids": record.get("selected_anchor_ids", []),
-        "all_sets": [],
-        "winning_oracle_set": [],
+        "candidate_anchor_ids": anchor_ids,
+        "all_sets": [winning_set] if winning_set else [],
+        "winning_oracle_set": winning_set or [],
         "winning_oracle_score": f1,
         "labeled_at": now,
         "is_high_complexity": False,

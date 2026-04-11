@@ -11,7 +11,6 @@ Covers:
 """
 
 import os
-import tempfile
 
 import pytest
 
@@ -402,6 +401,68 @@ def test_success_label_roundtrip(store, label, expected):
     store.add(mo)
     retrieved = store.get(mo.memory_object_id)
     assert retrieved.success_label is expected
+
+
+# ── get_by_source_session ────────────────────────────────────────────────────
+
+
+def test_get_by_source_session_returns_memories(tmp_path):
+    """get_by_source_session finds memories whose source_path contains the session_id."""
+    store = MemoryStore(str(tmp_path / "mem.sqlite3"))
+    tenant_id = "test_tenant"
+
+    session_id = "session_abc_123"
+    source = RawSource.create(
+        tenant_id=tenant_id,
+        source_type="conversation",
+        full_text="some content",
+        title="test session",
+        source_path=f"/tmp/convos/{session_id}.jsonl",
+    )
+    store.add_source(source)
+
+    mo = MemoryObject.create(
+        tenant_id=tenant_id,
+        memory_type=MemoryType.EPISODIC,
+        title="A memory",
+        body="body text",
+        summary="summary",
+        source_ids=[source.source_id],
+        classification_reason="test",
+    )
+    mo.embedding = [0.0] * 768
+    store.add(mo)
+
+    # Add a memory from a different source (should NOT be returned)
+    other_source = RawSource.create(
+        tenant_id=tenant_id,
+        source_type="conversation",
+        full_text="other content",
+        title="other",
+        source_path="/tmp/convos/other_session.jsonl",
+    )
+    store.add_source(other_source)
+    other_mo = MemoryObject.create(
+        tenant_id=tenant_id,
+        memory_type=MemoryType.SEMANTIC,
+        title="Other memory",
+        body="other body",
+        summary="other summary",
+        source_ids=[other_source.source_id],
+        classification_reason="test",
+    )
+    other_mo.embedding = [0.0] * 768
+    store.add(other_mo)
+
+    results = store.get_by_source_session(session_id, tenant_id=tenant_id)
+    assert len(results) == 1
+    assert results[0].memory_object_id == mo.memory_object_id
+
+
+def test_get_by_source_session_returns_empty_for_missing(tmp_path):
+    store = MemoryStore(str(tmp_path / "mem.sqlite3"))
+    results = store.get_by_source_session("nonexistent_session", tenant_id="test")
+    assert results == []
 
 
 # ── Isolation between stores ─────────────────────────────────────────────────

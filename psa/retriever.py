@@ -14,10 +14,10 @@ import logging
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
-from .anchor import AnchorCard, AnchorIndex
+from .anchor import AnchorCard
 from .atlas import Atlas
 
 logger = logging.getLogger("psa.retriever")
@@ -89,8 +89,7 @@ class BM25Index:
         for tokens in self._doc_tokens:
             df.update(set(tokens))
         self._idf: dict = {
-            t: math.log((self._n - cnt + 0.5) / (cnt + 0.5) + 1.0)
-            for t, cnt in df.items()
+            t: math.log((self._n - cnt + 0.5) / (cnt + 0.5) + 1.0) for t, cnt in df.items()
         }
 
     def score(self, query: str) -> List[float]:
@@ -170,7 +169,7 @@ class AnchorRetriever:
         self,
         query: str,
         embedding_model,
-        top_k: int = 24,
+        top_k: int = 32,
         query_vec: Optional[List[float]] = None,
     ) -> List[AnchorCandidate]:
         """

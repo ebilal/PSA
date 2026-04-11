@@ -1,6 +1,6 @@
 """Tests for psa.selector — AnchorSelector (cosine mode) and check_training_gates."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -8,10 +8,12 @@ from psa.anchor import AnchorCard
 from psa.retriever import AnchorCandidate
 from psa.selector import (
     AnchorSelector,
+    DEFAULT_MAX_K,
     SelectedAnchor,
-    TrainingGateStatus,
+    TRAINED_THRESHOLD_MAX,
     check_training_gates,
     _cosine_select,
+    _trained_select,
 )
 
 
@@ -108,7 +110,7 @@ def test_selector_selects_candidates():
     candidates = [_make_candidate(i, float(5 - i)) for i in range(5)]
     selected = sel.select(query="auth", candidates=candidates)
     assert len(selected) >= 1
-    assert len(selected) <= 4
+    assert len(selected) <= DEFAULT_MAX_K
 
 
 def test_selector_returns_selected_anchor_type():
@@ -230,3 +232,151 @@ def test_gates_status_fields():
     assert status.held_out_count == 300
     assert status.shortlist_recall_24 == 0.97
     assert "single_anchor" in status.query_family_counts
+
+
+# ── New constant / fallback tests ─────────────────────────────────────────────
+
+
+def test_default_max_k_is_6():
+    assert DEFAULT_MAX_K == 6
+
+
+def test_trained_threshold_max_is_025():
+    assert TRAINED_THRESHOLD_MAX == 0.25
+
+
+def test_trained_select_fallback_on_zero_anchors():
+    """When cross-encoder scores are all below threshold, top-1 is returned as fallback."""
+    candidates = [
+        _make_candidate(0, 0.9),
+        _make_candidate(1, 0.8),
+        _make_candidate(2, 0.7),
+    ]
+
+    mock_ce = MagicMock()
+    # All scores well below threshold
+    mock_ce.predict.return_value = [0.05, 0.03, 0.01]
+
+    selected = _trained_select(
+        query="what is the answer",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.3,
+    )
+
+    # Fallback: exactly 1 anchor returned (the top-scoring one)
+    assert len(selected) == 1
+    assert selected[0].mode == "trained"
+
+
+def test_trained_select_respects_threshold_when_above():
+    """Scores above threshold are all selected; no fallback triggered."""
+    candidates = [
+        _make_candidate(0, 0.9),
+        _make_candidate(1, 0.8),
+        _make_candidate(2, 0.7),
+    ]
+
+    mock_ce = MagicMock()
+    # All scores above threshold=0.3
+    mock_ce.predict.return_value = [0.9, 0.8, 0.7]
+
+    selected = _trained_select(
+        query="what is the answer",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.3,
+    )
+
+    assert len(selected) == 3
+    assert all(s.mode == "trained" for s in selected)
+    # Sorted descending by score
+    scores = [s.selector_score for s in selected]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_trained_select_min_k_backfill():
+    """When threshold filters below min_k, backfill from top-scored items."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(6)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.8, 0.3, 0.2, 0.1, 0.05, 0.01]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=3,
+    )
+    assert len(result) == 3
+    assert result[0].anchor_id == 0
+    assert result[0].selector_score == 0.8
+
+
+def test_trained_select_rerank_only_returns_max_k():
+    """rerank_only=True ignores threshold, returns exactly max_k."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(8)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.05, 0.04, 0.03, 0.02, 0.01, 0.009, 0.008, 0.007]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        rerank_only=True,
+    )
+    assert len(result) == 6
+
+
+def test_trained_select_rerank_only_beats_min_k_precedence():
+    """rerank_only takes precedence — min_k is ignored."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(8)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=3,
+        rerank_only=True,
+    )
+    assert len(result) == 6
+
+
+def test_trained_select_min_k_capped_at_candidate_count():
+    """min_k never returns more than available candidates."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(2)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.1, 0.05]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=4,
+    )
+    assert len(result) == 2
+
+
+def test_selector_init_min_k_and_rerank_only():
+    """AnchorSelector accepts min_k and rerank_only."""
+    sel = AnchorSelector(mode="cosine", min_k=3, rerank_only=False)
+    assert sel.min_k == 3
+    assert sel.rerank_only is False
+
+    sel2 = AnchorSelector(mode="cosine", rerank_only=True)
+    assert sel2.rerank_only is True

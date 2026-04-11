@@ -21,8 +21,6 @@ import json
 import logging
 import os
 import re
-import textwrap
-import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -32,15 +30,14 @@ logger = logging.getLogger("psa.consolidation")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-QWEN_ENDPOINT = os.environ.get(
-    "QWEN_ENDPOINT", "http://localhost:11434/v1/chat/completions"
-)
+QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "http://localhost:11434/v1/chat/completions")
 QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen2.5:7b")
 
 
 def is_qwen_available() -> bool:
     """Check if any LLM endpoint (cloud or local) is available."""
     from .llm import is_any_llm_available
+
     return is_any_llm_available()
 
 
@@ -272,6 +269,7 @@ def _call_qwen(messages: List[dict], timeout: int = 120) -> str:
     """Call an LLM (cloud first, local fallback). Returns the raw response text."""
     try:
         from .llm import call_llm
+
         return call_llm(messages=messages, timeout=timeout)
     except Exception as e:
         raise RuntimeError(f"LLM call failed: {e}") from e
@@ -303,9 +301,7 @@ def _consolidate_with_qwen(
     section_text = "\n---\n".join(
         f"[{c.chunk_id}] {c.text[:max_section_chars]}" for c in sections[:10]
     )
-    fine_text = "\n".join(
-        f"[{c.chunk_id}] {c.text[:300]}" for c in fines[:30]
-    )
+    fine_text = "\n".join(f"[{c.chunk_id}] {c.text[:300]}" for c in fines[:30])
     first_chunk_id = fines[0].chunk_id if fines else (sections[0].chunk_id if sections else "?")
 
     user_content = _CONSOLIDATION_USER_TEMPLATE.format(
@@ -543,7 +539,8 @@ class ConsolidationPipeline:
             except Exception as e:
                 logger.warning(
                     "Embedding failed for memory %s: %s — skipping (would be un-searchable)",
-                    mo.memory_object_id, e,
+                    mo.memory_object_id,
+                    e,
                 )
                 continue
 
