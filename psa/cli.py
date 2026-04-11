@@ -862,6 +862,11 @@ def _cmd_longmemeval(args):
             print(f"  R@5:           {stats['recall_at_5']:.3f}")
         if "llm_score" in stats:
             print(f"  LLM-as-judge:  {stats['llm_score']:.3f}")
+        if "anchor_count_distribution" in stats:
+            dist = stats["anchor_count_distribution"]
+            print(f"  Anchor distribution: {dict(sorted(dist.items()))}")
+        if "gold_hit_rate" in stats:
+            print(f"  Gold-hit rate: {stats['gold_hit_rate']:.3f}")
         print(f"\nOracle labels written: {stats['oracle_labels_written']}")
         print(f"  -> {stats['oracle_labels_path']}")
         print("\nRun 'psa train' to train the selector on these labels.")
@@ -1373,6 +1378,24 @@ def main():
         "--selector-model",
         default=None,
         help="Path to trained selector model (auto-detected if omitted)",
+    )
+    p_lme_run.add_argument(
+        "--max-k",
+        type=int,
+        default=6,
+        help="Maximum anchors to select (default: 6)",
+    )
+    p_lme_run.add_argument(
+        "--min-k",
+        type=int,
+        default=None,
+        help="Minimum anchors to select (backfill from top-scored if threshold filters too many)",
+    )
+    p_lme_run.add_argument(
+        "--rerank-only",
+        action="store_true",
+        default=False,
+        help="Ignore threshold, return top max-k reranked by cross-encoder",
     )
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)

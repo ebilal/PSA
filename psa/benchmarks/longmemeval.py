@@ -135,6 +135,9 @@ def run(
     token_budget: int = 6000,
     selector_mode: str = "cosine",
     selector_model_path: Optional[str] = None,
+    max_k: int = 6,
+    min_k: Optional[int] = None,
+    rerank_only: bool = False,
 ) -> str:
     """
     Run each LongMemEval question through PSA and generate answers.
@@ -172,15 +175,27 @@ def run(
             token_budget=token_budget,
             selector_mode=selector_mode,
             selector_model_path=selector_model_path,
+            selector_max_k=max_k,
+            selector_min_k=min_k,
+            selector_rerank_only=rerank_only,
         )
     except FileNotFoundError:
         raise FileNotFoundError(
             f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
         )
 
+    # Build deterministic config label for filename
+    label_parts = [selector_mode]
+    if rerank_only:
+        label_parts.append("rerank")
+    elif min_k is not None:
+        label_parts.append(f"min{min_k}")
+    label_parts.append(f"k{max_k}")
+    config_label = "_".join(label_parts)
+
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    out_path = os.path.join(results_dir, f"results_{split}_{selector_mode}_{ts}.jsonl")
+    out_path = os.path.join(results_dir, f"results_{split}_{config_label}_{ts}.jsonl")
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, example in enumerate(examples):
@@ -322,6 +337,16 @@ def score(
             recall_scores.append(1.0 if gold & selected else 0.0)
     avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else None
 
+    # Anchor count distribution
+    anchor_count_dist: Dict[int, int] = {}
+    for r in records:
+        n = len(r.get("selected_anchor_ids", []))
+        anchor_count_dist[n] = anchor_count_dist.get(n, 0) + 1
+
+    # Gold-hit rate (fraction of questions where selected anchors include a gold anchor)
+    gold_hit_count = sum(1 for s in recall_scores if s == 1.0)
+    gold_hit_rate = gold_hit_count / len(recall_scores) if recall_scores else None
+
     result: Dict[str, Any] = {
         "exact_f1": round(avg_exact_f1, 4),
         "n_questions": len(records),
@@ -332,6 +357,9 @@ def score(
         result["llm_score"] = round(avg_llm, 4)
     if avg_recall is not None:
         result["recall_at_5"] = round(avg_recall, 4)
+    result["anchor_count_distribution"] = anchor_count_dist
+    if gold_hit_rate is not None:
+        result["gold_hit_rate"] = round(gold_hit_rate, 4)
     return result
 
 
