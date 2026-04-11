@@ -295,3 +295,88 @@ def test_trained_select_respects_threshold_when_above():
     # Sorted descending by score
     scores = [s.selector_score for s in selected]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_trained_select_min_k_backfill():
+    """When threshold filters below min_k, backfill from top-scored items."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(6)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.8, 0.3, 0.2, 0.1, 0.05, 0.01]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=3,
+    )
+    assert len(result) == 3
+    assert result[0].anchor_id == 0
+    assert result[0].selector_score == 0.8
+
+
+def test_trained_select_rerank_only_returns_max_k():
+    """rerank_only=True ignores threshold, returns exactly max_k."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(8)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.05, 0.04, 0.03, 0.02, 0.01, 0.009, 0.008, 0.007]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        rerank_only=True,
+    )
+    assert len(result) == 6
+
+
+def test_trained_select_rerank_only_beats_min_k_precedence():
+    """rerank_only takes precedence — min_k is ignored."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(8)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=3,
+        rerank_only=True,
+    )
+    assert len(result) == 6
+
+
+def test_trained_select_min_k_capped_at_candidate_count():
+    """min_k never returns more than available candidates."""
+    candidates = [_make_candidate(i, dense_score=0.9 - i * 0.1) for i in range(2)]
+
+    mock_ce = MagicMock()
+    mock_ce.predict.return_value = [0.1, 0.05]
+
+    result = _trained_select(
+        query="test query",
+        candidates=candidates,
+        cross_encoder=mock_ce,
+        max_k=6,
+        threshold=0.5,
+        min_k=4,
+    )
+    assert len(result) == 2
+
+
+def test_selector_init_min_k_and_rerank_only():
+    """AnchorSelector accepts min_k and rerank_only."""
+    sel = AnchorSelector(mode="cosine", min_k=3, rerank_only=False)
+    assert sel.min_k == 3
+    assert sel.rerank_only is False
+
+    sel2 = AnchorSelector(mode="cosine", rerank_only=True)
+    assert sel2.rerank_only is True

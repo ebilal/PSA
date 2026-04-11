@@ -114,6 +114,8 @@ def _trained_select(
     cross_encoder,
     max_k: int,
     threshold: float,
+    min_k: Optional[int] = None,
+    rerank_only: bool = False,
 ) -> List[SelectedAnchor]:
     """
     Score all candidates with a fine-tuned cross-encoder and threshold.
@@ -137,37 +139,61 @@ def _trained_select(
 
     scored = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
 
-    selected = []
-    for cand, score in scored[:max_k]:
-        if float(score) < threshold:
-            break
-        selected.append(
+    if rerank_only:
+        # Pure reranking: ignore threshold and min_k, return top max_k
+        selected = [
             SelectedAnchor(
                 anchor_id=cand.anchor_id,
                 selector_score=float(score),
                 mode="trained",
                 candidate=cand,
             )
-        )
-
-    # Zero-anchor fallback: always return at least the top-1 candidate so the
-    # packer is never handed an empty anchor list (65% of queries were failing
-    # the threshold when the cross-encoder was poorly calibrated).
-    if not selected and scored:
-        top_cand, top_score = scored[0]
-        logger.debug(
-            "Trained selector threshold rejected all candidates; "
-            "returning top-1 fallback (score=%.4f)",
-            float(top_score),
-        )
-        selected.append(
-            SelectedAnchor(
-                anchor_id=top_cand.anchor_id,
-                selector_score=float(top_score),
-                mode="trained",
-                candidate=top_cand,
+            for cand, score in scored[:max_k]
+        ]
+    else:
+        # Threshold filtering
+        selected = []
+        for cand, score in scored[:max_k]:
+            if float(score) < threshold:
+                break
+            selected.append(
+                SelectedAnchor(
+                    anchor_id=cand.anchor_id,
+                    selector_score=float(score),
+                    mode="trained",
+                    candidate=cand,
+                )
             )
-        )
+
+        # min_k backfill: if threshold filtered too aggressively, take top min_k
+        if min_k is not None and len(selected) < min_k:
+            backfill_count = min(min_k, len(scored))
+            selected = [
+                SelectedAnchor(
+                    anchor_id=cand.anchor_id,
+                    selector_score=float(score),
+                    mode="trained",
+                    candidate=cand,
+                )
+                for cand, score in scored[:backfill_count]
+            ]
+
+        # Zero-anchor fallback (existing behavior): always return at least top-1
+        if not selected and scored:
+            top_cand, top_score = scored[0]
+            logger.debug(
+                "Trained selector threshold rejected all candidates; "
+                "returning top-1 fallback (score=%.4f)",
+                float(top_score),
+            )
+            selected = [
+                SelectedAnchor(
+                    anchor_id=top_cand.anchor_id,
+                    selector_score=float(top_score),
+                    mode="trained",
+                    candidate=top_cand,
+                )
+            ]
 
     return selected
 
@@ -194,6 +220,8 @@ class AnchorSelector:
         model_path: Optional[str] = None,
         threshold: float = DEFAULT_THRESHOLD,
         max_k: int = DEFAULT_MAX_K,
+        min_k: Optional[int] = None,
+        rerank_only: bool = False,
     ):
         if mode not in ("cosine", "trained"):
             raise ValueError(f"Unknown selector mode {mode!r}. Choose 'cosine' or 'trained'.")
@@ -202,6 +230,8 @@ class AnchorSelector:
         self.threshold = threshold
         self.max_k = max_k
         self._cross_encoder = None
+        self.min_k = min_k
+        self.rerank_only = rerank_only
 
         if mode == "trained":
             if not model_path or not os.path.exists(model_path):
@@ -247,6 +277,8 @@ class AnchorSelector:
                 cross_encoder=self._cross_encoder,
                 max_k=self.max_k,
                 threshold=self.threshold,
+                min_k=self.min_k,
+                rerank_only=self.rerank_only,
             )
         else:
             return _cosine_select(
