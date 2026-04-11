@@ -573,7 +573,18 @@ class AtlasBuilder:
             old_card = matched[cluster_id]
 
             if old_card is not None:
-                # Matched: preserve identity, update centroid and examples
+                # Matched: preserve identity, update centroid and examples.
+                # If the old card predates query-pattern generation (empty list),
+                # generate patterns now so the card is fully hydrated.
+                if old_card.generated_query_patterns:
+                    query_patterns = old_card.generated_query_patterns
+                else:
+                    fresh = _generate_card_via_qwen(
+                        anchor_id=old_card.anchor_id,
+                        centroid=centroid_list,
+                        sample_memories=cluster_mems,
+                    )
+                    query_patterns = fresh.generated_query_patterns
                 card = AnchorCard(
                     anchor_id=old_card.anchor_id,
                     name=old_card.name,
@@ -585,7 +596,7 @@ class AtlasBuilder:
                     exclude_terms=old_card.exclude_terms,
                     prototype_examples=[m.title for m in cluster_mems[:5]],
                     near_but_different=old_card.near_but_different,
-                    generated_query_patterns=old_card.generated_query_patterns,
+                    generated_query_patterns=query_patterns,
                     centroid=centroid_list,
                     memory_count=len(cluster_mems),
                     is_novelty=False,
