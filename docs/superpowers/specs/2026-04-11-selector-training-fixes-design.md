@@ -106,10 +106,11 @@ These are generic selector configuration knobs, not ablation-specific wiring.
 
 **`PSAPipeline.from_tenant()`** gains:
 
+- `selector_max_k: int = 6`
 - `selector_min_k: Optional[int] = None`
 - `selector_rerank_only: bool = False`
 
-Passed through to `AnchorSelector(...)` construction.
+All three are passed through to `AnchorSelector(...)` construction. `selector_max_k` overrides the existing `max_k` default on `AnchorSelector`, making the candidate count explicit and controllable end-to-end from CLI to selector.
 
 **`longmemeval.run()`** gains matching parameters, flows to `from_tenant()`.
 
@@ -128,9 +129,9 @@ Passed through to `AnchorSelector(...)` construction.
 
 This keeps filenames unambiguous if `max_k` is varied later.
 
-### 4. Ablation runs
+### 4. Ablation runs and diagnostic metrics
 
-No code changes — just benchmark commands using the new flags.
+The benchmark commands use the new flags from Section 3. Two additional diagnostic metrics require implementation:
 
 | Label | Command flags | What it tests |
 |-------|--------------|---------------|
@@ -141,14 +142,20 @@ No code changes — just benchmark commands using the new flags.
 
 All four hold `max_k=6` constant for fair comparison.
 
-**Metrics per run:**
+**Existing metrics** (already computed by `score()`):
 
 - R@5 (anchor-level recall via `backtrack_gold_anchors`)
 - Exact F1
 - LLM-as-judge
-- Anchor count distribution (the main symptom — should show whether single-anchor collapse is eliminated)
-- Shortlist overlap with cosine top-6 (diagnostic for `trained-rerank`)
-- Gold-hit rate in selected set
+
+**New diagnostic metrics** (require code changes in `score()`):
+
+- **Anchor count distribution:** histogram of `len(selected_anchor_ids)` across all records. Computed in `score()` from the results JSONL and printed alongside existing metrics. This is the main symptom — it should show whether single-anchor collapse is eliminated.
+- **Gold-hit rate in selected set:** fraction of records where `gold_anchors ∩ selected_anchor_ids` is non-empty, computed per-record during the existing backtracking loop in `score()` and reported as a summary stat. This is essentially R@5 but reported explicitly as a named metric.
+
+**Post-hoc analysis script** (not in `score()` — separate):
+
+- **Shortlist overlap with cosine top-6:** requires comparing results across two runs (cosine and trained-rerank). Computed by a lightweight analysis script (`psa/benchmarks/ablation_compare.py`) or inline in a notebook. Reads two results JSONL files, computes per-query Jaccard overlap of `selected_anchor_ids`, and prints summary stats. This is not part of `score()` because it requires cross-run comparison.
 
 **Success criteria:**
 
