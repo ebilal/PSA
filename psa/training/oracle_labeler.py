@@ -467,9 +467,15 @@ class OracleLabeler:
 
         all_sets: List[CandidateSetScore] = []
         for combo_list, proxy in zip(all_combos, proxy_scores):
+            # When gold anchors are known, use deterministic set-overlap coverage
+            # instead of the noisy LLM proxy estimate.
+            if gold_anchor_ids:
+                support_cov = score_support_coverage(combo_list, gold_anchor_ids)
+            else:
+                support_cov = proxy["support_coverage"]
             # Compute preliminary oracle score (TaskSuccess=0 until expensive stage)
             score = oracle_score(
-                support_coverage=proxy["support_coverage"],
+                support_coverage=support_cov,
                 task_success=0.0,
                 procedural_utility=proxy["procedural_utility"],
                 noise_penalty=proxy["noise_penalty"],
@@ -478,7 +484,7 @@ class OracleLabeler:
             all_sets.append(
                 CandidateSetScore(
                     anchor_ids=combo_list,
-                    support_coverage=proxy["support_coverage"],
+                    support_coverage=support_cov,
                     procedural_utility=proxy["procedural_utility"],
                     noise_penalty=proxy["noise_penalty"],
                     token_cost=proxy["token_cost"],

@@ -76,7 +76,7 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             for session_id, messages in sessions.items():
-                session_path = os.path.join(tmpdir, f"{session_id}.jsonl")
+                session_path = os.path.join(tmpdir, f"{session_id}.json")
                 _write_session_jsonl(session_path, session_id, messages)
 
             mine_convos(
@@ -95,16 +95,20 @@ def ingest(tenant_id: str = BENCH_TENANT, results_dir: str = RESULTS_DIR_DEFAULT
 
 
 def _write_session_jsonl(path: str, session_id: str, messages: List[Dict]) -> None:
-    """Write one session as Claude Code JSONL format for convo_miner."""
+    """Write one session as a flat JSON array for convo_miner / normalize.py.
+
+    Written as a JSON array of {role, content} objects, which normalize.py's
+    _try_claude_ai_json flat-list parser recognises correctly. Previously used
+    JSONL with type="message" which no parser matched, causing sessions to be
+    ingested as raw JSON text rather than dialogue.
+    """
+    records = [
+        {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+        for msg in messages
+        if msg.get("content", "")
+    ]
     with open(path, "w", encoding="utf-8") as f:
-        for msg in messages:
-            record = {
-                "type": "message",
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-                "session_id": session_id,
-            }
-            f.write(json.dumps(record) + "\n")
+        json.dump(records, f)
 
 
 def _build_atlas(tenant_id: str) -> None:

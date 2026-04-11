@@ -84,7 +84,9 @@ class AnchorSynthesizer:
         for mo in trimmed:
             line = f"[{mo.memory_type.value.upper()}] {mo.title}"
             if mo.summary:
-                line += f": {mo.summary[:200]}"
+                line += f": {mo.summary}"
+            if mo.body and mo.body != mo.summary:
+                line += f"\n{mo.body[:500]}"
             memory_lines.append(line)
 
         memory_text = "\n".join(memory_lines)
