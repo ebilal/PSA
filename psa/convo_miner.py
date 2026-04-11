@@ -211,6 +211,7 @@ def detect_convo_room(content: str) -> str:
 
 def get_collection(palace_path: str):
     import chromadb
+
     os.makedirs(palace_path, exist_ok=True)
     client = chromadb.PersistentClient(path=palace_path)
     try:
@@ -367,6 +368,7 @@ def mine_convos(
 def _mine_convos_psa(convo_dir: str, files: list):
     """Run PSA consolidation over conversation files (dual-path, additive)."""
     from pathlib import Path
+
     try:
         from .config import MempalaceConfig
         from .consolidation import ConsolidationPipeline
@@ -383,9 +385,11 @@ def _mine_convos_psa(convo_dir: str, files: list):
     tenant = tm.get_or_create(cfg.tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
     from .consolidation import is_qwen_available
+
     use_llm = is_qwen_available()
     if not use_llm:
         import logging
+
         logging.getLogger("psa.convo_miner").warning(
             "Qwen endpoint not reachable. Skipping LLM-based memory extraction."
         )
@@ -394,12 +398,15 @@ def _mine_convos_psa(convo_dir: str, files: list):
     atlas = None
     try:
         from .atlas import AtlasManager
+
         atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=cfg.tenant_id)
         atlas = atlas_mgr.get_atlas()
     except Exception:
         pass
 
-    pipeline = ConsolidationPipeline(store=store, tenant_id=cfg.tenant_id, use_llm=use_llm, atlas=atlas)
+    pipeline = ConsolidationPipeline(
+        store=store, tenant_id=cfg.tenant_id, use_llm=use_llm, atlas=atlas
+    )
 
     already_processed = store.get_processed_source_paths(cfg.tenant_id)
 

@@ -68,6 +68,7 @@ def _get_collection(create=False):
     global _client_cache, _collection_cache
     try:
         import chromadb
+
         if _client_cache is None:
             _client_cache = chromadb.PersistentClient(path=_config.palace_path)
         if create:
@@ -314,6 +315,7 @@ def _get_psa_pipeline(tenant_id: str = "default"):
     """Build a PSAPipeline for the given tenant. Returns None if atlas not built."""
     try:
         from .pipeline import PSAPipeline
+
         return PSAPipeline.from_tenant(tenant_id=tenant_id)
     except FileNotFoundError:
         return None
@@ -326,6 +328,7 @@ def _get_psa_store(tenant_id: str = "default"):
     """Return (TenantManager, MemoryStore) for the given tenant."""
     from .tenant import TenantManager
     from .memory_object import MemoryStore
+
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
     store = MemoryStore(db_path=tenant.memory_db_path)
@@ -336,6 +339,7 @@ def _get_psa_atlas(tenant_id: str = "default"):
     """Return (Atlas, AtlasManager) or (None, mgr) if no atlas exists."""
     from .tenant import TenantManager
     from .atlas import AtlasManager
+
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
     mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
@@ -351,8 +355,7 @@ def tool_psa_atlas_search(query: str, tenant_id: str = "default", token_budget: 
     pipeline = _get_psa_pipeline(tenant_id)
     if pipeline is None:
         return {
-            "error": f"No PSA atlas built for tenant '{tenant_id}'. "
-                     "Run 'psa atlas build' first."
+            "error": f"No PSA atlas built for tenant '{tenant_id}'. Run 'psa atlas build' first."
         }
     pipeline.token_budget = token_budget
     result = pipeline.query(query)
@@ -438,15 +441,19 @@ def tool_psa_list_anchors(tenant_id: str = "default"):
 
     anchors = []
     for card in atlas.cards:
-        count = len(store.query_by_anchor(tenant_id=tenant_id, anchor_id=card.anchor_id, limit=100_000))
-        anchors.append({
-            "anchor_id": card.anchor_id,
-            "name": card.name,
-            "meaning": card.meaning[:120],
-            "memory_count": count,
-            "is_novelty": card.is_novelty,
-            "memory_types": card.memory_types,
-        })
+        count = len(
+            store.query_by_anchor(tenant_id=tenant_id, anchor_id=card.anchor_id, limit=100_000)
+        )
+        anchors.append(
+            {
+                "anchor_id": card.anchor_id,
+                "name": card.name,
+                "meaning": card.meaning[:120],
+                "memory_count": count,
+                "is_novelty": card.is_novelty,
+                "memory_types": card.memory_types,
+            }
+        )
     anchors.sort(key=lambda a: a["memory_count"], reverse=True)
     return {"tenant_id": tenant_id, "atlas_version": atlas.version, "anchors": anchors}
 
@@ -460,6 +467,7 @@ def tool_psa_atlas_health(tenant_id: str = "default"):
         return {"error": f"No atlas for tenant '{tenant_id}'."}
 
     from .health import AtlasHealthMonitor
+
     monitor = AtlasHealthMonitor()
     report = monitor.check_health(atlas, store, tenant_id=tenant_id)
     return report.to_dict()
@@ -530,7 +538,6 @@ TOOLS = {
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_get_taxonomy,
     },
-
     "psa_search": {
         "description": "Semantic search. Returns verbatim drawer content with similarity scores.",
         "input_schema": {

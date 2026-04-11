@@ -12,7 +12,7 @@ that have been archived for > 90 days.
 import logging
 from datetime import datetime, timezone
 from math import log
-from typing import List, Optional
+from typing import Optional
 
 from .memory_object import MemoryObject, MemoryStore
 
@@ -71,10 +71,10 @@ def forgetting_score(
     usage = log(1 + memory.pack_count) / 3.0  # 20 packs ~ 1.0
 
     return (
-        min(idle_days / 90.0, 1.0)       # idle pressure (caps at 90 days)
-        + min(overflow, 1.0)             # crowding pressure
-        - min(usage, 1.0)               # usage protection
-        - memory.quality_score           # quality protection
+        min(idle_days / 90.0, 1.0)  # idle pressure (caps at 90 days)
+        + min(overflow, 1.0)  # crowding pressure
+        - min(usage, 1.0)  # usage protection
+        - memory.quality_score  # quality protection
     )
 
 
@@ -112,7 +112,10 @@ def prune_anchor(
 
     logger.info(
         "Pruned anchor %d: archived %d memories (was %d, budget %d)",
-        anchor_id, len(archive_ids), anchor_size, budget,
+        anchor_id,
+        len(archive_ids),
+        anchor_size,
+        budget,
     )
     return len(archive_ids)
 
@@ -167,6 +170,8 @@ def enforce_global_cap(
 
     logger.info(
         "Global cap: archived %d memories (was %d, cap %d)",
-        len(archive_ids), active_count, max_memories,
+        len(archive_ids),
+        active_count,
+        max_memories,
     )
     return result

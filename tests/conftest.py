@@ -36,6 +36,7 @@ import pytest  # noqa: E402
 
 from psa.config import MempalaceConfig  # noqa: E402
 
+
 @pytest.fixture(autouse=True)
 def _reset_mcp_cache():
     """Reset the MCP server's cached ChromaDB client/collection between tests."""
@@ -188,5 +189,3 @@ def seeded_collection(collection):
         ],
     )
     return collection
-
-

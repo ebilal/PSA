@@ -417,15 +417,30 @@ def test_training_dependencies_importable():
 
 def test_selector_version_to_dict_keys():
     sv = SelectorVersion(
-        version=1, atlas_version=1, embedding_model="m", runtime_model_id="r",
-        base_model="b", training_examples=100, val_task_success=0.8,
-        threshold_tau=0.3, trained_at="now", model_path="/tmp",
+        version=1,
+        atlas_version=1,
+        embedding_model="m",
+        runtime_model_id="r",
+        base_model="b",
+        training_examples=100,
+        val_task_success=0.8,
+        threshold_tau=0.3,
+        trained_at="now",
+        model_path="/tmp",
         query_family_mix={},
     )
     d = sv.to_dict()
-    for key in ("version", "atlas_version", "base_model", "training_examples",
-                "val_task_success", "threshold_tau", "trained_at", "model_path",
-                "query_family_mix"):
+    for key in (
+        "version",
+        "atlas_version",
+        "base_model",
+        "training_examples",
+        "val_task_success",
+        "threshold_tau",
+        "trained_at",
+        "model_path",
+        "query_family_mix",
+    ):
         assert key in d
 
 
@@ -471,7 +486,7 @@ def test_generate_warns_on_low_positives(tmp_path, caplog):
             label = {
                 "query_id": f"q{i}",
                 "query": f"How does feature {i} work?",
-                "winning_oracle_set": [],   # no positives
+                "winning_oracle_set": [],  # no positives
                 "candidate_anchor_ids": [i, i + 1, i + 2, i + 3],
                 "is_high_complexity": False,
             }
@@ -484,7 +499,4 @@ def test_generate_warns_on_low_positives(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="psa.training.data_generator"):
         gen.generate(str(out), n_examples=50)
 
-    assert any(
-        "low positive ratio" in record.message.lower()
-        for record in caplog.records
-    )
+    assert any("low positive ratio" in record.message.lower() for record in caplog.records)

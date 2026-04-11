@@ -16,13 +16,12 @@ import pytest
 
 from psa.consolidation import (
     RETENTION_THRESHOLD,
-    Chunk,
     ConsolidationPipeline,
     _infer_chunk_type,
     _passes_retention,
     chunk_hierarchical,
 )
-from psa.memory_object import MemoryObject, MemoryStore, MemoryType, RawSource
+from psa.memory_object import MemoryStore, MemoryType, RawSource
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -249,10 +248,7 @@ def test_pipeline_raw_source_immutable(pipeline_no_llm, store):
 
 
 def test_pipeline_batch(pipeline_no_llm, store):
-    sources = [
-        {"raw_text": f"Source {i} content.", "source_type": "manual"}
-        for i in range(3)
-    ]
+    sources = [{"raw_text": f"Source {i} content.", "source_type": "manual"} for i in range(3)]
     pipeline_no_llm.consolidate_batch(sources)
     with store._connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM raw_sources").fetchone()[0]
@@ -271,7 +267,7 @@ class _FakePipeline(ConsolidationPipeline):
 
     def consolidate(self, raw_text, source_type, source_path=None, title="", metadata=None):
         from psa.memory_object import RawSource
-        from psa.consolidation import _passes_retention, _raw_to_memory_object, chunk_hierarchical, _infer_chunk_type
+        from psa.consolidation import _passes_retention, _raw_to_memory_object
 
         if not raw_text.strip():
             return []

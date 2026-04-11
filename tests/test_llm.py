@@ -4,7 +4,7 @@ test_llm.py — Unit tests for psa.llm routing and fallback logic.
 All tests are fully mocked — no network calls, no real LLM required.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,6 +15,7 @@ from psa.llm import call_llm
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+
 
 def _cloud_config(local_fallback: bool = True) -> dict:
     return {
@@ -52,7 +53,9 @@ def test_cloud_success_does_not_call_local(monkeypatch):
     local_called = []
     monkeypatch.setattr(llm_mod, "_load_config", lambda: _cloud_config())
     monkeypatch.setattr(llm_mod, "_call_cloud", lambda *a, **kw: '{"ok": 1}')
-    monkeypatch.setattr(llm_mod, "_call_local", lambda *a, **kw: local_called.append(1) or "should not reach")
+    monkeypatch.setattr(
+        llm_mod, "_call_local", lambda *a, **kw: local_called.append(1) or "should not reach"
+    )
 
     call_llm(MESSAGES)
     assert local_called == [], "Local should not be called when cloud succeeds"
@@ -64,7 +67,9 @@ def test_cloud_success_does_not_call_local(monkeypatch):
 def test_cloud_failure_falls_back_to_local(monkeypatch):
     """Core fallback test: cloud raises, local returns valid response."""
     monkeypatch.setattr(llm_mod, "_load_config", lambda: _cloud_config(local_fallback=True))
-    monkeypatch.setattr(llm_mod, "_call_cloud", MagicMock(side_effect=RuntimeError("API unavailable")))
+    monkeypatch.setattr(
+        llm_mod, "_call_cloud", MagicMock(side_effect=RuntimeError("API unavailable"))
+    )
     monkeypatch.setattr(llm_mod, "_call_local", lambda *a, **kw: '{"status": "ok"}')
 
     result = call_llm(MESSAGES)
@@ -73,7 +78,6 @@ def test_cloud_failure_falls_back_to_local(monkeypatch):
 
 def test_cloud_timeout_falls_back_to_local(monkeypatch):
     """Timeout on cloud should also trigger fallback."""
-    import urllib.error
     monkeypatch.setattr(llm_mod, "_load_config", lambda: _cloud_config(local_fallback=True))
     monkeypatch.setattr(llm_mod, "_call_cloud", MagicMock(side_effect=TimeoutError("timed out")))
     monkeypatch.setattr(llm_mod, "_call_local", lambda *a, **kw: '{"result": "from_local"}')
@@ -100,7 +104,9 @@ def test_fallback_disabled_raises_without_calling_local(monkeypatch):
 def test_both_fail_raises_runtime_error(monkeypatch):
     monkeypatch.setattr(llm_mod, "_load_config", lambda: _cloud_config(local_fallback=True))
     monkeypatch.setattr(llm_mod, "_call_cloud", MagicMock(side_effect=RuntimeError("cloud down")))
-    monkeypatch.setattr(llm_mod, "_call_local", MagicMock(side_effect=ConnectionRefusedError("ollama not running")))
+    monkeypatch.setattr(
+        llm_mod, "_call_local", MagicMock(side_effect=ConnectionRefusedError("ollama not running"))
+    )
 
     with pytest.raises(RuntimeError, match="All LLM endpoints failed"):
         call_llm(MESSAGES)
@@ -109,7 +115,9 @@ def test_both_fail_raises_runtime_error(monkeypatch):
 def test_both_fail_error_message_includes_both(monkeypatch):
     monkeypatch.setattr(llm_mod, "_load_config", lambda: _cloud_config(local_fallback=True))
     monkeypatch.setattr(llm_mod, "_call_cloud", MagicMock(side_effect=RuntimeError("cloud down")))
-    monkeypatch.setattr(llm_mod, "_call_local", MagicMock(side_effect=ConnectionRefusedError("ollama not running")))
+    monkeypatch.setattr(
+        llm_mod, "_call_local", MagicMock(side_effect=ConnectionRefusedError("ollama not running"))
+    )
 
     with pytest.raises(RuntimeError) as exc:
         call_llm(MESSAGES)

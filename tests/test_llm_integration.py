@@ -18,7 +18,9 @@ import pytest
 
 def _real_llm_config() -> dict:
     """Read llm.json from the actual user home, bypassing conftest HOME redirect."""
-    real_home = os.environ.get("HF_HOME", "").replace("/.cache/huggingface", "") or os.path.expanduser("~")
+    real_home = os.environ.get("HF_HOME", "").replace(
+        "/.cache/huggingface", ""
+    ) or os.path.expanduser("~")
     # HF_HOME is set to real ~/.cache/huggingface before HOME is redirected
     # so we can recover the real home from it
     llm_path = os.path.join(real_home, ".psa", "llm.json")
@@ -29,7 +31,9 @@ def _real_llm_config() -> dict:
 
 
 _cfg = _real_llm_config()
-_has_cloud = bool(_cfg.get("cloud_api_key") and _cfg.get("cloud_model") and _cfg.get("provider") != "local")
+_has_cloud = bool(
+    _cfg.get("cloud_api_key") and _cfg.get("cloud_model") and _cfg.get("provider") != "local"
+)
 
 
 @pytest.mark.skipif(not _has_cloud, reason="No cloud LLM credentials configured in ~/.psa/llm.json")
@@ -41,6 +45,7 @@ def test_cloud_llm_returns_valid_json():
     - The expected key is present
     """
     import litellm
+
     litellm.suppress_debug_info = True
 
     messages = [
@@ -66,8 +71,15 @@ def test_cloud_llm_returns_valid_json():
         response = litellm.completion(**kwargs)
     except Exception as e:
         err = str(e)
-        if "Resource not found" in err or "429" in err or "quota" in err.lower() or "rate" in err.lower():
-            pytest.skip(f"Azure quota/rate limit hit — endpoint is configured correctly but throttled: {err}")
+        if (
+            "Resource not found" in err
+            or "429" in err
+            or "quota" in err.lower()
+            or "rate" in err.lower()
+        ):
+            pytest.skip(
+                f"Azure quota/rate limit hit — endpoint is configured correctly but throttled: {err}"
+            )
         raise
 
     content = response.choices[0].message.content

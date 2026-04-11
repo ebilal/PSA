@@ -393,6 +393,7 @@ def chunk_text(content: str, source_file: str) -> list:
 
 def get_collection(palace_path: str):
     import chromadb
+
     os.makedirs(palace_path, exist_ok=True)
     client = chromadb.PersistentClient(path=palace_path)
     try:
@@ -639,6 +640,7 @@ def mine(
     # PSA dual-path: run consolidation alongside ChromaDB storage
     if not dry_run:
         from .config import MempalaceConfig
+
         cfg = MempalaceConfig()
         psa_mode = cfg.psa_mode
         if psa_mode != "off":
@@ -670,11 +672,12 @@ def mine_psa(
         return 0
 
     try:
-        from .consolidation import ConsolidationPipeline, _infer_chunk_type
+        from .consolidation import ConsolidationPipeline
         from .memory_object import MemoryStore
         from .tenant import TenantManager
     except ImportError as e:
         import logging
+
         logging.getLogger("psa.miner").warning("PSA consolidation unavailable: %s", e)
         return 0
 
@@ -683,6 +686,7 @@ def mine_psa(
     store = MemoryStore(db_path=tenant.memory_db_path)
     import logging as _logging
     from .consolidation import is_qwen_available
+
     use_llm = is_qwen_available()
     if not use_llm:
         _logging.getLogger("psa.miner").warning(
@@ -693,6 +697,7 @@ def mine_psa(
     atlas = None
     try:
         from .atlas import AtlasManager
+
         atlas_mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
         atlas = atlas_mgr.get_atlas()
     except Exception:
@@ -732,6 +737,7 @@ def status(palace_path: str):
     """Show what's been filed in the palace."""
     try:
         import chromadb
+
         client = chromadb.PersistentClient(path=palace_path)
         col = client.get_collection("psa_drawers")
     except Exception:

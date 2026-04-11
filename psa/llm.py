@@ -26,7 +26,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger("psa.llm")
 
@@ -105,6 +105,7 @@ def _call_cloud(
     config = _load_config()
     try:
         import litellm
+
         litellm.suppress_debug_info = True
 
         kwargs = {
@@ -214,6 +215,7 @@ def _is_local_available() -> bool:
     config = _load_config()
     try:
         import urllib.request
+
         base_url = config["local_endpoint"].rsplit("/v1", 1)[0]
         urllib.request.urlopen(f"{base_url}/api/tags", timeout=3)
         return True

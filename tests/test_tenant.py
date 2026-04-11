@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from psa.tenant import Tenant, TenantManager
+from psa.tenant import TenantManager
 
 
 @pytest.fixture
@@ -150,11 +150,11 @@ def test_tenant_paths_scoped(mgr):
 @pytest.mark.parametrize(
     "bad_id",
     [
-        "",           # empty
+        "",  # empty
         "A-Capital",  # uppercase
         "has space",  # space
-        "has!bang",   # special char
-        "a" * 65,     # too long
+        "has!bang",  # special char
+        "a" * 65,  # too long
     ],
 )
 def test_invalid_tenant_id_raises(mgr, bad_id):

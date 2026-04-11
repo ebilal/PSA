@@ -91,6 +91,7 @@ class AnchorCard:
     @classmethod
     def from_dict(cls, d: dict) -> "AnchorCard":
         import dataclasses
+
         d = dict(d)
         d.setdefault("generated_query_patterns", [])
         d.setdefault("query_fingerprint", [])

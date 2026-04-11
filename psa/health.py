@@ -20,8 +20,7 @@ Usage::
 """
 
 import logging
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from .atlas import Atlas
@@ -31,7 +30,7 @@ logger = logging.getLogger("psa.health")
 
 # ── Rebuild thresholds ────────────────────────────────────────────────────────
 
-NOVELTY_RATE_THRESHOLD = 0.08   # >8% novelty → rebuild
+NOVELTY_RATE_THRESHOLD = 0.08  # >8% novelty → rebuild
 UTILIZATION_SKEW_THRESHOLD = 3.0  # max/median utilization > 3× → rebuild
 
 
@@ -57,17 +56,17 @@ class HealthReport:
     total_memories: int
     total_anchors: int
     novelty_anchors: int
-    novelty_rate: float          # fraction of memories in novelty anchors
-    utilization_skew: float      # max_count / median_count (learned anchors only)
+    novelty_rate: float  # fraction of memories in novelty anchors
+    utilization_skew: float  # max_count / median_count (learned anchors only)
     memory_type_distribution: Dict[str, int]
     anchor_stats: List[AnchorStats]
-    embedding_drift: Optional[float]   # mean cosine distance from centroids (None if not computed)
+    embedding_drift: Optional[float]  # mean cosine distance from centroids (None if not computed)
     should_rebuild: bool
     rebuild_reasons: List[str]
     # Lifecycle metrics
-    never_packed_count: int = 0      # memories with pack_count == 0
-    archived_count: int = 0          # memories with is_archived = 1
-    capacity_pct: float = 0.0        # total / MAX_MEMORIES
+    never_packed_count: int = 0  # memories with pack_count == 0
+    archived_count: int = 0  # memories with is_archived = 1
+    capacity_pct: float = 0.0  # total / MAX_MEMORIES
 
     def summary(self) -> str:
         lines = [
@@ -78,9 +77,10 @@ class HealthReport:
             f"  utilization_skew: {self.utilization_skew:.2f}x (threshold {UTILIZATION_SKEW_THRESHOLD:.0f}x)",
         ]
         if self.memory_type_distribution:
-            lines.append("  memory types: " + ", ".join(
-                f"{t}={n}" for t, n in sorted(self.memory_type_distribution.items())
-            ))
+            lines.append(
+                "  memory types: "
+                + ", ".join(f"{t}={n}" for t, n in sorted(self.memory_type_distribution.items()))
+            )
         if self.never_packed_count > 0:
             lines.append(f"  never_packed: {self.never_packed_count}")
         if self.archived_count > 0:
@@ -199,6 +199,7 @@ class AtlasHealthMonitor:
         never_packed_count = forgetting.get("never_packed", 0)
         archived_count = forgetting.get("archived", 0)
         from .forgetting import MAX_MEMORIES
+
         capacity_pct = total_memories / max(MAX_MEMORIES, 1)
 
         should_rebuild = len(rebuild_reasons) > 0

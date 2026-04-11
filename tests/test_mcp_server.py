@@ -255,5 +255,3 @@ class TestWriteTools:
             threshold=0.99,
         )
         assert result["is_duplicate"] is False
-
-

@@ -33,11 +33,11 @@ logger = logging.getLogger("psa.training.data_generator")
 # ── Query family definitions ──────────────────────────────────────────────────
 
 QUERY_FAMILIES = [
-    "single_anchor",   # factual, one anchor
-    "contrastive",     # boundary between two similar anchors
-    "compositional",   # two-anchor combination
-    "bridge",          # three-anchor chain
-    "experience",      # episodic "what worked?" queries
+    "single_anchor",  # factual, one anchor
+    "contrastive",  # boundary between two similar anchors
+    "compositional",  # two-anchor combination
+    "bridge",  # three-anchor chain
+    "experience",  # episodic "what worked?" queries
 ]
 
 # ── Data mix ──────────────────────────────────────────────────────────────────
@@ -71,10 +71,10 @@ _ADVERSARIAL_TRANSFORMS = [
 class TrainingExample:
     query: str
     anchor_card: str
-    label: int             # 1 = positive (oracle anchor), 0 = negative
+    label: int  # 1 = positive (oracle anchor), 0 = negative
     anchor_id: int
     query_family: str
-    example_type: str      # "positive" | "hard_negative" | "easy_negative" | "adversarial"
+    example_type: str  # "positive" | "hard_negative" | "easy_negative" | "adversarial"
     source_query_id: Optional[str] = None
 
 
@@ -139,22 +139,14 @@ class DataGenerator:
         examples: List[TrainingExample] = []
 
         # 1. Synthetic positives from oracle labels
-        examples.extend(
-            self._generate_positives(n_synthetic // 2)
-        )
-        examples.extend(
-            self._generate_easy_negatives(n_synthetic // 2)
-        )
+        examples.extend(self._generate_positives(n_synthetic // 2))
+        examples.extend(self._generate_easy_negatives(n_synthetic // 2))
 
         # 2. Hard negatives
-        examples.extend(
-            self._generate_hard_negatives(n_hard_neg)
-        )
+        examples.extend(self._generate_hard_negatives(n_hard_neg))
 
         # 3. Adversarial rewrites
-        examples.extend(
-            self._generate_adversarial(n_adversarial)
-        )
+        examples.extend(self._generate_adversarial(n_adversarial))
 
         # 4. Enforce minimum positive ratio
         positives = [e for e in examples if e.label == 1]
@@ -176,7 +168,8 @@ class DataGenerator:
                 examples = positives + oversampled + negatives
                 logger.info(
                     "Oversampled %d positives to reach %.0f%% positive ratio.",
-                    extra_needed, MIN_POSITIVE_RATIO * 100,
+                    extra_needed,
+                    MIN_POSITIVE_RATIO * 100,
                 )
 
         self.rng.shuffle(examples)
@@ -347,7 +340,9 @@ if __name__ == "__main__":
     parser.add_argument("--tenant", default="default", help="Tenant ID (default: default)")
     parser.add_argument("--labels", required=True, help="Path to oracle_labels.jsonl")
     parser.add_argument("--output", required=True, help="Output JSONL path for training data")
-    parser.add_argument("--n-samples", type=int, default=1000, help="Total samples to generate (default: 1000)")
+    parser.add_argument(
+        "--n-samples", type=int, default=1000, help="Total samples to generate (default: 1000)"
+    )
     args = parser.parse_args()
 
     from psa.atlas import AtlasManager
