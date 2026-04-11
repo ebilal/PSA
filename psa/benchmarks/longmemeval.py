@@ -283,13 +283,25 @@ def score(
                 f.write(json.dumps(label) + "\n")
                 oracle_labels_written += 1
 
-    # Compute R@5 if answer_session_ids are available
+    # Compute Recall@Anchors: did the selected anchors include any gold anchor?
+    # Gold anchors are backtracked from answer_session_ids via MemoryStore.
     recall_scores = []
-    for r in records:
-        ans_ids = r.get("answer_session_ids", [])
-        if ans_ids:
-            hit = any(ans_id in r.get("context_text", "") for ans_id in ans_ids)
-            recall_scores.append(1.0 if hit else 0.0)
+    try:
+        from ..pipeline import PSAPipeline
+        from ..training.oracle_labeler import backtrack_gold_anchors
+
+        _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+        for r in records:
+            ans_ids = r.get("answer_session_ids", [])
+            selected = set(r.get("selected_anchor_ids", []))
+            if ans_ids and selected:
+                gold = set(
+                    backtrack_gold_anchors(ans_ids, _pipeline.store, _pipeline.atlas, tenant_id)
+                )
+                if gold:
+                    recall_scores.append(1.0 if gold & selected else 0.0)
+    except Exception:
+        logger.debug("Could not compute anchor recall", exc_info=True)
     avg_recall = sum(recall_scores) / len(recall_scores) if recall_scores else None
 
     result: Dict[str, Any] = {
