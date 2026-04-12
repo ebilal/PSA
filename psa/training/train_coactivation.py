@@ -1,0 +1,221 @@
+"""
+train_coactivation.py -- Train the PSA CoActivationModel.
+
+Loads coactivation_train.npz (produced by coactivation_data.py),
+splits into train/val, runs AdamW training, and saves:
+  - coactivation_model.pt       -- model state_dict
+  - coactivation_version.json   -- training metadata
+
+Loss:
+    BCE(refined_scores, gold_masks) + 0.3 * MSE(thresholds, gold_ks / n_anchors)
+
+Requirements: torch (install via psa[training])
+"""
+
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from typing import List, Optional
+
+import numpy as np
+
+logger = logging.getLogger("psa.training.train_coactivation")
+
+
+class CoActivationTrainer:
+    """
+    Train the CoActivationModel on coactivation_train.npz data.
+
+    Parameters
+    ----------
+    output_dir:
+        Directory where coactivation_model.pt and
+        coactivation_version.json will be written.
+    learning_rate:
+        AdamW learning rate. Default: 1e-4.
+    """
+
+    def __init__(
+        self,
+        output_dir: str,
+        learning_rate: float = 1e-4,
+    ):
+        self.output_dir = output_dir
+        self.learning_rate = learning_rate
+
+    def train(
+        self,
+        data_dir: str,
+        n_anchors: int = 256,
+        centroid_dim: int = 768,
+        epochs: int = 10,
+        batch_size: int = 16,
+        val_split: float = 0.15,
+        return_losses: bool = False,
+    ) -> Optional[List[float]]:
+        """
+        Train the CoActivationModel.
+
+        Parameters
+        ----------
+        data_dir:
+            Directory containing coactivation_train.npz.
+        n_anchors:
+            Number of anchors (overridden by actual data if different).
+        centroid_dim:
+            Centroid dimension (default 768).
+        epochs:
+            Number of training epochs.
+        batch_size:
+            Mini-batch size.
+        val_split:
+            Fraction of data used for validation (default 0.15).
+        return_losses:
+            If True, return list of per-epoch training losses.
+
+        Returns
+        -------
+        Optional[List[float]]
+            List of per-epoch mean training losses if return_losses=True,
+            else None.
+        """
+        try:
+            import torch
+            import torch.nn as nn
+            from torch.utils.data import DataLoader, TensorDataset
+        except ImportError:
+            raise ImportError(
+                "PyTorch is required for CoActivation training. "
+                "Install it with: pip install 'psa[training]'"
+            )
+
+        from psa.coactivation import CoActivationModel
+
+        # Load data
+        npz_path = os.path.join(data_dir, "coactivation_train.npz")
+        data = np.load(npz_path)
+
+        query_vecs = data["query_vecs"]   # (N, 768)
+        ce_scores = data["ce_scores"]     # (N, n_anchors)
+        gold_masks = data["gold_masks"]   # (N, n_anchors)
+        gold_ks = data["gold_ks"]         # (N,)
+        centroids = data["centroids"]     # (n_anchors, 768)
+
+        N = query_vecs.shape[0]
+        actual_n_anchors = ce_scores.shape[1]
+        actual_centroid_dim = centroids.shape[1]
+
+        logger.info(
+            "Loaded %d examples, %d anchors, centroid_dim=%d",
+            N,
+            actual_n_anchors,
+            actual_centroid_dim,
+        )
+
+        # Train / val split (seed=42)
+        rng = np.random.default_rng(42)
+        idx = rng.permutation(N)
+        n_val = max(1, int(N * val_split))
+        val_idx = idx[:n_val]
+        train_idx = idx[n_val:]
+
+        def _make_tensors(indices):
+            qv = torch.from_numpy(query_vecs[indices]).float()
+            ce = torch.from_numpy(ce_scores[indices]).float()
+            gm = torch.from_numpy(gold_masks[indices]).float()
+            gk = torch.from_numpy(gold_ks[indices]).float()
+            # Expand centroids to (len(indices), n_anchors, centroid_dim)
+            c = torch.from_numpy(
+                np.tile(centroids, (len(indices), 1, 1))
+            ).float()
+            return qv, ce, gm, gk, c
+
+        train_qv, train_ce, train_gm, train_gk, train_c = _make_tensors(train_idx)
+        val_qv, val_ce, val_gm, val_gk, val_c = _make_tensors(val_idx)
+
+        train_ds = TensorDataset(train_qv, train_ce, train_gm, train_gk, train_c)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+
+        # Device selection: mps > cuda > cpu
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+        logger.info("Training on device: %s", device)
+
+        # Model + optimiser
+        model = CoActivationModel(
+            n_anchors=actual_n_anchors,
+            centroid_dim=actual_centroid_dim,
+        ).to(device)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
+        bce_loss = nn.BCELoss()
+        mse_loss = nn.MSELoss()
+
+        # Training loop
+        epoch_losses: List[float] = []
+
+        for epoch in range(1, epochs + 1):
+            model.train()
+            batch_losses: List[float] = []
+
+            for batch in train_loader:
+                b_qv, b_ce, b_gm, b_gk, b_c = [t.to(device) for t in batch]
+
+                optimizer.zero_grad()
+
+                refined_scores, thresholds = model(b_ce, b_c, b_qv)
+
+                # gold_ks / n_anchors as soft threshold target
+                threshold_targets = b_gk / actual_n_anchors
+
+                loss = bce_loss(refined_scores, b_gm) + 0.3 * mse_loss(
+                    thresholds, threshold_targets
+                )
+                loss.backward()
+                optimizer.step()
+
+                batch_losses.append(float(loss.item()))
+
+            epoch_mean = float(np.mean(batch_losses))
+            epoch_losses.append(epoch_mean)
+            logger.info("Epoch %d/%d  loss=%.4f", epoch, epochs, epoch_mean)
+
+        # Validation pass
+        model.train(False)
+        with torch.no_grad():
+            r, t = model(
+                val_ce.to(device),
+                val_c.to(device),
+                val_qv.to(device),
+            )
+            tt = val_gk.to(device).float() / actual_n_anchors
+            val_loss = float(
+                (bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item()
+            )
+        logger.info("Validation loss: %.4f", val_loss)
+
+        # Save artefacts
+        os.makedirs(self.output_dir, exist_ok=True)
+        model_path = os.path.join(self.output_dir, "coactivation_model.pt")
+        torch.save(model.state_dict(), model_path)
+
+        meta = {
+            "n_anchors": actual_n_anchors,
+            "centroid_dim": actual_centroid_dim,
+            "training_examples": int(len(train_idx)),
+            "epochs": epochs,
+            "final_loss": epoch_losses[-1] if epoch_losses else 0.0,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+        }
+        version_path = os.path.join(self.output_dir, "coactivation_version.json")
+        with open(version_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        logger.info("CoActivation model saved to %s", self.output_dir)
+
+        return epoch_losses if return_losses else None
