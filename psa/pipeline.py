@@ -434,6 +434,11 @@ class PSAPipeline:
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 pass
 
+        # Trained selector default: rerank-only (CE ranks, always returns max_k).
+        # Ablation evidence: rerank_only achieves R@5=0.896 vs threshold's 0.766.
+        if selector_mode == "trained" and not selector_rerank_only and selector_min_k is None:
+            selector_rerank_only = True
+
         selector_kwargs = dict(
             mode=selector_mode,
             model_path=selector_model_path,
