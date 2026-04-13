@@ -230,6 +230,11 @@ Output a JSON object with a "memories" array. Each memory has:
   evidence_chunk_ids: array of chunk IDs that support this memory
   retention_score: float in [0,1] — how reusable and durable this memory is
   uncertainty: "low" | "medium" | "high" — how confident you are
+  entities: array of entity names mentioned (people, projects, tools, files, APIs). Extract proper nouns, tool names, file paths.
+  temporal_markers: {"mentioned_at": "ISO date or relative phrase like 'last week'", "valid_from": ISO date or null, "valid_to": ISO date or null}
+  speaker_role: "user" | "assistant" | "system" | "external" — who originated this information
+  actor_entities: array of named people/actors mentioned (e.g. ["Alice", "Bob"]). Only include actual person names, not roles.
+  stance: "prefers" | "stopped" | "switched" | "failed" | "fixed" | "deprecated" | null — the change/action stance expressed, if any
 
 Retention score guidelines:
   >= 0.80: reusable strategy, costly failure, durable fact, recurring pattern
@@ -369,7 +374,28 @@ def _raw_to_memory_object(
     if not isinstance(evidence_chunk_ids, list):
         evidence_chunk_ids = []
 
-    return MemoryObject.create(
+    entities = raw.get("entities", [])
+    if not isinstance(entities, list):
+        entities = []
+    temporal = raw.get("temporal_markers", {})
+    if not isinstance(temporal, dict):
+        temporal = {}
+    speaker_role = raw.get("speaker_role")
+    if speaker_role not in ("user", "assistant", "system", "external", None):
+        speaker_role = None
+    actor_entities = raw.get("actor_entities", [])
+    if not isinstance(actor_entities, list):
+        actor_entities = []
+    stance = raw.get("stance")
+    mentioned_at = temporal.get("mentioned_at") if isinstance(temporal, dict) else None
+    validity_interval = None
+    if isinstance(temporal, dict):
+        vf = temporal.get("valid_from")
+        vt = temporal.get("valid_to")
+        if vf or vt:
+            validity_interval = f"{vf or ''}:{vt or ''}"
+
+    mo = MemoryObject.create(
         tenant_id=tenant_id,
         memory_type=mtype,
         title=str(raw.get("title", "Untitled"))[:200],
@@ -387,6 +413,27 @@ def _raw_to_memory_object(
         ],
         quality_score=float(raw.get("retention_score", 0)),
     )
+    # If the LLM did not populate facet fields, fall back to heuristic extraction
+    if not entities and not actor_entities and speaker_role is None and stance is None:
+        from .facet_extractor import extract_facets
+
+        chunk_text = f"{mo.title}\n{mo.body}"
+        facets = extract_facets(chunk_text)
+        entities = facets.entities
+        actor_entities = facets.actor_entities
+        speaker_role = facets.speaker_role
+        stance = facets.stance
+        if mentioned_at is None:
+            mentioned_at = facets.mentioned_at
+
+    mo.entities = entities
+    mo.actor_entities = actor_entities
+    mo.speaker_role = speaker_role
+    mo.stance = stance
+    mo.mentioned_at = mentioned_at
+    if validity_interval:
+        mo.validity_interval = validity_interval
+    return mo
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────

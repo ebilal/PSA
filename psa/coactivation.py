@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 
 from .full_atlas_scorer import AnchorScore
+from .query_frame import QueryFrame
 from .selector import SelectedAnchor
 
 logger = logging.getLogger("psa.coactivation")
@@ -62,19 +63,21 @@ class CoActivationModel(nn.Module):
         dim_feedforward: int = 512,
         dropout: float = 0.1,
         anchor_feature_dim: int = 8,
+        query_frame_dim: int = 0,  # 0 = no frame features (backward compat)
     ):
         super().__init__()
         self.n_anchors = n_anchors
         self.centroid_dim = centroid_dim
         self.d_model = d_model
         self.anchor_feature_dim = anchor_feature_dim
+        self.query_frame_dim = query_frame_dim
         half = d_model // 2
 
         # Per-anchor projection: (1 scalar ce_score + centroid_dim + anchor_feature_dim) -> d_model//2
         self.anchor_proj = nn.Linear(1 + centroid_dim + anchor_feature_dim, half)
 
-        # Query projection: centroid_dim -> d_model//2  (broadcast across anchors)
-        self.query_proj = nn.Linear(centroid_dim, half)
+        # Query projection: (centroid_dim + query_frame_dim) -> d_model//2  (broadcast across anchors)
+        self.query_proj = nn.Linear(centroid_dim + query_frame_dim, half)
 
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -105,14 +108,16 @@ class CoActivationModel(nn.Module):
         centroids: torch.Tensor,
         query_vec: torch.Tensor,
         anchor_features: Optional[torch.Tensor] = None,
+        query_frame_features: Optional[torch.Tensor] = None,
     ):
         """
         Parameters
         ----------
-        ce_scores       : (B, N)
-        centroids       : (B, N, D)
-        query_vec       : (B, D)
-        anchor_features : (B, N, anchor_feature_dim) or None
+        ce_scores            : (B, N)
+        centroids            : (B, N, D)
+        query_vec            : (B, D)
+        anchor_features      : (B, N, anchor_feature_dim) or None
+        query_frame_features : (B, query_frame_dim) or None
 
         Returns
         -------
@@ -141,8 +146,23 @@ class CoActivationModel(nn.Module):
         # anchor tokens: (B, N, 1+D+anchor_feature_dim) -> (B, N, d_model//2)
         anchor_tokens = self.anchor_proj(anchor_input)
 
-        # query tokens: (B, D) -> (B, d_model//2) -> (B, 1, d_model//2) -> (B, N, d_model//2)
-        query_tokens = self.query_proj(query_vec).unsqueeze(1).expand(B, N, -1)
+        # Build query input: maybe append frame features
+        if query_frame_features is not None and self.query_frame_dim > 0:
+            query_input = torch.cat([query_vec, query_frame_features], dim=-1)
+        elif self.query_frame_dim > 0:
+            # Zero-pad when frame not provided but model expects it
+            query_input = torch.cat(
+                [
+                    query_vec,
+                    torch.zeros(B, self.query_frame_dim, device=query_vec.device),
+                ],
+                dim=-1,
+            )
+        else:
+            query_input = query_vec
+
+        # query tokens: (B, D+query_frame_dim) -> (B, d_model//2) -> (B, 1, d_model//2) -> (B, N, d_model//2)
+        query_tokens = self.query_proj(query_input).unsqueeze(1).expand(B, N, -1)
 
         # concatenate -> (B, N, d_model)
         tokens = torch.cat([anchor_tokens, query_tokens], dim=-1)
@@ -198,6 +218,7 @@ class CoActivationSelector:
         query_vec: np.ndarray,
         anchor_scores: List[AnchorScore],
         anchor_features: Optional[np.ndarray] = None,
+        query_frame: Optional[QueryFrame] = None,
     ) -> List[SelectedAnchor]:
         """
         Run the co-activation model and return selected anchors.
@@ -210,6 +231,8 @@ class CoActivationSelector:
             Full-atlas scored anchors (from FullAtlasScorer).
         anchor_features:
             Optional per-anchor feature matrix, shape (N, anchor_feature_dim).
+        query_frame:
+            Optional QueryFrame for version-gated frame feature injection.
 
         Returns
         -------
@@ -238,8 +261,36 @@ class CoActivationSelector:
                 .to(self.device)
             )  # (1, N, anchor_feature_dim)
 
+        # Build query frame features if model supports them
+        # 7-dim answer_target one-hot + 4-dim retrieval_mode one-hot = 11 dims
+        qf_tensor: Optional[torch.Tensor] = None
+        if query_frame is not None and self.model.query_frame_dim > 0:
+            ANSWER_TARGETS = [
+                "fact",
+                "preference",
+                "procedure",
+                "failure",
+                "temporal_change",
+                "prior_statement",
+                "comparison",
+            ]
+            RETRIEVAL_MODES = ["single_hop", "compare_over_time", "multi_hop", "abstention_risk"]
+
+            at_vec = [1.0 if t == query_frame.answer_target else 0.0 for t in ANSWER_TARGETS]
+            rm_vec = [1.0 if m == query_frame.retrieval_mode else 0.0 for m in RETRIEVAL_MODES]
+
+            qf_tensor = (
+                torch.tensor(at_vec + rm_vec, dtype=torch.float32).unsqueeze(0).to(self.device)
+            )  # (1, 11)
+
         with torch.no_grad():
-            refined_scores, thresholds = self.model(ce_t, centroids_t, qvec_t, af_t)
+            refined_scores, thresholds = self.model(
+                ce_t,
+                centroids_t,
+                qvec_t,
+                af_t,
+                query_frame_features=qf_tensor,
+            )
 
         scores_np = refined_scores[0].cpu().numpy()  # (N,)
         threshold = float(thresholds[0].cpu().item())
@@ -298,6 +349,7 @@ class CoActivationSelector:
             dim_feedforward=cfg.get("dim_feedforward", 512),
             dropout=cfg.get("dropout", 0.1),
             anchor_feature_dim=cfg.get("anchor_feature_dim", 8),
+            query_frame_dim=cfg.get("query_frame_dim", 0),
         )
         state = torch.load(weights_path, map_location=device)
         model.load_state_dict(state)

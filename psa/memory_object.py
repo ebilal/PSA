@@ -85,6 +85,12 @@ class MemoryObject:
     # Lifecycle (populated by forgetting system)
     is_archived: bool = False
     archived_at: Optional[str] = None
+    # Retrieval facets (populated during consolidation or backfill)
+    entities: List[str] = field(default_factory=list)
+    actor_entities: List[str] = field(default_factory=list)
+    speaker_role: Optional[str] = None
+    stance: Optional[str] = None
+    mentioned_at: Optional[str] = None
 
     @classmethod
     def create(
@@ -250,6 +256,18 @@ class MemoryStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mo_archived ON memory_objects(is_archived)"
             )
+            # Phase 1 facet columns
+            for col, typedef in [
+                ("entities_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("actor_entities_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("speaker_role", "TEXT"),
+                ("stance", "TEXT"),
+                ("mentioned_at", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE memory_objects ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
 
     # ── Raw source operations (immutable) ────────────────────────────────────
 
@@ -324,9 +342,10 @@ class MemoryStore:
                    task_type, tool_names_json, success_label, quality_score,
                    validity_interval, acl_scope, is_duplicate, duplicate_of,
                    select_count, pack_count, last_selected, last_packed,
-                   is_archived, archived_at)
+                   is_archived, archived_at,
+                   entities_json, actor_entities_json, speaker_role, stance, mentioned_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mo.memory_object_id,
@@ -361,6 +380,11 @@ class MemoryStore:
                     mo.last_packed,
                     1 if mo.is_archived else 0,
                     mo.archived_at,
+                    json.dumps(mo.entities),
+                    json.dumps(mo.actor_entities),
+                    mo.speaker_role,
+                    mo.stance,
+                    mo.mentioned_at,
                 ),
             )
         return mo.memory_object_id
@@ -375,9 +399,10 @@ class MemoryStore:
            task_type, tool_names_json, success_label, quality_score,
            validity_interval, acl_scope, is_duplicate, duplicate_of,
            select_count, pack_count, last_selected, last_packed,
-           is_archived, archived_at)
+           is_archived, archived_at,
+           entities_json, actor_entities_json, speaker_role, stance, mentioned_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?)
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def _add_params(self, mo: MemoryObject) -> tuple:
@@ -416,6 +441,11 @@ class MemoryStore:
             mo.last_packed,
             1 if mo.is_archived else 0,
             mo.archived_at,
+            json.dumps(mo.entities),
+            json.dumps(mo.actor_entities),
+            mo.speaker_role,
+            mo.stance,
+            mo.mentioned_at,
         )
 
     def batch_add(self, memories: List[MemoryObject]) -> List[str]:
@@ -445,6 +475,7 @@ class MemoryStore:
         spans_data = json.loads(row["evidence_spans_json"])
         spans = [EvidenceSpan(**s) for s in spans_data]
         success = row["success_label"]
+        d = dict(row)
         return MemoryObject(
             memory_object_id=row["memory_object_id"],
             tenant_id=row["tenant_id"],
@@ -477,6 +508,11 @@ class MemoryStore:
             last_packed=row["last_packed"],
             is_archived=bool(row["is_archived"]),
             archived_at=row["archived_at"],
+            entities=json.loads(d.get("entities_json", "[]") or "[]"),
+            actor_entities=json.loads(d.get("actor_entities_json", "[]") or "[]"),
+            speaker_role=d.get("speaker_role"),
+            stance=d.get("stance"),
+            mentioned_at=d.get("mentioned_at"),
         )
 
     def delete(self, memory_object_id: str) -> bool:
@@ -807,6 +843,38 @@ class MemoryStore:
             "never_packed": row["never_packed"] or 0,
             "never_selected": row["never_selected"] or 0,
         }
+
+    def update_facets(self, mo: MemoryObject) -> None:
+        """Update only the facet fields for an existing memory."""
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE memory_objects SET
+                    entities_json = ?,
+                    actor_entities_json = ?,
+                    speaker_role = ?,
+                    stance = ?,
+                    mentioned_at = ?,
+                    updated_at = ?
+                WHERE memory_object_id = ?""",
+                (
+                    json.dumps(mo.entities),
+                    json.dumps(mo.actor_entities),
+                    mo.speaker_role,
+                    mo.stance,
+                    mo.mentioned_at,
+                    datetime.now(timezone.utc).isoformat(),
+                    mo.memory_object_id,
+                ),
+            )
+
+    def get_all_active(self, tenant_id: str) -> List[MemoryObject]:
+        """Return all non-archived, non-duplicate memories for a tenant."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_objects WHERE tenant_id = ? AND is_archived = 0 AND is_duplicate = 0",
+                (tenant_id,),
+            ).fetchall()
+        return [self._row_to_memory_object(r) for r in rows]
 
     def get_processed_source_paths(self, tenant_id: str) -> set:
         """Return set of source_paths already in raw_sources for dedup."""

@@ -233,6 +233,7 @@ class CoActivationTrainer:
             "n_anchors": actual_n_anchors,
             "centroid_dim": actual_centroid_dim,
             "anchor_feature_dim": actual_anchor_feature_dim,
+            "query_frame_dim": 0,  # future training with frame features will set 11
             "training_examples": int(len(train_idx)),
             "epochs": epochs,
             "final_loss": epoch_losses[-1] if epoch_losses else 0.0,

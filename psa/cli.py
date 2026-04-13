@@ -229,6 +229,47 @@ def cmd_status(args):
 
 def cmd_repair(args):
     """Rebuild palace vector index from SQLite metadata."""
+    if getattr(args, "backfill_facets", False):
+        from .facet_extractor import extract_facets
+        from .memory_object import MemoryStore
+        from .tenant import TenantManager
+
+        tenant_id = getattr(args, "tenant", "default")
+        tm = TenantManager()
+        tenant = tm.get_or_create(tenant_id)
+        store = MemoryStore(db_path=tenant.memory_db_path)
+
+        print(f"Backfilling facets for tenant '{tenant_id}'...")
+        memories = store.get_all_active(tenant_id)
+        print(f"  Found {len(memories)} active memories.")
+
+        updated = 0
+        for i, mo in enumerate(memories):
+            # Try raw source first (more accurate), fall back to body
+            raw_text = None
+            for sid in mo.source_ids or []:
+                src = store.get_source(sid)
+                if src and src.full_text:
+                    raw_text = src.full_text
+                    break
+
+            text = raw_text or mo.body
+            facets = extract_facets(text)
+
+            mo.entities = facets.entities
+            mo.actor_entities = facets.actor_entities
+            mo.speaker_role = facets.speaker_role
+            mo.stance = facets.stance
+            mo.mentioned_at = facets.mentioned_at
+            store.update_facets(mo)
+            updated += 1
+
+            if (i + 1) % 100 == 0:
+                print(f"  {i + 1}/{len(memories)} memories updated")
+
+        print(f"  Backfilled facets for {updated} memories.")
+        return
+
     import chromadb
     import shutil
 
@@ -1594,9 +1635,19 @@ def main():
         instructions_sub.add_parser(instr_name, help=f"Output {instr_name} instructions")
 
     # repair
-    sub.add_parser(
+    p_repair = sub.add_parser(
         "repair",
         help="Rebuild palace vector index from stored data (fixes segfaults after corruption)",
+    )
+    p_repair.add_argument(
+        "--backfill-facets",
+        action="store_true",
+        help="Extract facets (entities, temporal, speaker, stance) for existing memories from raw sources",
+    )
+    p_repair.add_argument(
+        "--tenant",
+        default="default",
+        help="Tenant to backfill (default: 'default')",
     )
 
     # status
