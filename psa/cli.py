@@ -977,9 +977,15 @@ def _cmd_longmemeval(args):
                 sys.exit(1)
             results_file = files[-1]
 
+        lme_mode = getattr(args, "mode", "fast")
+        _mode_desc = {
+            "fast": "fast (gold-anchor overlap, no LLM — ~2 min)",
+            "local": "local Ollama LLM — 30-60 min",
+            "api": "cloud API LLM — 20-40 min",
+        }
         print(f"Running oracle labeling on: {results_file}")
-        print("This uses LLM calls and may take 30-60 minutes...")
-        n = oracle_label(results_file, tenant_id=tenant_id)
+        print(f"Mode: {_mode_desc.get(lme_mode, lme_mode)}")
+        n = oracle_label(results_file, tenant_id=tenant_id, mode=lme_mode)
         print(f"\nOracle labels written: {n}")
         print("Run 'psa train' to train the selector on these labels.")
 
@@ -1497,8 +1503,19 @@ def main():
     p_lme_score = lme_sub.add_parser("score", help="Score answers and write oracle labels")
     p_lme_score.add_argument("--results", default=None)
     p_lme_score.add_argument("--method", default="both", choices=["exact", "llm", "both"])
-    p_lme_oracle = lme_sub.add_parser("oracle-label", help="Run full oracle labeling on results")
+    p_lme_oracle = lme_sub.add_parser("oracle-label", help="Run oracle labeling on results")
     p_lme_oracle.add_argument("--results", default=None, help="Results JSONL (auto-detects latest)")
+    p_lme_oracle.add_argument(
+        "--mode",
+        default="fast",
+        choices=["fast", "local", "api"],
+        help=(
+            "Labeling strategy: 'fast' = gold-anchor overlap only (no LLM, ~2 min); "
+            "'local' = full two-stage via local Ollama (~30-60 min); "
+            "'api' = full two-stage via cloud API (~20-40 min). "
+            "Default: fast."
+        ),
+    )
 
     # migrate
     p_migrate = sub.add_parser(

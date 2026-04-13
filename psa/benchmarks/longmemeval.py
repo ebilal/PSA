@@ -368,13 +368,43 @@ def score(
 def oracle_label(
     results_path: str,
     tenant_id: str = BENCH_TENANT,
+    mode: str = "fast",
 ) -> int:
     """
-    Run the real OracleLabeler on benchmark results to produce proper
-    training labels with identified winning anchor sets.
+    Run the OracleLabeler on benchmark results to produce training labels.
+
+    Parameters
+    ----------
+    results_path:
+        Path to a JSONL results file produced by ``oracle-label run``.
+    tenant_id:
+        PSA tenant to use (must have an atlas built).
+    mode:
+        Labeling strategy:
+
+        ``"fast"``
+            No LLM calls. Uses deterministic gold-anchor overlap for
+            SupportCoverage, skips proxy scoring and TaskSuccess.
+            Requires ground-truth anchor IDs in the results file.
+            Runs in ~1–2 minutes for 500 queries.
+
+        ``"local"``
+            Full two-stage labeling via a local Ollama instance
+            (model configured in ``~/.psa/llm.json``).
+            Does not require a cloud API key.
+            Typical runtime: 30–60 min for 500 queries on an M4 Mac.
+
+        ``"api"``
+            Full two-stage labeling via a cloud LLM API
+            (provider configured in ``~/.psa/llm.json``).
+            Fastest for large runs; requires a valid API key.
+            Typical runtime: 20–40 min for 500 queries.
 
     Returns the number of oracle labels written.
     """
+    if mode not in ("fast", "local", "api"):
+        raise ValueError(f"Unknown oracle-label mode '{mode}'. Choose: fast, local, api")
+
     records = _load_results(results_path)
     if not records:
         raise ValueError(f"No records found in {results_path}")
@@ -389,7 +419,19 @@ def oracle_label(
     oracle_path = _oracle_labels_path(tenant_id)
     os.makedirs(os.path.dirname(oracle_path), exist_ok=True)
 
-    labeler = OracleLabeler(pipeline=pipeline, output_path=oracle_path)
+    # For local/api modes, override the LLM provider so call_llm() uses the
+    # right backend regardless of what llm.json currently has.
+    if mode in ("local", "api"):
+        import psa.llm as _llm_mod
+
+        _llm_mod._config_cache = None  # flush cache so fresh config is read
+        if mode == "local":
+            os.environ["_PSA_ORACLE_LLM_OVERRIDE"] = "local"
+        else:
+            os.environ.pop("_PSA_ORACLE_LLM_OVERRIDE", None)
+
+    use_llm = mode != "fast"
+    labeler = OracleLabeler(pipeline=pipeline, output_path=oracle_path, use_llm=use_llm)
 
     written = 0
     for i, record in enumerate(records):

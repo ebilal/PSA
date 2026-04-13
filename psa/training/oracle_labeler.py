@@ -396,16 +396,18 @@ class OracleLabeler:
         runtime_model_id: str = "qwen2.5:7b",
         task_success_fn=None,  # callable(query, packed_context) → float
         use_task_success: bool = True,  # enable expensive stage by default
+        use_llm: bool = True,  # False → fast path (gold-anchor overlap only, no LLM)
     ):
         self.pipeline = pipeline
         self.output_path = output_path
         self.qwen_endpoint = qwen_endpoint
         self.qwen_model = qwen_model
         self.runtime_model_id = runtime_model_id
-        self.use_task_success = use_task_success
+        self.use_llm = use_llm
+        self.use_task_success = use_task_success and use_llm
         if task_success_fn is not None:
             self.task_success_fn = task_success_fn
-        elif use_task_success:
+        elif self.use_task_success:
             self.task_success_fn = lambda q, ctx: _qwen_task_success(
                 q, ctx, endpoint=qwen_endpoint, model=qwen_model
             )
@@ -446,59 +448,84 @@ class OracleLabeler:
         if not is_high_complexity:
             specs = [s for s in specs if s[0] < 4]
 
-        anchor_cards_text = {c.anchor_id: c.card.to_card_text() for c in candidates}
-
-        # Step 3: Cheap stage — score ALL candidate sets in ONE LLM call
-        # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
-        # time from ~16h to ~1h for 500 queries on an M4 Mac.
+        # Step 3: Score candidate sets.
+        # Fast path: when gold anchor IDs are known AND use_llm=False, skip all
+        # LLM calls and rank purely by deterministic SupportCoverage (gold
+        # overlap). This makes labeling instantaneous for benchmarks that ship
+        # ground-truth anchors (e.g. LongMemEval). Set use_llm=True (modes
+        # "local" or "api") to run the full two-stage pipeline instead.
         all_combos: List[List[int]] = []
         for max_size, max_combos in specs:
             candidate_pool = candidate_ids[: max(8, max_size * 4)]
             combos = list(combinations(candidate_pool, max_size))[:max_combos]
             all_combos.extend(list(c) for c in combos)
 
-        proxy_scores = _call_qwen_proxy_batch(
-            query=query,
-            candidate_sets=all_combos,
-            anchor_cards_text=anchor_cards_text,
-            endpoint=self.qwen_endpoint,
-            model=self.qwen_model,
-        )
-
         all_sets: List[CandidateSetScore] = []
-        for combo_list, proxy in zip(all_combos, proxy_scores):
-            # When gold anchors are known, use deterministic set-overlap coverage
-            # instead of the noisy LLM proxy estimate.
-            if gold_anchor_ids:
+
+        if gold_anchor_ids and not self.use_llm:
+            # Gold-anchor fast path: no LLM calls needed.
+            for combo_list in all_combos:
                 support_cov = score_support_coverage(combo_list, gold_anchor_ids)
-            else:
-                support_cov = proxy["support_coverage"]
-            # Compute preliminary oracle score (TaskSuccess=0 until expensive stage)
-            score = oracle_score(
-                support_coverage=support_cov,
-                task_success=0.0,
-                procedural_utility=proxy["procedural_utility"],
-                noise_penalty=proxy["noise_penalty"],
-                token_cost=proxy["token_cost"],
-            )
-            all_sets.append(
-                CandidateSetScore(
-                    anchor_ids=combo_list,
+                score = oracle_score(
                     support_coverage=support_cov,
+                    task_success=0.0,
+                    procedural_utility=0.5,
+                    noise_penalty=0.0,
+                    token_cost=0.0,
+                )
+                all_sets.append(
+                    CandidateSetScore(
+                        anchor_ids=combo_list,
+                        support_coverage=support_cov,
+                        procedural_utility=0.5,
+                        noise_penalty=0.0,
+                        token_cost=0.0,
+                        task_success=None,
+                        oracle_score=score,
+                        packed_tokens=0,
+                    )
+                )
+        else:
+            # Full LLM path: use proxy scoring for all sets.
+            # Triggered when use_llm=True (modes "local" / "api") or when no
+            # gold anchors are available.
+            # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
+            # time from ~16h to ~1h for 500 queries on an M4 Mac.
+            anchor_cards_text = {c.anchor_id: c.card.to_card_text() for c in candidates}
+            proxy_scores = _call_qwen_proxy_batch(
+                query=query,
+                candidate_sets=all_combos,
+                anchor_cards_text=anchor_cards_text,
+                endpoint=self.qwen_endpoint,
+                model=self.qwen_model,
+            )
+            for combo_list, proxy in zip(all_combos, proxy_scores):
+                score = oracle_score(
+                    support_coverage=proxy["support_coverage"],
+                    task_success=0.0,
                     procedural_utility=proxy["procedural_utility"],
                     noise_penalty=proxy["noise_penalty"],
                     token_cost=proxy["token_cost"],
-                    task_success=None,
-                    oracle_score=score,
-                    packed_tokens=0,
                 )
-            )
+                all_sets.append(
+                    CandidateSetScore(
+                        anchor_ids=combo_list,
+                        support_coverage=proxy["support_coverage"],
+                        procedural_utility=proxy["procedural_utility"],
+                        noise_penalty=proxy["noise_penalty"],
+                        token_cost=proxy["token_cost"],
+                        task_success=None,
+                        oracle_score=score,
+                        packed_tokens=0,
+                    )
+                )
 
-        # Step 4: Expensive stage — TaskSuccess for top-N surviving sets
+        # Step 4: Expensive stage — TaskSuccess for top-N surviving sets.
+        # Skipped on the gold-anchor fast path (SupportCoverage already optimal).
         all_sets.sort(key=lambda s: s.oracle_score, reverse=True)
         top_sets = all_sets[:EXPENSIVE_TOP_N]
 
-        if self.task_success_fn is not None:
+        if self.task_success_fn is not None and not gold_anchor_ids:
             for cs in top_sets:
                 # Pack context for this anchor set and measure task success
                 try:

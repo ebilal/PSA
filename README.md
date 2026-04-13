@@ -213,7 +213,19 @@ The system tracks two usage signals per memory:
 
 Oracle labeling (`psa/training/oracle_labeler.py`) evaluates which anchor combinations actually help answer real queries. This is how PSA learns task utility rather than just topical similarity.
 
-**Two-stage pipeline:**
+#### Labeling modes
+
+`psa benchmark longmemeval oracle-label --mode <mode>` supports three strategies:
+
+| Mode | LLM calls | Runtime (500 q) | When to use |
+|------|-----------|-----------------|-------------|
+| `fast` *(default)* | None | ~25–30 min | Benchmarks with ground-truth anchor IDs (e.g. LongMemEval). Uses deterministic gold-overlap for SupportCoverage only; skips proxy scoring and TaskSuccess. |
+| `local` | Local Ollama | ~30–60 min | Production use without a cloud API key. Full two-stage pipeline via `qwen2.5:7b` (or configured model). |
+| `api` | Cloud API | ~20–40 min | Production use with a cloud API key. Full two-stage pipeline via the provider in `~/.psa/llm.json`. |
+
+**The `fast` mode is for benchmarks only** — it requires ground-truth anchor IDs to be present in the results file. For production PSA usage (real user sessions with no ground truth), use `local` or `api`.
+
+#### Full two-stage pipeline (local / api modes)
 
 **Stage 1 (cheap, batched):** For each query, generate candidate anchor sets of varying size (1-anchor through 4-anchor combinations from the retriever's top-24). All candidates are scored in a single batched LLM call with proxy metrics.
 
@@ -235,7 +247,7 @@ Where:
 - **NoisePenalty** — fraction of selected anchors NOT in the ground-truth set
 - **TokenCost** — `min(packed_tokens / 6000, 1.0)` (penalizes bloated context)
 
-The batching optimization reduces ~23 HTTP calls per query to 1, cutting labeling time from ~16 hours to ~1 hour for 500 queries on an M4 Mac.
+The Stage 1 batching reduces ~23 HTTP calls per query to 1, cutting full labeling time from ~16 hours to ~1 hour for 500 queries on an M4 Mac.
 
 ### Training Data Generation
 

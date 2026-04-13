@@ -182,7 +182,9 @@ def call_llm(
     Returns the response text. Raises RuntimeError if all endpoints fail.
     """
     config = _load_config()
-    provider = config.get("provider", "cloud")
+    # _PSA_ORACLE_LLM_OVERRIDE lets oracle-label --mode local/api force a
+    # specific backend without editing llm.json.
+    provider = os.environ.get("_PSA_ORACLE_LLM_OVERRIDE") or config.get("provider", "cloud")
     errors = []
 
     # Try cloud first (unless provider is "local")
