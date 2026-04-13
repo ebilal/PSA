@@ -15,6 +15,16 @@ import numpy as np
 logger = logging.getLogger("psa.training.coactivation_data")
 
 
+def _ensure_cpu_default():
+    """Force CPU as default torch device to prevent MPS SIGSEGV."""
+    try:
+        import torch
+
+        torch.set_default_device("cpu")
+    except (ImportError, RuntimeError):
+        pass
+
+
 def generate_coactivation_data(
     oracle_labels_path: str,
     output_path: str,
@@ -44,6 +54,8 @@ def generate_coactivation_data(
     int
         Number of training examples written.
     """
+    _ensure_cpu_default()
+
     cards = atlas.cards
     n_anchors = len(cards)
     anchor_id_to_idx = {card.anchor_id: idx for idx, card in enumerate(cards)}
@@ -109,6 +121,17 @@ def generate_coactivation_data(
             n_written += 1
             if n_written % 50 == 0:
                 logger.info("Processed %d oracle labels", n_written)
+                # Free MPS memory to prevent SIGSEGV from accumulation
+                import gc
+
+                gc.collect()
+                try:
+                    import torch
+
+                    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                        torch.mps.empty_cache()
+                except ImportError:
+                    pass
 
     if n_written == 0:
         logger.warning("No valid oracle labels found in %s", oracle_labels_path)

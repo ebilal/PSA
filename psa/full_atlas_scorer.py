@@ -25,12 +25,25 @@ _TRAINED_MAX_SEQ = 320
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _load_cross_encoder(model_path: str):
-    """Load a cross-encoder from disk."""
+def _load_cross_encoder(model_path: str, device: str = "cpu"):
+    """Load a cross-encoder from disk.
+
+    Parameters
+    ----------
+    model_path: path to the saved model
+    device: "cpu", "mps", or "cuda". Default "cpu" because MPS causes
+        SIGSEGV on repeated predict calls with 256-pair batches.
+    """
     try:
         from sentence_transformers.cross_encoder import CrossEncoder
 
-        return CrossEncoder(model_path, max_length=_TRAINED_MAX_SEQ)
+        import torch
+
+        return CrossEncoder(
+            model_path,
+            max_length=_TRAINED_MAX_SEQ,
+            device=torch.device(device),
+        )
     except ImportError:
         raise ImportError(
             "sentence-transformers is required for the trained scorer. "
@@ -93,11 +106,17 @@ class FullAtlasScorer:
         else:
             return self._cosine_fallback(query_vec)
 
-    def _cross_encoder_score(self, query: str) -> List[AnchorScore]:
-        """Score all anchors with the cross-encoder in a single predict call."""
+    def _cross_encoder_score(self, query: str, batch_size: int = 64) -> List[AnchorScore]:
+        """Score all anchors with the cross-encoder in batched predict calls."""
         cards = self.atlas.cards
         pairs = [(query, card.to_stable_card_text()) for card in cards]
-        raw_scores = self._cross_encoder.predict(pairs)
+
+        # Batch to avoid MPS memory exhaustion on repeated calls
+        all_scores = []
+        for i in range(0, len(pairs), batch_size):
+            chunk = pairs[i : i + batch_size]
+            all_scores.extend(self._cross_encoder.predict(chunk))
+        raw_scores = all_scores
 
         results = [
             AnchorScore(
@@ -144,7 +163,9 @@ class FullAtlasScorer:
         return results
 
     @classmethod
-    def from_model_path(cls, model_path: str, atlas) -> "FullAtlasScorer":
+    def from_model_path(
+        cls, model_path: str, atlas, device: str = "cpu"
+    ) -> "FullAtlasScorer":
         """
         Factory: load a cross-encoder from disk and construct a FullAtlasScorer.
 
@@ -154,6 +175,9 @@ class FullAtlasScorer:
             Path to a saved CrossEncoder model directory.
         atlas:
             Atlas instance whose cards will be scored.
+        device:
+            Device for cross-encoder inference. Default "cpu" — MPS causes
+            SIGSEGV on repeated batched predict calls.
         """
-        ce = _load_cross_encoder(model_path)
+        ce = _load_cross_encoder(model_path, device=device)
         return cls(cross_encoder=ce, atlas=atlas)

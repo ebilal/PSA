@@ -132,6 +132,6 @@ def test_from_model_path_loads_cross_encoder():
     with patch("psa.full_atlas_scorer._load_cross_encoder", return_value=mock_ce) as mock_load:
         scorer = FullAtlasScorer.from_model_path(model_path="/fake/model/path", atlas=atlas)
 
-    mock_load.assert_called_once_with("/fake/model/path")
+    mock_load.assert_called_once_with("/fake/model/path", device="cpu")
     assert scorer.atlas is atlas
     assert scorer._cross_encoder is mock_ce

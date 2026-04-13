@@ -120,27 +120,28 @@ class CoActivationTrainer:
         val_idx = idx[:n_val]
         train_idx = idx[n_val:]
 
+        # Shared centroid tensor — expanded per-batch in the training loop
+        # to avoid materializing (N, 256, 768) in memory.
+        centroids_t = torch.from_numpy(centroids).float()  # (n_anchors, 768)
+
         def _make_tensors(indices):
             qv = torch.from_numpy(query_vecs[indices]).float()
             ce = torch.from_numpy(ce_scores[indices]).float()
             gm = torch.from_numpy(gold_masks[indices]).float()
             gk = torch.from_numpy(gold_ks[indices]).float()
-            # Expand centroids to (len(indices), n_anchors, centroid_dim)
-            c = torch.from_numpy(
-                np.tile(centroids, (len(indices), 1, 1))
-            ).float()
-            return qv, ce, gm, gk, c
+            return qv, ce, gm, gk
 
-        train_qv, train_ce, train_gm, train_gk, train_c = _make_tensors(train_idx)
-        val_qv, val_ce, val_gm, val_gk, val_c = _make_tensors(val_idx)
+        train_qv, train_ce, train_gm, train_gk = _make_tensors(train_idx)
+        val_qv, val_ce, val_gm, val_gk = _make_tensors(val_idx)
 
-        train_ds = TensorDataset(train_qv, train_ce, train_gm, train_gk, train_c)
+        train_ds = TensorDataset(train_qv, train_ce, train_gm, train_gk)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
-        # Device selection: mps > cuda > cpu
-        if torch.backends.mps.is_available():
-            device = torch.device("mps")
-        elif torch.cuda.is_available():
+        # Device selection: cuda > cpu.
+        # MPS is excluded — TransformerEncoder causes SIGSEGV on Apple Silicon
+        # for the (batch, 256, 256) tensor shapes used here. CPU is fast enough
+        # for a ~2M param model (~2 min for 10 epochs on 1000 examples).
+        if torch.cuda.is_available():
             device = torch.device("cuda")
         else:
             device = torch.device("cpu")
@@ -164,7 +165,9 @@ class CoActivationTrainer:
             batch_losses: List[float] = []
 
             for batch in train_loader:
-                b_qv, b_ce, b_gm, b_gk, b_c = [t.to(device) for t in batch]
+                b_qv, b_ce, b_gm, b_gk = [t.to(device) for t in batch]
+                # Expand shared centroids to batch size
+                b_c = centroids_t.unsqueeze(0).expand(b_ce.shape[0], -1, -1).to(device)
 
                 optimizer.zero_grad()
 
@@ -188,9 +191,10 @@ class CoActivationTrainer:
         # Validation pass
         model.train(False)
         with torch.no_grad():
+            val_c_batch = centroids_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
             r, t = model(
                 val_ce.to(device),
-                val_c.to(device),
+                val_c_batch.to(device),
                 val_qv.to(device),
             )
             tt = val_gk.to(device).float() / actual_n_anchors
