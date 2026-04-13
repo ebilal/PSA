@@ -578,18 +578,12 @@ def cmd_train(args):
         # Co-activation training
         if getattr(args, "coactivation", False):
             print("Training co-activation model...")
-            # Force CPU default to prevent MPS SIGSEGV when loading
-            # both EmbeddingModel and CrossEncoder in the same process.
-            import torch as _torch
-
-            _torch.set_default_device("cpu")
-
             from .embeddings import EmbeddingModel
             from .full_atlas_scorer import FullAtlasScorer
             from .training.coactivation_data import generate_coactivation_data
             from .training.train_coactivation import CoActivationTrainer
 
-            fas = FullAtlasScorer.from_model_path(sv.model_path, atlas, device="cpu")
+            fas = FullAtlasScorer.from_model_path(sv.model_path, atlas)
             emb = EmbeddingModel()
             coact_data_dir = os.path.join(tenant.root_dir, "training", "coactivation")
             n_coact = generate_coactivation_data(
@@ -608,6 +602,40 @@ def cmd_train(args):
                 n_anchors=len(atlas.cards),
             )
             print(f"  Co-activation model saved to {coact_output}")
+
+        if getattr(args, "memory_scorer", False):
+            print("Training memory scorer...")
+            from .training.memory_scorer_data import generate_memory_scorer_data
+            from .training.train_memory_scorer import MemoryScorerTrainer
+
+            import glob as _glob
+
+            results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
+            results_files = sorted(_glob.glob(os.path.join(results_dir, "results_*.jsonl")))
+            if not results_files:
+                print("  No benchmark results found. Run benchmark first.")
+            else:
+                results_file = results_files[-1]
+                scorer_data_path = os.path.join(
+                    tenant.root_dir, "training", "memory_scorer_train.jsonl"
+                )
+                from .pipeline import PSAPipeline
+
+                _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+                n_examples = generate_memory_scorer_data(
+                    results_path=results_file,
+                    output_path=scorer_data_path,
+                    pipeline=_pipeline,
+                    mode="benchmark",
+                )
+                print(f"  Generated {n_examples} memory scorer examples.")
+
+                if n_examples >= 200:
+                    scorer_output = os.path.join(tenant.root_dir, "models", "memory_scorer_latest")
+                    MemoryScorerTrainer(output_dir=scorer_output).train(data_path=scorer_data_path)
+                    print(f"  Memory scorer saved to {scorer_output}")
+                else:
+                    print(f"  Too few examples ({n_examples}). Need >= 200.")
     except Exception as e:
         print(f"  Training failed: {e}")
 
@@ -1420,6 +1448,11 @@ def main():
         "--coactivation",
         action="store_true",
         help="Also train co-activation model after selector (requires trained selector)",
+    )
+    p_train.add_argument(
+        "--memory-scorer",
+        action="store_true",
+        help="Also train memory-level re-ranker (requires benchmark results)",
     )
 
     # inspect

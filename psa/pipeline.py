@@ -27,6 +27,7 @@ from .coactivation import CoActivationSelector
 from .embeddings import EmbeddingModel
 from .full_atlas_scorer import FullAtlasScorer
 from .memory_object import MemoryObject, MemoryStore
+from .memory_scorer import MemoryScorer
 from .packer import EvidencePacker, PackedContext
 from .retriever import AnchorCandidate, AnchorRetriever
 from .selector import AnchorSelector, SelectedAnchor
@@ -119,6 +120,7 @@ class PSAPipeline:
         psa_mode: str = "side-by-side",
         full_atlas_scorer: Optional[FullAtlasScorer] = None,
         coactivation_selector: Optional[CoActivationSelector] = None,
+        memory_scorer: Optional[MemoryScorer] = None,
     ):
         self.store = store
         self.atlas = atlas
@@ -129,6 +131,7 @@ class PSAPipeline:
         self.psa_mode = psa_mode
         self.full_atlas_scorer = full_atlas_scorer
         self.coactivation_selector = coactivation_selector
+        self.memory_scorer = memory_scorer
 
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
@@ -292,6 +295,23 @@ class PSAPipeline:
 
         logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
 
+        # Level 2: Memory-level scoring (if available)
+        _pre_ranked = False
+        if self.memory_scorer is not None and memories:
+            t0_l2 = time.perf_counter()
+            scored_memories = self.memory_scorer.score(
+                query=query,
+                query_vec=query_vec,
+                memories=memories,
+            )
+            memories = [sm.memory for sm in scored_memories]
+            logger.debug(
+                "Level 2 scored %d memories in %.1fms",
+                len(memories),
+                (time.perf_counter() - t0_l2) * 1000,
+            )
+            _pre_ranked = True
+
         # Step 5: Synthesize context
         t0 = time.perf_counter()
         try:
@@ -317,6 +337,7 @@ class PSAPipeline:
                 token_budget=self.token_budget,
                 query_vec=query_vec,
                 store=self.store,
+                pre_ranked=_pre_ranked,
             )
         timing.pack_ms = (time.perf_counter() - t0) * 1000
 
@@ -535,14 +556,15 @@ class PSAPipeline:
         coactivation_version_path = os.path.join(
             coactivation_model_dir, "coactivation_version.json"
         )
+        _device = "cpu"
         if os.path.exists(coactivation_version_path):
             try:
                 import torch as _torch
 
-                device = "cuda" if _torch.cuda.is_available() else "cpu"
+                _device = "mps" if _torch.backends.mps.is_available() else "cpu"
                 coactivation_selector = CoActivationSelector.from_model_path(
                     model_path=coactivation_model_dir,
-                    device=device,
+                    device=_device,
                 )
             except Exception:
                 logger.debug(
@@ -550,6 +572,20 @@ class PSAPipeline:
                     coactivation_model_dir,
                     exc_info=True,
                 )
+
+        # Load MemoryScorer (if model exists)
+        memory_scorer = None
+        scorer_model_dir = os.path.join(tenant.root_dir, "models", "memory_scorer_latest")
+        scorer_meta = os.path.join(scorer_model_dir, "memory_scorer_version.json")
+        if os.path.exists(scorer_meta) and full_atlas_scorer is not None:
+            try:
+                memory_scorer = MemoryScorer.from_model_path(
+                    model_path=scorer_model_dir,
+                    cross_encoder=full_atlas_scorer._cross_encoder,
+                    device=_device,
+                )
+            except Exception:
+                logger.debug("MemoryScorer not loaded", exc_info=True)
 
         return cls(
             store=store,
@@ -561,6 +597,7 @@ class PSAPipeline:
             psa_mode=psa_mode,
             full_atlas_scorer=full_atlas_scorer,
             coactivation_selector=coactivation_selector,
+            memory_scorer=memory_scorer,
         )
 
     @classmethod

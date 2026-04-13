@@ -25,14 +25,14 @@ _TRAINED_MAX_SEQ = 320
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _load_cross_encoder(model_path: str, device: str = "cpu"):
+def _load_cross_encoder(model_path: str, device: str = "mps"):
     """Load a cross-encoder from disk.
 
     Parameters
     ----------
     model_path: path to the saved model
-    device: "cpu", "mps", or "cuda". Default "cpu" because MPS causes
-        SIGSEGV on repeated predict calls with 256-pair batches.
+    device: "cpu", "mps", or "cuda". Default "mps" — must match
+        EmbeddingModel device to avoid SIGSEGV from mixed-device inference.
     """
     try:
         from sentence_transformers.cross_encoder import CrossEncoder
@@ -163,7 +163,7 @@ class FullAtlasScorer:
         return results
 
     @classmethod
-    def from_model_path(cls, model_path: str, atlas, device: str = "cpu") -> "FullAtlasScorer":
+    def from_model_path(cls, model_path: str, atlas, device: str = "mps") -> "FullAtlasScorer":
         """
         Factory: load a cross-encoder from disk and construct a FullAtlasScorer.
 
@@ -174,8 +174,8 @@ class FullAtlasScorer:
         atlas:
             Atlas instance whose cards will be scored.
         device:
-            Device for cross-encoder inference. Default "cpu" — MPS causes
-            SIGSEGV on repeated batched predict calls.
+            Device for cross-encoder inference. Default "mps" — must match
+            EmbeddingModel device to avoid SIGSEGV from mixed-device inference.
         """
         ce = _load_cross_encoder(model_path, device=device)
         return cls(cross_encoder=ce, atlas=atlas)

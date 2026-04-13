@@ -15,16 +15,6 @@ import numpy as np
 logger = logging.getLogger("psa.training.coactivation_data")
 
 
-def _ensure_cpu_default():
-    """Force CPU as default torch device to prevent MPS SIGSEGV."""
-    try:
-        import torch
-
-        torch.set_default_device("cpu")
-    except (ImportError, RuntimeError):
-        pass
-
-
 def generate_coactivation_data(
     oracle_labels_path: str,
     output_path: str,
@@ -54,8 +44,6 @@ def generate_coactivation_data(
     int
         Number of training examples written.
     """
-    _ensure_cpu_default()
-
     cards = atlas.cards
     n_anchors = len(cards)
     anchor_id_to_idx = {card.anchor_id: idx for idx, card in enumerate(cards)}
@@ -68,6 +56,12 @@ def generate_coactivation_data(
     # Precompute centroids array (n_anchors, 768) in card order
     centroids = np.array(
         [np.asarray(card.centroid, dtype=np.float32) for card in cards],
+        dtype=np.float32,
+    )
+
+    # Precompute anchor feature matrix (n_anchors, 8): type_distribution + avg_quality + memory_count_norm
+    anchor_features = np.array(
+        [card.type_distribution + [card.avg_quality, card.memory_count_norm] for card in cards],
         dtype=np.float32,
     )
 
@@ -147,6 +141,7 @@ def generate_coactivation_data(
         gold_masks=np.stack(gold_masks_list, axis=0).astype(np.float32),
         gold_ks=np.array(gold_ks_list, dtype=np.int32),
         centroids=centroids,
+        anchor_features=anchor_features,
         anchor_ids=np.array([card.anchor_id for card in cards], dtype=np.int32),
     )
 

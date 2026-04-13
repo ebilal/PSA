@@ -47,6 +47,9 @@ class AnchorCard:
     metadata: dict = field(default_factory=dict)
     generated_query_patterns: List[str] = field(default_factory=list)
     query_fingerprint: List[str] = field(default_factory=list)
+    type_distribution: List[float] = field(default_factory=lambda: [0.0] * 6)
+    avg_quality: float = 0.0
+    memory_count_norm: float = 0.0
 
     def to_stable_card_text(self) -> str:
         """

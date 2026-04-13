@@ -393,6 +393,7 @@ class EvidencePacker:
         token_budget: int = 6000,
         query_vec: Optional[List[float]] = None,
         store: Optional[MemoryStore] = None,
+        pre_ranked: bool = False,
     ) -> PackedContext:
         """
         Pack MemoryObjects directly (used when memories are retrieved via PSA path).
@@ -400,6 +401,8 @@ class EvidencePacker:
         When query_vec is provided, memories are ranked by query relevance
         (cosine similarity) instead of static quality_score. When store is
         provided, source records are fetched to enrich top-ranked items.
+        When pre_ranked is True, input order is preserved (Level 2 scorer
+        already ranked them).
         """
         if not memories:
             return PackedContext(
@@ -411,15 +414,16 @@ class EvidencePacker:
                 untyped_count=0,
             )
 
-        # Compute per-memory relevance to the query
-        relevances = _compute_relevance(memories, query_vec)
-
-        # Rank by cosine relevance (70%) + quality (30%)
-        scored = sorted(
-            zip(memories, relevances),
-            key=lambda pair: pair[1] * 0.7 + pair[0].quality_score * 0.3,
-            reverse=True,
-        )
+        if pre_ranked:
+            scored = [(m, 1.0) for m in memories]  # preserve input order
+        else:
+            relevances = _compute_relevance(memories, query_vec)
+            # Rank by cosine relevance (70%) + quality (30%)
+            scored = sorted(
+                zip(memories, relevances),
+                key=lambda pair: pair[1] * 0.7 + pair[0].quality_score * 0.3,
+                reverse=True,
+            )
 
         # Top N memories get source context and full body text
         TOP_N_WITH_SOURCE = 10

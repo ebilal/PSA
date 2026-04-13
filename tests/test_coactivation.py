@@ -44,7 +44,7 @@ class TestCoActivationModel:
         """(batch=4, 256 anchors): refined_scores shape (4, 256), thresholds shape (4,)."""
         batch, n_anchors, dim = 4, 256, 768
         model = CoActivationModel(n_anchors=n_anchors, centroid_dim=dim)
-        model.eval()
+        model.train(False)
 
         ce_scores = torch.rand(batch, n_anchors)
         centroids = torch.randn(batch, n_anchors, dim)
@@ -60,7 +60,7 @@ class TestCoActivationModel:
         """Sigmoid ensures refined_scores are in [0, 1]."""
         batch, n_anchors, dim = 2, 16, 768
         model = CoActivationModel(n_anchors=n_anchors, centroid_dim=dim)
-        model.eval()
+        model.train(False)
 
         ce_scores = torch.rand(batch, n_anchors)
         centroids = torch.randn(batch, n_anchors, dim)
@@ -76,7 +76,7 @@ class TestCoActivationModel:
         """Threshold values are in (0, 1)."""
         batch, n_anchors, dim = 3, 16, 768
         model = CoActivationModel(n_anchors=n_anchors, centroid_dim=dim)
-        model.eval()
+        model.train(False)
 
         ce_scores = torch.rand(batch, n_anchors)
         centroids = torch.randn(batch, n_anchors, dim)
@@ -92,7 +92,7 @@ class TestCoActivationModel:
         """Permuting anchor order permutes refined_scores identically."""
         batch, n_anchors, dim = 2, 8, 768
         model = CoActivationModel(n_anchors=n_anchors, centroid_dim=dim)
-        model.eval()
+        model.train(False)
 
         rng_gen = torch.Generator()
         rng_gen.manual_seed(7)
@@ -128,6 +128,41 @@ class TestCoActivationModel:
             f"Model has {total_params:,} parameters, expected < 5,000,000"
         )
 
+    def test_forward_with_anchor_features(self):
+        """Forward pass with 8-dim anchor features: output shapes are correct."""
+        batch, n_anchors, dim, feat_dim = 2, 8, 768, 8
+        model = CoActivationModel(
+            n_anchors=n_anchors, centroid_dim=dim, anchor_feature_dim=feat_dim
+        )
+        model.train(False)
+
+        ce_scores = torch.rand(batch, n_anchors)
+        centroids = torch.randn(batch, n_anchors, dim)
+        query_vec = torch.randn(batch, dim)
+        anchor_features = torch.rand(batch, n_anchors, feat_dim)
+
+        with torch.no_grad():
+            refined_scores, thresholds = model(ce_scores, centroids, query_vec, anchor_features)
+
+        assert refined_scores.shape == (batch, n_anchors)
+        assert thresholds.shape == (batch,)
+
+    def test_backward_compat_no_features(self):
+        """Passing None for anchor_features still works (zeros are injected)."""
+        batch, n_anchors, dim = 2, 8, 768
+        model = CoActivationModel(n_anchors=n_anchors, centroid_dim=dim, anchor_feature_dim=8)
+        model.train(False)
+
+        ce_scores = torch.rand(batch, n_anchors)
+        centroids = torch.randn(batch, n_anchors, dim)
+        query_vec = torch.randn(batch, dim)
+
+        with torch.no_grad():
+            refined_scores, thresholds = model(ce_scores, centroids, query_vec, None)
+
+        assert refined_scores.shape == (batch, n_anchors)
+        assert thresholds.shape == (batch,)
+
 
 # ── TestCoActivationSelector ──────────────────────────────────────────────────
 
@@ -138,7 +173,7 @@ class TestCoActivationSelector:
         n_anchors = 10
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec):
+        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.0)
@@ -168,7 +203,7 @@ class TestCoActivationSelector:
         n_anchors = 5
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec):
+        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.1)
