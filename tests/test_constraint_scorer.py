@@ -86,6 +86,4 @@ def test_missing_facets_get_neutral_score():
     scorer = ConstraintScorer()
     results = scorer.adjust_scores([m], frame)
 
-    assert results[0].final_score >= 0.4, (
-        f"Expected score >= 0.4, got {results[0].final_score:.4f}"
-    )
+    assert results[0].final_score >= 0.4, f"Expected score >= 0.4, got {results[0].final_score:.4f}"

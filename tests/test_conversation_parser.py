@@ -46,9 +46,7 @@ def test_parse_claude_code_jsonl():
 def test_parse_plain_text():
     """Parse a plain text file with > user markers."""
     content = "> Can you help?\n\nSure, I'll look.\n\n> What about tokens?\n\nThey're in cookies."
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = f.name
     try:
@@ -61,9 +59,7 @@ def test_parse_plain_text():
 
 def test_returns_empty_for_empty_file():
     """Empty file returns empty list."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
         path = f.name
     try:
         turns = parse_conversation(path)

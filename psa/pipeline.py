@@ -170,8 +170,10 @@ class PSAPipeline:
         query_frame = extract_query_frame(query)
         logger.debug(
             "QueryFrame: target=%s mode=%s entities=%s confidence=%.2f",
-            query_frame.answer_target, query_frame.retrieval_mode,
-            query_frame.entities, query_frame.confidence,
+            query_frame.answer_target,
+            query_frame.retrieval_mode,
+            query_frame.entities,
+            query_frame.confidence,
         )
 
         # Steps 2 + 3: Retrieve and select anchors (3-level degradation)
@@ -315,9 +317,7 @@ class PSAPipeline:
                 query_vec=query_vec,
                 memories=memories,
             )
-            scored_memories = self._constraint_scorer.adjust_scores(
-                scored_memories, query_frame
-            )
+            scored_memories = self._constraint_scorer.adjust_scores(scored_memories, query_frame)
             memories = [sm.memory for sm in scored_memories]
             logger.debug(
                 "Level 2 scored %d memories in %.1fms",
@@ -327,6 +327,7 @@ class PSAPipeline:
             _pre_ranked = True
         elif memories:
             from .memory_scorer import ScoredMemory
+
             scored_as_list = [
                 ScoredMemory(
                     memory_object_id=m.memory_object_id,
@@ -335,9 +336,7 @@ class PSAPipeline:
                 )
                 for m in memories
             ]
-            scored_as_list = self._constraint_scorer.adjust_scores(
-                scored_as_list, query_frame
-            )
+            scored_as_list = self._constraint_scorer.adjust_scores(scored_as_list, query_frame)
             memories = [sm.memory for sm in scored_as_list]
             _pre_ranked = True
 

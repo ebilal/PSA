@@ -151,10 +151,13 @@ class CoActivationModel(nn.Module):
             query_input = torch.cat([query_vec, query_frame_features], dim=-1)
         elif self.query_frame_dim > 0:
             # Zero-pad when frame not provided but model expects it
-            query_input = torch.cat([
-                query_vec,
-                torch.zeros(B, self.query_frame_dim, device=query_vec.device),
-            ], dim=-1)
+            query_input = torch.cat(
+                [
+                    query_vec,
+                    torch.zeros(B, self.query_frame_dim, device=query_vec.device),
+                ],
+                dim=-1,
+            )
         else:
             query_input = query_vec
 
@@ -263,8 +266,13 @@ class CoActivationSelector:
         qf_tensor: Optional[torch.Tensor] = None
         if query_frame is not None and self.model.query_frame_dim > 0:
             ANSWER_TARGETS = [
-                "fact", "preference", "procedure", "failure",
-                "temporal_change", "prior_statement", "comparison",
+                "fact",
+                "preference",
+                "procedure",
+                "failure",
+                "temporal_change",
+                "prior_statement",
+                "comparison",
             ]
             RETRIEVAL_MODES = ["single_hop", "compare_over_time", "multi_hop", "abstention_risk"]
 
@@ -272,14 +280,15 @@ class CoActivationSelector:
             rm_vec = [1.0 if m == query_frame.retrieval_mode else 0.0 for m in RETRIEVAL_MODES]
 
             qf_tensor = (
-                torch.tensor(at_vec + rm_vec, dtype=torch.float32)
-                .unsqueeze(0)
-                .to(self.device)
+                torch.tensor(at_vec + rm_vec, dtype=torch.float32).unsqueeze(0).to(self.device)
             )  # (1, 11)
 
         with torch.no_grad():
             refined_scores, thresholds = self.model(
-                ce_t, centroids_t, qvec_t, af_t,
+                ce_t,
+                centroids_t,
+                qvec_t,
+                af_t,
                 query_frame_features=qf_tensor,
             )
 

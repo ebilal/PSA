@@ -63,12 +63,21 @@ _RE_USER_QUOTE = re.compile(r"(?:^|\n)>\s", re.MULTILINE)
 
 # Stance patterns
 _STANCE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("switched", re.compile(r"\b(switched|migrated|moved|transitioned)\s+(to|from|away)\b", re.IGNORECASE)),
-    ("stopped", re.compile(r"\b(stopped\s+using|no\s+longer\s+using|abandoned|dropped)\b", re.IGNORECASE)),
+    (
+        "switched",
+        re.compile(r"\b(switched|migrated|moved|transitioned)\s+(to|from|away)\b", re.IGNORECASE),
+    ),
+    (
+        "stopped",
+        re.compile(r"\b(stopped\s+using|no\s+longer\s+using|abandoned|dropped)\b", re.IGNORECASE),
+    ),
     ("deprecated", re.compile(r"\b(deprecated|obsolete|legacy|removed)\b", re.IGNORECASE)),
     ("failed", re.compile(r"\b(failed|broke|broken|crashing|crash)\b", re.IGNORECASE)),
     ("fixed", re.compile(r"\b(fixed|resolved|patched|repaired)\b", re.IGNORECASE)),
-    ("prefers", re.compile(r"\b(prefer[s]?|recommend[s]?|suggest[s]?|advocate[s]?)\b", re.IGNORECASE)),
+    (
+        "prefers",
+        re.compile(r"\b(prefer[s]?|recommend[s]?|suggest[s]?|advocate[s]?)\b", re.IGNORECASE),
+    ),
 ]
 
 # Actor entities: "Name said/told/mentioned/suggested ..."

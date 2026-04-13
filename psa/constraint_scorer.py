@@ -68,18 +68,14 @@ def _entity_overlap(frame_entities: List[str], memory_entities: List[str]) -> fl
     return float(intersection / union) if union > 0 else 0.5
 
 
-def _speaker_role_match(
-    frame_role: Optional[str], memory_role: Optional[str]
-) -> float:
+def _speaker_role_match(frame_role: Optional[str], memory_role: Optional[str]) -> float:
     """Match frame.speaker_role_constraint == memory.speaker_role. Either None -> 0.5."""
     if frame_role is None or memory_role is None:
         return 0.5
     return 1.0 if frame_role == memory_role else 0.0
 
 
-def _actor_entity_match(
-    frame_entity: Optional[str], memory_actor_entities: List[str]
-) -> float:
+def _actor_entity_match(frame_entity: Optional[str], memory_actor_entities: List[str]) -> float:
     """Check if frame.entity_constraint appears (lowercased) in memory.actor_entities."""
     if not frame_entity or not memory_actor_entities:
         return 0.5
@@ -87,9 +83,7 @@ def _actor_entity_match(
     return 1.0 if needle in {e.lower() for e in memory_actor_entities} else 0.0
 
 
-def _temporal_consistency(
-    frame_time: Optional[str], memory_mentioned_at: Optional[str]
-) -> float:
+def _temporal_consistency(frame_time: Optional[str], memory_mentioned_at: Optional[str]) -> float:
     """Substring match of frame.time_constraint in memory.mentioned_at.
     Either None -> 0.5. No match -> 0.3 (not definitively wrong)."""
     if frame_time is None or memory_mentioned_at is None:
@@ -150,7 +144,9 @@ class ConstraintScorer:
             mem_actor_entities = getattr(mem, "actor_entities", []) or []
             mem_mentioned_at = getattr(mem, "mentioned_at", None)
             mem_stance = getattr(mem, "stance", None)
-            mem_type_name = mem.memory_type.name if hasattr(mem.memory_type, "name") else str(mem.memory_type)
+            mem_type_name = (
+                mem.memory_type.name if hasattr(mem.memory_type, "name") else str(mem.memory_type)
+            )
 
             features = {
                 "entity_overlap": _entity_overlap(query_frame.entities, mem_entities),
@@ -163,15 +159,11 @@ class ConstraintScorer:
                 "temporal_consistency": _temporal_consistency(
                     query_frame.time_constraint, mem_mentioned_at
                 ),
-                "stance_relevance": _stance_relevance(
-                    query_frame.answer_target, mem_stance
-                ),
+                "stance_relevance": _stance_relevance(query_frame.answer_target, mem_stance),
                 "type_match": _type_match(query_frame.answer_target, mem_type_name),
             }
 
-            constraint_boost = sum(
-                _WEIGHTS[k] * v for k, v in features.items()
-            )
+            constraint_boost = sum(_WEIGHTS[k] * v for k, v in features.items())
 
             new_score = _LEVEL2_WEIGHT * sm.final_score + _CONSTRAINT_WEIGHT * constraint_boost
 

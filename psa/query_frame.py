@@ -25,11 +25,49 @@ logger = logging.getLogger("psa.query_frame")
 # ── Common words to filter out of entity extraction ─────────────────────────
 
 _STOP_WORDS = {
-    "How", "What", "Why", "When", "Where", "Who", "Can", "Does", "Did",
-    "The", "This", "That", "There", "These", "Those", "Our", "We", "Us",
-    "They", "Them", "He", "She", "It", "Is", "Are", "Was", "Were", "Has",
-    "Have", "Had", "Do", "Be", "Been", "Being", "Will", "Would", "Could",
-    "Should", "May", "Might", "Shall", "Must", "Need",
+    "How",
+    "What",
+    "Why",
+    "When",
+    "Where",
+    "Who",
+    "Can",
+    "Does",
+    "Did",
+    "The",
+    "This",
+    "That",
+    "There",
+    "These",
+    "Those",
+    "Our",
+    "We",
+    "Us",
+    "They",
+    "Them",
+    "He",
+    "She",
+    "It",
+    "Is",
+    "Are",
+    "Was",
+    "Were",
+    "Has",
+    "Have",
+    "Had",
+    "Do",
+    "Be",
+    "Been",
+    "Being",
+    "Will",
+    "Would",
+    "Could",
+    "Should",
+    "May",
+    "Might",
+    "Shall",
+    "Must",
+    "Need",
 }
 
 # ── Pattern definitions ──────────────────────────────────────────────────────
@@ -115,8 +153,11 @@ _TIME_PATTERNS = [
     (r"\btoday\b", "today"),
     (r"\bthis\s+week\b", "this week"),
     (r"\bthis\s+month\b", "this month"),
-    (r"\bbefore\s+\w+\b", None),    # "before X" — capture the match
-    (r"\bin\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\b", None),
+    (r"\bbefore\s+\w+\b", None),  # "before X" — capture the match
+    (
+        r"\bin\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\b",
+        None,
+    ),
     (r"\bin\s+Q[1-4]\b", None),
     (r"\brecently\b", "recently"),
     (r"\bearlier\b", "earlier"),
@@ -188,9 +229,7 @@ def _pattern_extract(query: str) -> QueryFrame:
     # --- Answer target classification (only if not already set by speaker) ---
     if frame.answer_target == "fact":
         # Count matching patterns within each category for stronger signal
-        proc_count = sum(
-            1 for p in _PROCEDURE_PATTERNS if re.search(p, query, re.IGNORECASE)
-        )
+        proc_count = sum(1 for p in _PROCEDURE_PATTERNS if re.search(p, query, re.IGNORECASE))
         if proc_count > 0:
             frame.answer_target = "procedure"
             signals += min(proc_count, 2)  # cap at 2 to avoid inflating
@@ -218,7 +257,13 @@ def _pattern_extract(query: str) -> QueryFrame:
             break
 
     # Check temporal patterns (don't override time-based temporal_change)
-    if frame.answer_target not in ("procedure", "failure", "comparison", "preference", "prior_statement"):
+    if frame.answer_target not in (
+        "procedure",
+        "failure",
+        "comparison",
+        "preference",
+        "prior_statement",
+    ):
         if _matches_any(query, _TEMPORAL_PATTERNS):
             frame.answer_target = "temporal_change"
             signals += 1

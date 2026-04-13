@@ -1,6 +1,5 @@
 """Tests for the heuristic facet extractor."""
 
-
 from psa.facet_extractor import extract_facets
 
 

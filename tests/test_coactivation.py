@@ -177,7 +177,9 @@ class TestCoActivationModel:
         model.train(False)
         with torch.no_grad():
             r, t = model(
-                torch.rand(1, 8), torch.randn(1, 8, 768), torch.randn(1, 768),
+                torch.rand(1, 8),
+                torch.randn(1, 8, 768),
+                torch.randn(1, 768),
                 anchor_features=torch.rand(1, 8, 8),
                 query_frame_features=torch.rand(1, 11),
             )
@@ -193,7 +195,9 @@ class TestCoActivationSelector:
         n_anchors = 10
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None):
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.0)
@@ -223,7 +227,9 @@ class TestCoActivationSelector:
         n_anchors = 5
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None):
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.1)

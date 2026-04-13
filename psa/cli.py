@@ -247,7 +247,7 @@ def cmd_repair(args):
         for i, mo in enumerate(memories):
             # Try raw source first (more accurate), fall back to body
             raw_text = None
-            for sid in (mo.source_ids or []):
+            for sid in mo.source_ids or []:
                 src = store.get_source(sid)
                 if src and src.full_text:
                     raw_text = src.full_text
