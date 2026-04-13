@@ -208,6 +208,39 @@ class LifecyclePipeline:
                     except Exception as e:
                         logger.warning("Co-activation training failed: %s", e)
                         summary["coactivation_trained"] = False
+
+                try:
+                    import glob as _glob
+                    from .training.memory_scorer_data import generate_memory_scorer_data
+                    from .training.train_memory_scorer import MemoryScorerTrainer
+
+                    results_dir = os.path.expanduser("~/.psa/benchmarks/longmemeval")
+                    results_files = sorted(
+                        _glob.glob(os.path.join(results_dir, "results_*.jsonl"))
+                    )
+                    if results_files:
+                        scorer_data_path = os.path.join(
+                            tenant.root_dir, "training", "memory_scorer_train.jsonl"
+                        )
+                        from .pipeline import PSAPipeline
+                        _pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+                        n_ex = generate_memory_scorer_data(
+                            results_path=results_files[-1],
+                            output_path=scorer_data_path,
+                            pipeline=_pipeline,
+                            mode="benchmark",
+                        )
+                        if n_ex >= 200:
+                            scorer_output = os.path.join(
+                                tenant.root_dir, "models", "memory_scorer_latest"
+                            )
+                            MemoryScorerTrainer(output_dir=scorer_output).train(
+                                data_path=scorer_data_path
+                            )
+                            summary["memory_scorer_trained"] = True
+                            print("        Memory scorer trained.")
+                except Exception as e:
+                    logger.warning("Memory scorer training failed: %s", e)
         else:
             print("  [3/5] No atlas found. Skipping pruning and health check.")
 
