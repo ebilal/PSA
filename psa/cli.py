@@ -908,9 +908,13 @@ def _cmd_longmemeval(args):
                 coact_meta = _os.path.join(coact_path, "coactivation_version.json")
                 if _os.path.exists(coact_meta):
                     import torch
+
                     _dev = "mps" if torch.backends.mps.is_available() else "cpu"
-                    coactivation_pipeline.coactivation_selector = CoActivationSelector.from_model_path(
-                        coact_path, device=_dev,
+                    coactivation_pipeline.coactivation_selector = (
+                        CoActivationSelector.from_model_path(
+                            coact_path,
+                            device=_dev,
+                        )
                     )
 
         out_path = run(

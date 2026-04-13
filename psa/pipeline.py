@@ -225,9 +225,7 @@ class PSAPipeline:
             )
             timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
-            logger.debug(
-                "Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms
-            )
+            logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
 
             if not candidates:
                 packed = PackedContext(
@@ -533,9 +531,7 @@ class PSAPipeline:
 
         # Load CoActivationSelector (if model exists)
         coactivation_selector = None
-        coactivation_model_dir = os.path.join(
-            tenant.root_dir, "models", "coactivation_latest"
-        )
+        coactivation_model_dir = os.path.join(tenant.root_dir, "models", "coactivation_latest")
         coactivation_version_path = os.path.join(
             coactivation_model_dir, "coactivation_version.json"
         )

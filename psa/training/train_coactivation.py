@@ -96,11 +96,11 @@ class CoActivationTrainer:
         npz_path = os.path.join(data_dir, "coactivation_train.npz")
         data = np.load(npz_path)
 
-        query_vecs = data["query_vecs"]   # (N, 768)
-        ce_scores = data["ce_scores"]     # (N, n_anchors)
-        gold_masks = data["gold_masks"]   # (N, n_anchors)
-        gold_ks = data["gold_ks"]         # (N,)
-        centroids = data["centroids"]     # (n_anchors, 768)
+        query_vecs = data["query_vecs"]  # (N, 768)
+        ce_scores = data["ce_scores"]  # (N, n_anchors)
+        gold_masks = data["gold_masks"]  # (N, n_anchors)
+        gold_ks = data["gold_ks"]  # (N,)
+        centroids = data["centroids"]  # (n_anchors, 768)
 
         N = query_vecs.shape[0]
         actual_n_anchors = ce_scores.shape[1]
@@ -198,9 +198,7 @@ class CoActivationTrainer:
                 val_qv.to(device),
             )
             tt = val_gk.to(device).float() / actual_n_anchors
-            val_loss = float(
-                (bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item()
-            )
+            val_loss = float((bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item())
         logger.info("Validation loss: %.4f", val_loss)
 
         # Save artefacts

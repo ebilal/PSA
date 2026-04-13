@@ -206,14 +206,14 @@ class CoActivationSelector:
         centroid_arr = np.stack([a.centroid for a in anchor_scores], axis=0).astype(np.float32)
         qvec_arr = np.asarray(query_vec, dtype=np.float32)
 
-        ce_t = torch.from_numpy(ce_arr).unsqueeze(0).to(self.device)                # (1, N)
-        centroids_t = torch.from_numpy(centroid_arr).unsqueeze(0).to(self.device)   # (1, N, D)
-        qvec_t = torch.from_numpy(qvec_arr).unsqueeze(0).to(self.device)            # (1, D)
+        ce_t = torch.from_numpy(ce_arr).unsqueeze(0).to(self.device)  # (1, N)
+        centroids_t = torch.from_numpy(centroid_arr).unsqueeze(0).to(self.device)  # (1, N, D)
+        qvec_t = torch.from_numpy(qvec_arr).unsqueeze(0).to(self.device)  # (1, D)
 
         with torch.no_grad():
             refined_scores, thresholds = self.model(ce_t, centroids_t, qvec_t)
 
-        scores_np = refined_scores[0].cpu().numpy()   # (N,)
+        scores_np = refined_scores[0].cpu().numpy()  # (N,)
         threshold = float(thresholds[0].cpu().item())
 
         # Apply adaptive threshold — always keep at least 1

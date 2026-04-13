@@ -163,9 +163,7 @@ class FullAtlasScorer:
         return results
 
     @classmethod
-    def from_model_path(
-        cls, model_path: str, atlas, device: str = "cpu"
-    ) -> "FullAtlasScorer":
+    def from_model_path(cls, model_path: str, atlas, device: str = "cpu") -> "FullAtlasScorer":
         """
         Factory: load a cross-encoder from disk and construct a FullAtlasScorer.
 
