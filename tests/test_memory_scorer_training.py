@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 
 
-
 def _make_synthetic_data(n: int, path: Path) -> None:
     """Write n synthetic JSONL examples to path."""
     rng = random.Random(0)

@@ -177,9 +177,7 @@ class MemoryScorerTrainer:
             val_loss = float(criterion(val_preds, y_val).item())
 
         final_loss = epoch_losses[-1] if epoch_losses else 0.0
-        logger.info(
-            "Training complete: final_train_loss=%.4f, val_loss=%.4f", final_loss, val_loss
-        )
+        logger.info("Training complete: final_train_loss=%.4f, val_loss=%.4f", final_loss, val_loss)
 
         # Save model
         os.makedirs(self.output_dir, exist_ok=True)

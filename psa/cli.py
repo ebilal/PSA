@@ -631,12 +631,8 @@ def cmd_train(args):
                 print(f"  Generated {n_examples} memory scorer examples.")
 
                 if n_examples >= 200:
-                    scorer_output = os.path.join(
-                        tenant.root_dir, "models", "memory_scorer_latest"
-                    )
-                    MemoryScorerTrainer(output_dir=scorer_output).train(
-                        data_path=scorer_data_path
-                    )
+                    scorer_output = os.path.join(tenant.root_dir, "models", "memory_scorer_latest")
+                    MemoryScorerTrainer(output_dir=scorer_output).train(data_path=scorer_data_path)
                     print(f"  Memory scorer saved to {scorer_output}")
                 else:
                     print(f"  Too few examples ({n_examples}). Need >= 200.")

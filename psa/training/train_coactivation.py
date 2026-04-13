@@ -131,9 +131,7 @@ class CoActivationTrainer:
 
         # Shared anchor features tensor (may be None for old data without features)
         anchor_features_t: Optional[torch.Tensor] = (
-            torch.from_numpy(anchor_features_np).float()
-            if anchor_features_np is not None
-            else None
+            torch.from_numpy(anchor_features_np).float() if anchor_features_np is not None else None
         )  # (n_anchors, feat_dim) or None
 
         def _make_tensors(indices):

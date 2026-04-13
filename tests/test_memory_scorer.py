@@ -20,6 +20,7 @@ def _make_mock_memory(memory_id, body, memory_type=MemoryType.SEMANTIC, quality=
 class TestMemoryReRanker:
     def test_forward_output_shape(self):
         from psa.memory_scorer import MemoryReRanker
+
         model = MemoryReRanker(input_dim=11)
         x = torch.rand(20, 11)
         out = model(x)
@@ -28,6 +29,7 @@ class TestMemoryReRanker:
 
     def test_tiny_parameter_count(self):
         from psa.memory_scorer import MemoryReRanker
+
         model = MemoryReRanker(input_dim=11)
         n = sum(p.numel() for p in model.parameters())
         assert n < 1000, f"Too many params: {n}"
@@ -58,6 +60,7 @@ class TestMemoryScorer:
 
     def test_score_with_empty_memories(self):
         from psa.memory_scorer import MemoryScorer
+
         scorer = MemoryScorer(cross_encoder=MagicMock(), reranker=MagicMock(), device="cpu")
         results = scorer.score("query", np.zeros(768), [])
         assert results == []

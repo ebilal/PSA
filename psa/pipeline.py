@@ -305,7 +305,11 @@ class PSAPipeline:
                 memories=memories,
             )
             memories = [sm.memory for sm in scored_memories]
-            logger.debug("Level 2 scored %d memories in %.1fms", len(memories), (time.perf_counter() - t0_l2) * 1000)
+            logger.debug(
+                "Level 2 scored %d memories in %.1fms",
+                len(memories),
+                (time.perf_counter() - t0_l2) * 1000,
+            )
             _pre_ranked = True
 
         # Step 5: Synthesize context
