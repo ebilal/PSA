@@ -23,10 +23,10 @@ logger = logging.getLogger("psa.training.memory_scorer_data")
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _token_f1(text_a: str, text_b: str) -> float:
+def _token_f1(text_a, text_b) -> float:
     """Compute token-level F1 between two texts (tokenize by whitespace split)."""
-    tokens_a = set(text_a.lower().split())
-    tokens_b = set(text_b.lower().split())
+    tokens_a = set(str(text_a).lower().split())
+    tokens_b = set(str(text_b).lower().split())
     if not tokens_a or not tokens_b:
         return 0.0
     intersection = tokens_a & tokens_b
@@ -81,7 +81,7 @@ def generate_memory_scorer_data(
     pipeline:
         A PSAPipeline (or compatible) instance. Must have:
           - pipeline.store: MemoryStore
-          - pipeline.embedder: callable (query -> np.ndarray)
+          - pipeline.embedding_model: callable (query -> np.ndarray)
           - pipeline.full_atlas_scorer: FullAtlasScorer (optional, for ce_score)
     mode:
         "benchmark" (F1-based labels) or "llm" (LLM-based labels).
@@ -96,7 +96,7 @@ def generate_memory_scorer_data(
         raise ValueError(f"Unknown mode: {mode!r}. Must be 'benchmark' or 'llm'.")
 
     store = pipeline.store
-    embedder = pipeline.embedder
+    embedder = pipeline.embedding_model
     cross_encoder = None
     fas = getattr(pipeline, "full_atlas_scorer", None)
     if fas is not None:
@@ -115,9 +115,9 @@ def generate_memory_scorer_data(
             except json.JSONDecodeError:
                 continue
 
-            query = record.get("query", "")
-            query_id = record.get("query_id", f"q_{queries_processed}")
-            anchor_ids = record.get("anchor_ids", [])
+            query = record.get("question", record.get("query", ""))
+            query_id = record.get("question_id", record.get("query_id", f"q_{queries_processed}"))
+            anchor_ids = record.get("selected_anchor_ids", record.get("anchor_ids", []))
             answer_gold = record.get("answer_gold", "")
 
             if not query or not anchor_ids:
@@ -126,7 +126,7 @@ def generate_memory_scorer_data(
 
             # Embed the query
             try:
-                query_vec = np.asarray(embedder(query), dtype=np.float32)
+                query_vec = np.asarray(embedder.embed(query), dtype=np.float32)
             except Exception:
                 logger.warning("Failed to embed query %s; skipping", query_id)
                 queries_processed += 1
@@ -136,7 +136,9 @@ def generate_memory_scorer_data(
             memories = []
             for anchor_id in anchor_ids:
                 try:
-                    anchor_memories = store.query_by_anchor(int(anchor_id))
+                    anchor_memories = store.query_by_anchor(
+                        pipeline.tenant_id, int(anchor_id), limit=50
+                    )
                     memories.extend(anchor_memories)
                 except Exception:
                     pass
