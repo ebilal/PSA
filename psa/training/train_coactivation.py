@@ -101,16 +101,21 @@ class CoActivationTrainer:
         gold_masks = data["gold_masks"]  # (N, n_anchors)
         gold_ks = data["gold_ks"]  # (N,)
         centroids = data["centroids"]  # (n_anchors, 768)
+        anchor_features_np = data.get("anchor_features")  # (n_anchors, feat_dim) or None
 
         N = query_vecs.shape[0]
         actual_n_anchors = ce_scores.shape[1]
         actual_centroid_dim = centroids.shape[1]
+        actual_anchor_feature_dim = (
+            int(anchor_features_np.shape[1]) if anchor_features_np is not None else 0
+        )
 
         logger.info(
-            "Loaded %d examples, %d anchors, centroid_dim=%d",
+            "Loaded %d examples, %d anchors, centroid_dim=%d, anchor_feature_dim=%d",
             N,
             actual_n_anchors,
             actual_centroid_dim,
+            actual_anchor_feature_dim,
         )
 
         # Train / val split (seed=42)
@@ -123,6 +128,13 @@ class CoActivationTrainer:
         # Shared centroid tensor — expanded per-batch in the training loop
         # to avoid materializing (N, 256, 768) in memory.
         centroids_t = torch.from_numpy(centroids).float()  # (n_anchors, 768)
+
+        # Shared anchor features tensor (may be None for old data without features)
+        anchor_features_t: Optional[torch.Tensor] = (
+            torch.from_numpy(anchor_features_np).float()
+            if anchor_features_np is not None
+            else None
+        )  # (n_anchors, feat_dim) or None
 
         def _make_tensors(indices):
             qv = torch.from_numpy(query_vecs[indices]).float()
@@ -151,6 +163,7 @@ class CoActivationTrainer:
         model = CoActivationModel(
             n_anchors=actual_n_anchors,
             centroid_dim=actual_centroid_dim,
+            anchor_feature_dim=actual_anchor_feature_dim,
         ).to(device)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
@@ -168,10 +181,16 @@ class CoActivationTrainer:
                 b_qv, b_ce, b_gm, b_gk = [t.to(device) for t in batch]
                 # Expand shared centroids to batch size
                 b_c = centroids_t.unsqueeze(0).expand(b_ce.shape[0], -1, -1).to(device)
+                # Expand anchor features to batch size (or None if not available)
+                b_af = (
+                    anchor_features_t.unsqueeze(0).expand(b_ce.shape[0], -1, -1).to(device)
+                    if anchor_features_t is not None
+                    else None
+                )
 
                 optimizer.zero_grad()
 
-                refined_scores, thresholds = model(b_ce, b_c, b_qv)
+                refined_scores, thresholds = model(b_ce, b_c, b_qv, b_af)
 
                 # gold_ks / n_anchors as soft threshold target
                 threshold_targets = b_gk / actual_n_anchors
@@ -192,10 +211,16 @@ class CoActivationTrainer:
         model.train(False)
         with torch.no_grad():
             val_c_batch = centroids_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
+            val_af_batch = (
+                anchor_features_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
+                if anchor_features_t is not None
+                else None
+            )
             r, t = model(
                 val_ce.to(device),
                 val_c_batch.to(device),
                 val_qv.to(device),
+                val_af_batch.to(device) if val_af_batch is not None else None,
             )
             tt = val_gk.to(device).float() / actual_n_anchors
             val_loss = float((bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item())
@@ -209,6 +234,7 @@ class CoActivationTrainer:
         meta = {
             "n_anchors": actual_n_anchors,
             "centroid_dim": actual_centroid_dim,
+            "anchor_feature_dim": actual_anchor_feature_dim,
             "training_examples": int(len(train_idx)),
             "epochs": epochs,
             "final_loss": epoch_losses[-1] if epoch_losses else 0.0,

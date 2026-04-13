@@ -59,6 +59,12 @@ def generate_coactivation_data(
         dtype=np.float32,
     )
 
+    # Precompute anchor feature matrix (n_anchors, 8): type_distribution + avg_quality + memory_count_norm
+    anchor_features = np.array(
+        [card.type_distribution + [card.avg_quality, card.memory_count_norm] for card in cards],
+        dtype=np.float32,
+    )
+
     n_written = 0
 
     with open(oracle_labels_path) as f:
@@ -135,6 +141,7 @@ def generate_coactivation_data(
         gold_masks=np.stack(gold_masks_list, axis=0).astype(np.float32),
         gold_ks=np.array(gold_ks_list, dtype=np.int32),
         centroids=centroids,
+        anchor_features=anchor_features,
         anchor_ids=np.array([card.anchor_id for card in cards], dtype=np.int32),
     )
 

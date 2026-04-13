@@ -615,6 +615,30 @@ class AtlasBuilder:
                 fresh_id_counter += 1
             cards.append(card)
 
+            # Compute per-anchor feature fields
+            if cluster_mems:
+                from .memory_object import MemoryType
+
+                type_order = [
+                    MemoryType.EPISODIC,
+                    MemoryType.SEMANTIC,
+                    MemoryType.PROCEDURAL,
+                    MemoryType.FAILURE,
+                    MemoryType.TOOL_USE,
+                    MemoryType.WORKING_DERIVATIVE,
+                ]
+                type_counts = [
+                    sum(1 for m in cluster_mems if m.memory_type == t) for t in type_order
+                ]
+                total = max(sum(type_counts), 1)
+                card.type_distribution = [c / total for c in type_counts]
+                card.avg_quality = sum(m.quality_score for m in cluster_mems) / len(cluster_mems)
+
+        # Normalize memory_count across all learned cards
+        max_count = max((c.memory_count for c in cards), default=1)
+        for c in cards:
+            c.memory_count_norm = c.memory_count / max(max_count, 1)
+
         # Step 4: Reserve novelty anchors (high-distance regions)
         # Novelty centroids are placed at the "most distant" points from learned clusters
         # For V1: use the N memories with the lowest max-cosine-sim to any learned centroid

@@ -12,7 +12,7 @@ lists and producing SelectedAnchor lists.
 import json
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -61,15 +61,17 @@ class CoActivationModel(nn.Module):
         num_layers: int = 2,
         dim_feedforward: int = 512,
         dropout: float = 0.1,
+        anchor_feature_dim: int = 8,
     ):
         super().__init__()
         self.n_anchors = n_anchors
         self.centroid_dim = centroid_dim
         self.d_model = d_model
+        self.anchor_feature_dim = anchor_feature_dim
         half = d_model // 2
 
-        # Per-anchor projection: (1 scalar ce_score + centroid_dim) -> d_model//2
-        self.anchor_proj = nn.Linear(1 + centroid_dim, half)
+        # Per-anchor projection: (1 scalar ce_score + centroid_dim + anchor_feature_dim) -> d_model//2
+        self.anchor_proj = nn.Linear(1 + centroid_dim + anchor_feature_dim, half)
 
         # Query projection: centroid_dim -> d_model//2  (broadcast across anchors)
         self.query_proj = nn.Linear(centroid_dim, half)
@@ -102,13 +104,15 @@ class CoActivationModel(nn.Module):
         ce_scores: torch.Tensor,
         centroids: torch.Tensor,
         query_vec: torch.Tensor,
+        anchor_features: Optional[torch.Tensor] = None,
     ):
         """
         Parameters
         ----------
-        ce_scores : (B, N)
-        centroids : (B, N, D)
-        query_vec : (B, D)
+        ce_scores       : (B, N)
+        centroids       : (B, N, D)
+        query_vec       : (B, D)
+        anchor_features : (B, N, anchor_feature_dim) or None
 
         Returns
         -------
@@ -121,8 +125,21 @@ class CoActivationModel(nn.Module):
         # ce_scores: (B, N) -> (B, N, 1)
         ce = ce_scores.unsqueeze(-1)
 
-        # anchor tokens: (B, N, 1+D) -> (B, N, d_model//2)
-        anchor_tokens = self.anchor_proj(torch.cat([ce, centroids], dim=-1))
+        # anchor_input: (B, N, 1+D+anchor_feature_dim)
+        if anchor_features is not None:
+            anchor_input = torch.cat([ce, centroids, anchor_features], dim=-1)
+        else:
+            anchor_input = torch.cat(
+                [
+                    ce,
+                    centroids,
+                    torch.zeros(B, N, self.anchor_feature_dim, device=ce.device),
+                ],
+                dim=-1,
+            )
+
+        # anchor tokens: (B, N, 1+D+anchor_feature_dim) -> (B, N, d_model//2)
+        anchor_tokens = self.anchor_proj(anchor_input)
 
         # query tokens: (B, D) -> (B, d_model//2) -> (B, 1, d_model//2) -> (B, N, d_model//2)
         query_tokens = self.query_proj(query_vec).unsqueeze(1).expand(B, N, -1)
@@ -180,6 +197,7 @@ class CoActivationSelector:
         self,
         query_vec: np.ndarray,
         anchor_scores: List[AnchorScore],
+        anchor_features: Optional[np.ndarray] = None,
     ) -> List[SelectedAnchor]:
         """
         Run the co-activation model and return selected anchors.
@@ -190,6 +208,8 @@ class CoActivationSelector:
             L2-normalized query embedding, shape (D,).
         anchor_scores:
             Full-atlas scored anchors (from FullAtlasScorer).
+        anchor_features:
+            Optional per-anchor feature matrix, shape (N, anchor_feature_dim).
 
         Returns
         -------
@@ -210,8 +230,16 @@ class CoActivationSelector:
         centroids_t = torch.from_numpy(centroid_arr).unsqueeze(0).to(self.device)  # (1, N, D)
         qvec_t = torch.from_numpy(qvec_arr).unsqueeze(0).to(self.device)  # (1, D)
 
+        af_t: Optional[torch.Tensor] = None
+        if anchor_features is not None:
+            af_t = (
+                torch.from_numpy(np.asarray(anchor_features, dtype=np.float32))
+                .unsqueeze(0)
+                .to(self.device)
+            )  # (1, N, anchor_feature_dim)
+
         with torch.no_grad():
-            refined_scores, thresholds = self.model(ce_t, centroids_t, qvec_t)
+            refined_scores, thresholds = self.model(ce_t, centroids_t, qvec_t, af_t)
 
         scores_np = refined_scores[0].cpu().numpy()  # (N,)
         threshold = float(thresholds[0].cpu().item())
@@ -269,6 +297,7 @@ class CoActivationSelector:
             num_layers=cfg.get("num_layers", 2),
             dim_feedforward=cfg.get("dim_feedforward", 512),
             dropout=cfg.get("dropout", 0.1),
+            anchor_feature_dim=cfg.get("anchor_feature_dim", 8),
         )
         state = torch.load(weights_path, map_location=device)
         model.load_state_dict(state)
