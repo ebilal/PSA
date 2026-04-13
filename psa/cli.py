@@ -578,18 +578,12 @@ def cmd_train(args):
         # Co-activation training
         if getattr(args, "coactivation", False):
             print("Training co-activation model...")
-            # Force CPU default to prevent MPS SIGSEGV when loading
-            # both EmbeddingModel and CrossEncoder in the same process.
-            import torch as _torch
-
-            _torch.set_default_device("cpu")
-
             from .embeddings import EmbeddingModel
             from .full_atlas_scorer import FullAtlasScorer
             from .training.coactivation_data import generate_coactivation_data
             from .training.train_coactivation import CoActivationTrainer
 
-            fas = FullAtlasScorer.from_model_path(sv.model_path, atlas, device="cpu")
+            fas = FullAtlasScorer.from_model_path(sv.model_path, atlas)
             emb = EmbeddingModel()
             coact_data_dir = os.path.join(tenant.root_dir, "training", "coactivation")
             n_coact = generate_coactivation_data(

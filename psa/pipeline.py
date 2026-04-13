@@ -539,7 +539,7 @@ class PSAPipeline:
             try:
                 import torch as _torch
 
-                device = "cuda" if _torch.cuda.is_available() else "cpu"
+                device = "mps" if _torch.backends.mps.is_available() else "cpu"
                 coactivation_selector = CoActivationSelector.from_model_path(
                     model_path=coactivation_model_dir,
                     device=device,
