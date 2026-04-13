@@ -408,6 +408,8 @@ def _mine_convos_psa(convo_dir: str, files: list):
         store=store, tenant_id=cfg.tenant_id, use_llm=use_llm, atlas=atlas
     )
 
+    from .conversation_parser import parse_conversation
+
     already_processed = store.get_processed_source_paths(cfg.tenant_id)
 
     print(f"  [PSA] Running conversation consolidation (mode: {cfg.psa_mode})...")
@@ -418,17 +420,28 @@ def _mine_convos_psa(convo_dir: str, files: list):
         if source_path in already_processed:
             skipped += 1
             continue
-        try:
-            text = filepath.read_text(encoding="utf-8", errors="replace")
-        except (OSError, AttributeError):
+
+        # For PSA path: use structured parser to preserve speaker + timestamp
+        turns = parse_conversation(source_path)
+        if turns:
+            chunk_text = "\n\n".join(
+                f"[{t.role}]{' (' + t.timestamp + ')' if t.timestamp else ''}: {t.text}"
+                for t in turns
+            )
+        else:
+            # Fallback: read raw text if parser yields nothing
             try:
-                text = Path(source_path).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-        if not text.strip():
+                chunk_text = filepath.read_text(encoding="utf-8", errors="replace")
+            except (OSError, AttributeError):
+                try:
+                    chunk_text = Path(source_path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+
+        if not chunk_text.strip():
             continue
         memories = pipeline.consolidate(
-            raw_text=text,
+            raw_text=chunk_text,
             source_type="conversation",
             source_path=str(filepath),
             title=Path(str(filepath)).name,
