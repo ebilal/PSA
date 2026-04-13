@@ -24,11 +24,13 @@ from typing import Any, Dict, List, Optional
 
 from .atlas import Atlas, AtlasManager
 from .coactivation import CoActivationSelector
+from .constraint_scorer import ConstraintScorer
 from .embeddings import EmbeddingModel
 from .full_atlas_scorer import FullAtlasScorer
 from .memory_object import MemoryObject, MemoryStore
 from .memory_scorer import MemoryScorer
 from .packer import EvidencePacker, PackedContext
+from .query_frame import extract_query_frame
 from .retriever import AnchorCandidate, AnchorRetriever
 from .selector import AnchorSelector, SelectedAnchor
 from .synthesizer import AnchorSynthesizer
@@ -136,6 +138,7 @@ class PSAPipeline:
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
         self._synthesizer = AnchorSynthesizer()
+        self._constraint_scorer = ConstraintScorer()
 
     def query(
         self,
@@ -162,6 +165,14 @@ class PSAPipeline:
         t0 = time.perf_counter()
         query_vec = self.embedding_model.embed(query)
         timing.embed_ms = (time.perf_counter() - t0) * 1000
+
+        # Step 1.5: Extract query frame
+        query_frame = extract_query_frame(query)
+        logger.debug(
+            "QueryFrame: target=%s mode=%s entities=%s confidence=%.2f",
+            query_frame.answer_target, query_frame.retrieval_mode,
+            query_frame.entities, query_frame.confidence,
+        )
 
         # Steps 2 + 3: Retrieve and select anchors (3-level degradation)
         if self.full_atlas_scorer is not None:
@@ -304,12 +315,30 @@ class PSAPipeline:
                 query_vec=query_vec,
                 memories=memories,
             )
+            scored_memories = self._constraint_scorer.adjust_scores(
+                scored_memories, query_frame
+            )
             memories = [sm.memory for sm in scored_memories]
             logger.debug(
                 "Level 2 scored %d memories in %.1fms",
                 len(memories),
                 (time.perf_counter() - t0_l2) * 1000,
             )
+            _pre_ranked = True
+        elif memories:
+            from .memory_scorer import ScoredMemory
+            scored_as_list = [
+                ScoredMemory(
+                    memory_object_id=m.memory_object_id,
+                    final_score=m.quality_score,
+                    memory=m,
+                )
+                for m in memories
+            ]
+            scored_as_list = self._constraint_scorer.adjust_scores(
+                scored_as_list, query_frame
+            )
+            memories = [sm.memory for sm in scored_as_list]
             _pre_ranked = True
 
         # Step 5: Synthesize context

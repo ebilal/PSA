@@ -163,6 +163,26 @@ class TestCoActivationModel:
         assert refined_scores.shape == (batch, n_anchors)
         assert thresholds.shape == (batch,)
 
+    def test_backward_compat_no_frame_dim(self):
+        """query_frame_dim=0 (default) works without query_frame_features."""
+        model = CoActivationModel(n_anchors=8, query_frame_dim=0)
+        model.train(False)
+        with torch.no_grad():
+            r, t = model(torch.rand(1, 8), torch.randn(1, 8, 768), torch.randn(1, 768))
+        assert r.shape == (1, 8)
+
+    def test_forward_with_query_frame(self):
+        """query_frame_dim=11 model accepts (B, 11) frame features."""
+        model = CoActivationModel(n_anchors=8, query_frame_dim=11)
+        model.train(False)
+        with torch.no_grad():
+            r, t = model(
+                torch.rand(1, 8), torch.randn(1, 8, 768), torch.randn(1, 768),
+                anchor_features=torch.rand(1, 8, 8),
+                query_frame_features=torch.rand(1, 11),
+            )
+        assert r.shape == (1, 8)
+
 
 # ── TestCoActivationSelector ──────────────────────────────────────────────────
 
@@ -173,7 +193,7 @@ class TestCoActivationSelector:
         n_anchors = 10
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None):
+        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.0)
@@ -203,7 +223,7 @@ class TestCoActivationSelector:
         n_anchors = 5
         dim = 768
 
-        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None):
+        def fake_forward(ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None):
             batch = ce_scores.shape[0]
             n = ce_scores.shape[1]
             scores = torch.full((batch, n), 0.1)
