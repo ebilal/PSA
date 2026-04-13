@@ -171,6 +171,43 @@ class LifecyclePipeline:
                     print(f"        Selector retrained (v{state.get('selector_version', '?')}).")
                 else:
                     print("        Training gates not met. Staying in cosine mode.")
+
+                if retrained:
+                    try:
+                        from .full_atlas_scorer import FullAtlasScorer
+                        from .training.coactivation_data import generate_coactivation_data
+                        from .training.train_coactivation import CoActivationTrainer
+                        from .embeddings import EmbeddingModel
+
+                        labels_path = os.path.join(
+                            tenant.root_dir, "training", "oracle_labels.jsonl"
+                        )
+                        selector_path = state.get("selector_model_path")
+                        if selector_path and os.path.exists(selector_path):
+                            fas = FullAtlasScorer.from_model_path(selector_path, atlas)
+                            emb = EmbeddingModel()
+                            coact_data_dir = os.path.join(
+                                tenant.root_dir, "training", "coactivation"
+                            )
+                            generate_coactivation_data(
+                                oracle_labels_path=labels_path,
+                                output_path=coact_data_dir,
+                                full_atlas_scorer=fas,
+                                embedding_model=emb,
+                                atlas=atlas,
+                            )
+                            coact_output = os.path.join(
+                                tenant.root_dir, "models", "coactivation_latest"
+                            )
+                            CoActivationTrainer(output_dir=coact_output).train(
+                                data_dir=coact_data_dir,
+                                n_anchors=len(atlas.cards),
+                            )
+                            summary["coactivation_trained"] = True
+                            print("        Co-activation model trained.")
+                    except Exception as e:
+                        logger.warning("Co-activation training failed: %s", e)
+                        summary["coactivation_trained"] = False
         else:
             print("  [3/5] No atlas found. Skipping pruning and health check.")
 

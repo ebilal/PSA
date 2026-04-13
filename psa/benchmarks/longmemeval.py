@@ -138,6 +138,7 @@ def run(
     max_k: int = 6,
     min_k: Optional[int] = None,
     rerank_only: bool = False,
+    pipeline=None,
 ) -> str:
     """
     Run each LongMemEval question through PSA and generate answers.
@@ -169,20 +170,21 @@ def run(
 
     logger.info("Running %d questions (tenant=%s)...", len(examples), tenant_id)
 
-    try:
-        pipeline = PSAPipeline.from_tenant(
-            tenant_id=tenant_id,
-            token_budget=token_budget,
-            selector_mode=selector_mode,
-            selector_model_path=selector_model_path,
-            selector_max_k=max_k,
-            selector_min_k=min_k,
-            selector_rerank_only=rerank_only,
-        )
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
-        )
+    if pipeline is None:
+        try:
+            pipeline = PSAPipeline.from_tenant(
+                tenant_id=tenant_id,
+                token_budget=token_budget,
+                selector_mode=selector_mode if selector_mode != "coactivation" else "cosine",
+                selector_model_path=selector_model_path,
+                selector_max_k=max_k,
+                selector_min_k=min_k,
+                selector_rerank_only=rerank_only,
+            )
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"No atlas for tenant '{tenant_id}'. Run 'psa benchmark longmemeval ingest' first."
+            )
 
     # Build deterministic config label for filename
     label_parts = [selector_mode]

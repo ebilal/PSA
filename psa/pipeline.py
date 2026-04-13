@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .atlas import Atlas, AtlasManager
+from .coactivation import CoActivationSelector
 from .embeddings import EmbeddingModel
+from .full_atlas_scorer import FullAtlasScorer
 from .memory_object import MemoryObject, MemoryStore
 from .packer import EvidencePacker, PackedContext
 from .retriever import AnchorCandidate, AnchorRetriever
@@ -64,6 +66,7 @@ class PSAResult:
     timing: QueryTiming
     tenant_id: str
     psa_mode: str
+    selection_mode: str = "legacy"
 
     @property
     def text(self) -> str:
@@ -90,6 +93,7 @@ class PSAResult:
             },
             "psa_mode": self.psa_mode,
             "tenant_id": self.tenant_id,
+            "selection_mode": self.selection_mode,
         }
 
 
@@ -113,6 +117,8 @@ class PSAPipeline:
         token_budget: int = 6000,
         tenant_id: str = "default",
         psa_mode: str = "side-by-side",
+        full_atlas_scorer: Optional[FullAtlasScorer] = None,
+        coactivation_selector: Optional[CoActivationSelector] = None,
     ):
         self.store = store
         self.atlas = atlas
@@ -121,6 +127,8 @@ class PSAPipeline:
         self.token_budget = token_budget
         self.tenant_id = tenant_id
         self.psa_mode = psa_mode
+        self.full_atlas_scorer = full_atlas_scorer
+        self.coactivation_selector = coactivation_selector
 
         self._retriever = AnchorRetriever(atlas)
         self._packer = EvidencePacker(memory_store=store)
@@ -152,45 +160,101 @@ class PSAPipeline:
         query_vec = self.embedding_model.embed(query)
         timing.embed_ms = (time.perf_counter() - t0) * 1000
 
-        # Step 2: Retrieve anchor candidates
-        t0 = time.perf_counter()
-        candidates = self._retriever.retrieve(
-            query=query,
-            embedding_model=self.embedding_model,
-            top_k=top_k_candidates,
-            query_vec=query_vec,
-        )
-        timing.retrieve_ms = (time.perf_counter() - t0) * 1000
+        # Steps 2 + 3: Retrieve and select anchors (3-level degradation)
+        if self.full_atlas_scorer is not None:
+            # Level 1: Full-atlas scoring path
+            t0 = time.perf_counter()
+            anchor_scores = self.full_atlas_scorer.score_all(query, query_vec=query_vec)
+            timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
-        logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
-
-        if not candidates:
-            packed = PackedContext(
-                query=query,
-                text="(no anchor candidates found — atlas may be empty or unbuilt)",
-                token_count=0,
-                memory_ids=[],
-                sections=[],
-                untyped_count=0,
-            )
-            return PSAResult(
-                query=query,
-                packed_context=packed,
-                selected_anchors=[],
-                candidates=[],
-                timing=timing,
-                tenant_id=self.tenant_id,
-                psa_mode=self.psa_mode,
+            logger.debug(
+                "Full-atlas scored %d anchors in %.1fms",
+                len(anchor_scores),
+                timing.retrieve_ms,
             )
 
-        # Step 3: Select anchors
-        t0 = time.perf_counter()
-        selected = self.selector.select(
-            query=query,
-            candidates=candidates,
-            query_vec=query_vec,
-        )
-        timing.select_ms = (time.perf_counter() - t0) * 1000
+            candidates = []  # no retriever shortlist in full-atlas mode
+
+            if not anchor_scores:
+                packed = PackedContext(
+                    query=query,
+                    text="(no anchor candidates found — atlas may be empty or unbuilt)",
+                    token_count=0,
+                    memory_ids=[],
+                    sections=[],
+                    untyped_count=0,
+                )
+                return PSAResult(
+                    query=query,
+                    packed_context=packed,
+                    selected_anchors=[],
+                    candidates=[],
+                    timing=timing,
+                    tenant_id=self.tenant_id,
+                    psa_mode=self.psa_mode,
+                    selection_mode="full_atlas",
+                )
+
+            t0 = time.perf_counter()
+            if self.coactivation_selector is not None:
+                # Level 1a: co-activation model selection
+                selected = self.coactivation_selector.select(query_vec, anchor_scores)
+                selection_mode = "coactivation"
+            else:
+                # Level 1b: top-k from full-atlas scores, wrapped as SelectedAnchor
+                top_scores = anchor_scores[: self.selector.max_k]
+                selected = [
+                    SelectedAnchor(
+                        anchor_id=s.anchor_id,
+                        selector_score=s.ce_score,
+                        mode="full_atlas",
+                        candidate=None,
+                    )
+                    for s in top_scores
+                ]
+                selection_mode = "full_atlas"
+            timing.select_ms = (time.perf_counter() - t0) * 1000
+        else:
+            # Level 2: Legacy retriever + selector path
+            t0 = time.perf_counter()
+            candidates = self._retriever.retrieve(
+                query=query,
+                embedding_model=self.embedding_model,
+                top_k=top_k_candidates,
+                query_vec=query_vec,
+            )
+            timing.retrieve_ms = (time.perf_counter() - t0) * 1000
+
+            logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
+
+            if not candidates:
+                packed = PackedContext(
+                    query=query,
+                    text="(no anchor candidates found — atlas may be empty or unbuilt)",
+                    token_count=0,
+                    memory_ids=[],
+                    sections=[],
+                    untyped_count=0,
+                )
+                return PSAResult(
+                    query=query,
+                    packed_context=packed,
+                    selected_anchors=[],
+                    candidates=[],
+                    timing=timing,
+                    tenant_id=self.tenant_id,
+                    psa_mode=self.psa_mode,
+                    selection_mode="legacy",
+                )
+
+            t0 = time.perf_counter()
+            selected = self.selector.select(
+                query=query,
+                candidates=candidates,
+                query_vec=query_vec,
+            )
+            timing.select_ms = (time.perf_counter() - t0) * 1000
+            selection_mode = "legacy"
 
         logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
 
@@ -218,6 +282,7 @@ class PSAPipeline:
                 timing=timing,
                 tenant_id=self.tenant_id,
                 psa_mode=self.psa_mode,
+                selection_mode=selection_mode,
             )
 
         # Step 4: Fetch memories for selected anchors
@@ -278,6 +343,7 @@ class PSAPipeline:
             timing=timing,
             tenant_id=self.tenant_id,
             psa_mode=self.psa_mode,
+            selection_mode=selection_mode,
         )
 
     def _fetch_memories(self, selected: List[SelectedAnchor]) -> List[MemoryObject]:
@@ -450,6 +516,41 @@ class PSAPipeline:
             selector_kwargs["threshold"] = selector_threshold
         selector = AnchorSelector(**selector_kwargs)
 
+        # Load FullAtlasScorer from selector model path (if available)
+        full_atlas_scorer = None
+        if selector_model_path:
+            try:
+                full_atlas_scorer = FullAtlasScorer.from_model_path(
+                    model_path=selector_model_path,
+                    atlas=atlas,
+                )
+            except Exception:
+                logger.debug(
+                    "FullAtlasScorer not loaded from %s", selector_model_path, exc_info=True
+                )
+
+        # Load CoActivationSelector (if model exists)
+        coactivation_selector = None
+        coactivation_model_dir = os.path.join(tenant.root_dir, "models", "coactivation_latest")
+        coactivation_version_path = os.path.join(
+            coactivation_model_dir, "coactivation_version.json"
+        )
+        if os.path.exists(coactivation_version_path):
+            try:
+                import torch as _torch
+
+                device = "cuda" if _torch.cuda.is_available() else "cpu"
+                coactivation_selector = CoActivationSelector.from_model_path(
+                    model_path=coactivation_model_dir,
+                    device=device,
+                )
+            except Exception:
+                logger.debug(
+                    "CoActivationSelector not loaded from %s",
+                    coactivation_model_dir,
+                    exc_info=True,
+                )
+
         return cls(
             store=store,
             atlas=atlas,
@@ -458,6 +559,8 @@ class PSAPipeline:
             token_budget=token_budget,
             tenant_id=tenant_id,
             psa_mode=psa_mode,
+            full_atlas_scorer=full_atlas_scorer,
+            coactivation_selector=coactivation_selector,
         )
 
     @classmethod

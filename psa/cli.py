@@ -574,6 +574,40 @@ def cmd_train(args):
         lp = LifecyclePipeline()
         lp._write_selector_mode(tenant.root_dir, "trained", sv.model_path)
         print("  Activated trained selector.")
+
+        # Co-activation training
+        if getattr(args, "coactivation", False):
+            print("Training co-activation model...")
+            # Force CPU default to prevent MPS SIGSEGV when loading
+            # both EmbeddingModel and CrossEncoder in the same process.
+            import torch as _torch
+
+            _torch.set_default_device("cpu")
+
+            from .embeddings import EmbeddingModel
+            from .full_atlas_scorer import FullAtlasScorer
+            from .training.coactivation_data import generate_coactivation_data
+            from .training.train_coactivation import CoActivationTrainer
+
+            fas = FullAtlasScorer.from_model_path(sv.model_path, atlas, device="cpu")
+            emb = EmbeddingModel()
+            coact_data_dir = os.path.join(tenant.root_dir, "training", "coactivation")
+            n_coact = generate_coactivation_data(
+                oracle_labels_path=labels_path,
+                output_path=coact_data_dir,
+                full_atlas_scorer=fas,
+                embedding_model=emb,
+                atlas=atlas,
+            )
+            print(f"  Generated {n_coact} co-activation training examples.")
+
+            coact_output = os.path.join(tenant.root_dir, "models", "coactivation_latest")
+            coact_trainer = CoActivationTrainer(output_dir=coact_output)
+            coact_trainer.train(
+                data_dir=coact_data_dir,
+                n_anchors=len(atlas.cards),
+            )
+            print(f"  Co-activation model saved to {coact_output}")
     except Exception as e:
         print(f"  Training failed: {e}")
 
@@ -834,6 +868,55 @@ def _cmd_longmemeval(args):
             f"{f', min_k={min_k}' if min_k else ''}"
             f"{', rerank_only' if rerank_only else ''})..."
         )
+
+        coactivation_pipeline = None
+        if selector_mode == "coactivation":
+            from .full_atlas_scorer import FullAtlasScorer
+            from .coactivation import CoActivationSelector
+            from .pipeline import PSAPipeline
+            import os as _os
+
+            # Build pipeline with cosine fallback, then attach coactivation components
+            try:
+                coactivation_pipeline = PSAPipeline.from_tenant(
+                    tenant_id=tenant_id,
+                    selector_mode="cosine",
+                    selector_model_path=selector_model_path,
+                    selector_max_k=max_k,
+                    selector_min_k=min_k,
+                    selector_rerank_only=rerank_only,
+                )
+            except FileNotFoundError:
+                pass
+
+            if coactivation_pipeline is not None:
+                # Find selector model
+                model_dir = getattr(args, "selector_model", None)
+                if not model_dir:
+                    model_dir = _os.path.join(
+                        _os.path.expanduser(f"~/.psa/tenants/{tenant_id}/models/selector_latest"),
+                        "selector_v1",
+                    )
+                if _os.path.exists(model_dir):
+                    coactivation_pipeline.full_atlas_scorer = FullAtlasScorer.from_model_path(
+                        model_dir, coactivation_pipeline.atlas
+                    )
+                coact_path = _os.path.join(
+                    _os.path.expanduser(f"~/.psa/tenants/{tenant_id}/models"),
+                    "coactivation_latest",
+                )
+                coact_meta = _os.path.join(coact_path, "coactivation_version.json")
+                if _os.path.exists(coact_meta):
+                    import torch
+
+                    _dev = "mps" if torch.backends.mps.is_available() else "cpu"
+                    coactivation_pipeline.coactivation_selector = (
+                        CoActivationSelector.from_model_path(
+                            coact_path,
+                            device=_dev,
+                        )
+                    )
+
         out_path = run(
             split=split,
             limit=limit,
@@ -843,6 +926,7 @@ def _cmd_longmemeval(args):
             max_k=max_k,
             min_k=min_k,
             rerank_only=rerank_only,
+            pipeline=coactivation_pipeline,
         )
         print(f"Results: {out_path}")
         print("Run 'psa benchmark longmemeval score' next.")
@@ -1326,6 +1410,11 @@ def main():
     p_train = sub.add_parser("train", help="Train the selector model from oracle labels")
     p_train.add_argument("--tenant", default="default", help="Tenant identifier")
     p_train.add_argument("--force", action="store_true", help="Train even if gates are not met")
+    p_train.add_argument(
+        "--coactivation",
+        action="store_true",
+        help="Also train co-activation model after selector (requires trained selector)",
+    )
 
     # inspect
     p_inspect = sub.add_parser("inspect", help="Inspect what context PSA injects for a query")
@@ -1379,7 +1468,7 @@ def main():
     p_lme_run.add_argument(
         "--selector",
         default="cosine",
-        choices=["cosine", "trained"],
+        choices=["cosine", "trained", "coactivation"],
         help="Selector mode: cosine (default) or trained cross-encoder",
     )
     p_lme_run.add_argument(
