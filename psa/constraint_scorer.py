@@ -2,12 +2,14 @@
 constraint_scorer.py — Rule-backed constraint scorer for PSA.
 
 Adjusts Level 2 memory scores based on constraint satisfaction:
-  - entity_overlap        (weight 0.20)
-  - speaker_role_match    (weight 0.15)
-  - actor_entity_match    (weight 0.15)
-  - temporal_consistency  (weight 0.20)
-  - stance_relevance      (weight 0.15)
-  - type_match            (weight 0.15)
+  - entity_overlap        (weight 0.17)
+  - speaker_role_match    (weight 0.12)
+  - actor_entity_match    (weight 0.12)
+  - temporal_consistency  (weight 0.17)
+  - stance_relevance      (weight 0.10)
+  - type_match            (weight 0.12)
+  - exact_phrase_support  (weight 0.10)
+  - contradiction_penalty (weight 0.10)
 
 All features are tri-state: match=1.0, mismatch=0.0, unknown/unconstrained=0.5.
 Final score: 0.70 * level2_score + 0.30 * constraint_boost
@@ -22,14 +24,14 @@ from .query_frame import QueryFrame
 
 # ── Weights ───────────────────────────────────────────────────────────────────
 
-_WEIGHTS = {
-    "entity_overlap": 0.20,
-    "speaker_role_match": 0.15,
-    "actor_entity_match": 0.15,
-    "temporal_consistency": 0.20,
-    "stance_relevance": 0.15,
-    "type_match": 0.15,
-}
+W_ENTITY = 0.17
+W_SPEAKER_ROLE = 0.12
+W_ACTOR_ENTITY = 0.12
+W_TEMPORAL = 0.17
+W_STANCE = 0.10
+W_TYPE_MATCH = 0.12
+W_EXACT_PHRASE = 0.10
+W_CONTRADICTION = 0.10
 
 # Blend coefficients
 _LEVEL2_WEIGHT = 0.70
@@ -109,6 +111,31 @@ def _type_match(answer_target: str, memory_type_name: str) -> float:
     return 1.0 if memory_type_name == expected else 0.3
 
 
+def _exact_phrase_support(quoted_terms: List[str], memory_body: str) -> float:
+    """1.0 if any quoted term appears verbatim in memory body, 0.0 if not, 0.5 if no quoted terms."""
+    if not quoted_terms:
+        return 0.5
+    body_lower = (memory_body or "").lower()
+    for term in quoted_terms:
+        if term.lower() in body_lower:
+            return 1.0
+    return 0.0
+
+
+def _contradiction_penalty(answer_target: str, memory_stance: Optional[str]) -> float:
+    """Penalize memories whose stance contradicts the query intent.
+    E.g., query asks about current approach but memory says 'deprecated'."""
+    if not memory_stance:
+        return 0.5  # neutral
+    # Current/fact queries penalized by deprecated/stopped memories
+    if answer_target in ("fact", "preference") and memory_stance in ("deprecated", "stopped"):
+        return 0.2
+    # Failure queries penalized by "fixed" memories (the fix, not the failure)
+    if answer_target == "failure" and memory_stance == "fixed":
+        return 0.3
+    return 0.5  # neutral
+
+
 # ── ConstraintScorer ──────────────────────────────────────────────────────────
 
 
@@ -144,26 +171,30 @@ class ConstraintScorer:
             mem_actor_entities = getattr(mem, "actor_entities", []) or []
             mem_mentioned_at = getattr(mem, "mentioned_at", None)
             mem_stance = getattr(mem, "stance", None)
+            mem_body = getattr(mem, "body", "") or ""
             mem_type_name = (
                 mem.memory_type.name if hasattr(mem.memory_type, "name") else str(mem.memory_type)
             )
 
-            features = {
-                "entity_overlap": _entity_overlap(query_frame.entities, mem_entities),
-                "speaker_role_match": _speaker_role_match(
-                    query_frame.speaker_role_constraint, mem_role
-                ),
-                "actor_entity_match": _actor_entity_match(
-                    query_frame.entity_constraint, mem_actor_entities
-                ),
-                "temporal_consistency": _temporal_consistency(
-                    query_frame.time_constraint, mem_mentioned_at
-                ),
-                "stance_relevance": _stance_relevance(query_frame.answer_target, mem_stance),
-                "type_match": _type_match(query_frame.answer_target, mem_type_name),
-            }
+            entity = _entity_overlap(query_frame.entities, mem_entities)
+            speaker = _speaker_role_match(query_frame.speaker_role_constraint, mem_role)
+            actor = _actor_entity_match(query_frame.entity_constraint, mem_actor_entities)
+            temporal = _temporal_consistency(query_frame.time_constraint, mem_mentioned_at)
+            stance = _stance_relevance(query_frame.answer_target, mem_stance)
+            type_match = _type_match(query_frame.answer_target, mem_type_name)
+            exact = _exact_phrase_support(query_frame.quoted_terms, mem_body)
+            contra = _contradiction_penalty(query_frame.answer_target, mem_stance)
 
-            constraint_boost = sum(_WEIGHTS[k] * v for k, v in features.items())
+            constraint_boost = (
+                W_ENTITY * entity
+                + W_SPEAKER_ROLE * speaker
+                + W_ACTOR_ENTITY * actor
+                + W_TEMPORAL * temporal
+                + W_STANCE * stance
+                + W_TYPE_MATCH * type_match
+                + W_EXACT_PHRASE * exact
+                + W_CONTRADICTION * contra
+            )
 
             new_score = _LEVEL2_WEIGHT * sm.final_score + _CONSTRAINT_WEIGHT * constraint_boost
 

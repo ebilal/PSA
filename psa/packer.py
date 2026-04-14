@@ -456,6 +456,18 @@ class EvidencePacker:
                     source_ids=mo.source_ids,
                 )
 
+            # Surface verbatim evidence if available
+            verbatim_text = ""
+            if hasattr(mo, "evidence_spans") and mo.evidence_spans:
+                snippets = []
+                for span in mo.evidence_spans[:2]:  # max 2 snippets
+                    if hasattr(span, "text") and span.text:
+                        snippets.append(span.text.strip())
+                    elif isinstance(span, dict) and span.get("text"):
+                        snippets.append(span["text"].strip())
+                if snippets:
+                    verbatim_text = "\n  [verbatim: " + " | ".join(snippets) + "]"
+
             item = _format_memory_item(
                 mo,
                 similarity=relevance if relevance > 0 else None,
@@ -463,6 +475,7 @@ class EvidencePacker:
                 max_body_chars=800 if is_top else 300,
                 evidence_text=evidence_text,
             )
+            item += verbatim_text
             role = mo.memory_type
             if role not in typed_sections:
                 role = MemoryType.SEMANTIC

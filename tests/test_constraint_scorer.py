@@ -87,3 +87,31 @@ def test_missing_facets_get_neutral_score():
     results = scorer.adjust_scores([m], frame)
 
     assert results[0].final_score >= 0.4, f"Expected score >= 0.4, got {results[0].final_score:.4f}"
+
+
+def test_exact_phrase_boosts():
+    from psa.constraint_scorer import ConstraintScorer
+
+    frame = QueryFrame(quoted_terms=["JWT refresh tokens"])
+    m1 = _make_scored_memory("m1", 0.5)
+    m1.memory.body = "We use JWT refresh tokens stored in HttpOnly cookies"
+    m2 = _make_scored_memory("m2", 0.5)
+    m2.memory.body = "Database uses connection pooling"
+    scorer = ConstraintScorer()
+    adjusted = scorer.adjust_scores([m1, m2], frame)
+    a1 = next(s for s in adjusted if s.memory_object_id == "m1")
+    a2 = next(s for s in adjusted if s.memory_object_id == "m2")
+    assert a1.final_score > a2.final_score
+
+
+def test_contradiction_penalty():
+    from psa.constraint_scorer import ConstraintScorer
+
+    frame = QueryFrame(answer_target="fact")
+    m1 = _make_scored_memory("m1", 0.5, stance="deprecated")
+    m2 = _make_scored_memory("m2", 0.5, stance=None)
+    scorer = ConstraintScorer()
+    adjusted = scorer.adjust_scores([m1, m2], frame)
+    a1 = next(s for s in adjusted if s.memory_object_id == "m1")
+    a2 = next(s for s in adjusted if s.memory_object_id == "m2")
+    assert a2.final_score > a1.final_score  # deprecated penalized for fact query
