@@ -47,3 +47,15 @@ class TestPatternMatcher:
         frame = extract_query_frame("hmm")
         assert frame.answer_target == "fact"
         assert frame.retrieval_mode == "single_hop"
+
+    def test_quoted_terms(self):
+        from psa.query_frame import extract_query_frame
+
+        frame = extract_query_frame('Find memories about "JWT refresh tokens"')
+        assert "JWT refresh tokens" in frame.quoted_terms
+
+    def test_negation(self):
+        from psa.query_frame import extract_query_frame
+
+        frame = extract_query_frame("What should we not use for auth?")
+        assert frame.negation is True

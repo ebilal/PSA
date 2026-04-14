@@ -184,6 +184,8 @@ class QueryFrame:
     retrieval_mode: str = "single_hop"
     # single_hop, compare_over_time, multi_hop, abstention_risk
     confidence: float = 0.0
+    quoted_terms: List[str] = field(default_factory=list)  # exact phrases in quotes
+    negation: bool = False  # query contains negation ("not", "never", "without", "don't")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -283,6 +285,18 @@ def _pattern_extract(query: str) -> QueryFrame:
 
     if frame.entities:
         signals += 1
+
+    # Quoted terms (exact phrases the user wants to match)
+    quoted = re.findall(r'"([^"]{2,60})"', query)
+    frame.quoted_terms = quoted
+
+    # Negation detection
+    if re.search(
+        r"\b(?:not|never|without|don't|doesn't|didn't|shouldn't|can't|won't|no longer)\b",
+        query,
+        re.IGNORECASE,
+    ):
+        frame.negation = True
 
     # --- Deduplicate entities ---
     seen = set()
