@@ -930,11 +930,13 @@ def _cmd_longmemeval(args):
         selector_model_path = getattr(args, "selector_model", None)
         max_k = getattr(args, "max_k", 6)
         min_k = getattr(args, "min_k", None)
+        ce_budget = getattr(args, "ce_budget", None)
         rerank_only = getattr(args, "rerank_only", False)
         print(
             f"Running LongMemEval ({split} split, {'all' if not limit else limit} questions, "
             f"selector={selector_mode}, max_k={max_k}"
             f"{f', min_k={min_k}' if min_k else ''}"
+            f"{f', ce_budget={ce_budget}' if ce_budget else ''}"
             f"{', rerank_only' if rerank_only else ''})..."
         )
 
@@ -983,6 +985,8 @@ def _cmd_longmemeval(args):
                         CoActivationSelector.from_model_path(
                             coact_path,
                             device=_dev,
+                            min_k=max_k,
+                            top_ce_budget=ce_budget,
                         )
                     )
 
@@ -1567,6 +1571,16 @@ def main():
         type=int,
         default=None,
         help="Minimum anchors to select (backfill from top-scored if threshold filters too many)",
+    )
+    p_lme_run.add_argument(
+        "--ce-budget",
+        type=int,
+        default=None,
+        dest="ce_budget",
+        help=(
+            "For coactivation selector: restrict model input to top-N CE-ranked anchors "
+            "(default: use all anchors). E.g. --ce-budget 48."
+        ),
     )
     p_lme_run.add_argument(
         "--rerank-only",

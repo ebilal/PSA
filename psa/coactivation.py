@@ -207,11 +207,19 @@ class CoActivationSelector:
         selector = CoActivationSelector.from_model_path("/path/to/dir", device="cpu")
     """
 
-    def __init__(self, model: CoActivationModel, device: str = "cpu"):
+    def __init__(
+        self,
+        model: CoActivationModel,
+        device: str = "cpu",
+        min_k: int = 1,
+        top_ce_budget: Optional[int] = None,
+    ):
         self.device = device
         self.model = model
         self.model.to(device)
         self.model.eval()
+        self.min_k = min_k
+        self.top_ce_budget = top_ce_budget
 
     def select(
         self,
@@ -228,7 +236,7 @@ class CoActivationSelector:
         query_vec:
             L2-normalized query embedding, shape (D,).
         anchor_scores:
-            Full-atlas scored anchors (from FullAtlasScorer).
+            Full-atlas scored anchors (from FullAtlasScorer), sorted CE-descending.
         anchor_features:
             Optional per-anchor feature matrix, shape (N, anchor_feature_dim).
         query_frame:
@@ -237,10 +245,23 @@ class CoActivationSelector:
         Returns
         -------
         List of SelectedAnchor sorted by selector_score descending.
-        Always returns at least 1 anchor.
+        Always returns at least self.min_k anchors.
+
+        Notes
+        -----
+        top_ce_budget: when set, the model only sees the top-N CE-ranked anchors.
+        anchor_scores is sorted CE-descending by FullAtlasScorer, so this is a
+        simple prefix slice. The TransformerEncoder handles variable N.
+
+        min_k: after threshold-based selection, if fewer than min_k anchors pass,
+        pad with the next-highest refined-score anchors until min_k is reached.
         """
         if not anchor_scores:
             return []
+
+        # Restrict to top-N CE-ranked anchors before model forward pass
+        if self.top_ce_budget is not None:
+            anchor_scores = anchor_scores[: self.top_ce_budget]
 
         n = len(anchor_scores)
 
@@ -295,11 +316,18 @@ class CoActivationSelector:
         scores_np = refined_scores[0].cpu().numpy()  # (N,)
         threshold = float(thresholds[0].cpu().item())
 
-        # Apply adaptive threshold — always keep at least 1
+        # Apply adaptive threshold
         selected_indices = [i for i in range(n) if scores_np[i] >= threshold]
-        if not selected_indices:
-            # Fallback: return best by refined score
-            selected_indices = [int(np.argmax(scores_np))]
+
+        # Pad to min_k using the next-highest refined-score anchors
+        effective_min = max(1, self.min_k)
+        if len(selected_indices) < effective_min:
+            selected_set = set(selected_indices)
+            for i in sorted(range(n), key=lambda x: -scores_np[x]):
+                if len(selected_set) >= effective_min:
+                    break
+                selected_set.add(i)
+            selected_indices = list(selected_set)
 
         # Build SelectedAnchor list sorted by score desc
         result = [
@@ -319,6 +347,8 @@ class CoActivationSelector:
         cls,
         model_path: str,
         device: str = "cpu",
+        min_k: int = 1,
+        top_ce_budget: Optional[int] = None,
     ) -> "CoActivationSelector":
         """
         Load a CoActivationModel from disk.
@@ -333,6 +363,12 @@ class CoActivationSelector:
             Directory containing the saved model artifacts.
         device:
             Torch device string, e.g. "cpu" or "cuda".
+        min_k:
+            Minimum number of anchors to return (pad with top refined-score
+            anchors if threshold selects fewer). Default 1 (current behavior).
+        top_ce_budget:
+            If set, restrict the model's input to the top-N CE-ranked anchors
+            before the forward pass. None = use all anchors (current behavior).
         """
         version_path = os.path.join(model_path, "coactivation_version.json")
         weights_path = os.path.join(model_path, "coactivation_model.pt")
@@ -353,4 +389,4 @@ class CoActivationSelector:
         )
         state = torch.load(weights_path, map_location=device)
         model.load_state_dict(state)
-        return cls(model=model, device=device)
+        return cls(model=model, device=device, min_k=min_k, top_ce_budget=top_ce_budget)
