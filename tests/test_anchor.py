@@ -197,6 +197,75 @@ def test_load_missing_path_raises(tmp_dir):
         AnchorIndex.load(os.path.join(tmp_dir, "nonexistent"), dim=768)
 
 
+def test_anchor_index_load_prefers_refined_cards(tmp_path):
+    """When both files exist, AnchorIndex.load() loads anchor_cards_refined.json."""
+    import json
+    from psa.anchor import AnchorIndex
+
+    raw = [
+        {
+            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
+            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
+            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
+            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "generated_query_patterns": ["raw pattern"],
+            "query_fingerprint": [],
+        }
+    ]
+    refined = [
+        {
+            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
+            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
+            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
+            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "generated_query_patterns": ["raw pattern", "refined pattern"],
+            "query_fingerprint": [],
+        }
+    ]
+    (tmp_path / "anchor_cards.json").write_text(json.dumps(raw))
+    (tmp_path / "anchor_cards_refined.json").write_text(json.dumps(refined))
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    idx = AnchorIndex.load(str(tmp_path))
+
+    assert len(idx._cards) == 1
+    assert "refined pattern" in idx._cards[0].generated_query_patterns
+
+
+def test_anchor_index_load_falls_back_to_raw_when_no_refined(tmp_path):
+    """When only anchor_cards.json exists, it is loaded as before."""
+    import json
+    from psa.anchor import AnchorIndex
+
+    raw = [
+        {
+            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
+            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
+            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
+            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "generated_query_patterns": ["raw pattern"],
+            "query_fingerprint": [],
+        }
+    ]
+    (tmp_path / "anchor_cards.json").write_text(json.dumps(raw))
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    idx = AnchorIndex.load(str(tmp_path))
+
+    assert len(idx._cards) == 1
+    assert idx._cards[0].generated_query_patterns == ["raw pattern"]
+
+
+def test_anchor_index_load_raises_when_neither_file_exists(tmp_path):
+    """If neither raw nor refined cards file exists, raise FileNotFoundError."""
+    from psa.anchor import AnchorIndex
+
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    with pytest.raises(FileNotFoundError):
+        AnchorIndex.load(str(tmp_path))
+
+
 def test_anchor_card_has_generated_query_patterns_field():
     card = AnchorCard(
         anchor_id=1,

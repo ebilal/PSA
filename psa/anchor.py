@@ -225,11 +225,18 @@ class AnchorIndex:
     @classmethod
     def load(cls, path: str, dim: int = 768) -> "AnchorIndex":
         """Load a previously saved AnchorIndex from a directory."""
-        cards_path = os.path.join(path, "anchor_cards.json")
+        refined_path = os.path.join(path, "anchor_cards_refined.json")
+        raw_path = os.path.join(path, "anchor_cards.json")
         centroids_path = os.path.join(path, "centroids.npy")
 
-        if not os.path.exists(cards_path):
-            raise FileNotFoundError(f"No anchor_cards.json at {path}")
+        if os.path.exists(refined_path):
+            cards_path = refined_path
+        elif os.path.exists(raw_path):
+            cards_path = raw_path
+        else:
+            raise FileNotFoundError(
+                f"No anchor_cards.json or anchor_cards_refined.json at {path}"
+            )
 
         with open(cards_path) as f:
             cards_data = json.load(f)
