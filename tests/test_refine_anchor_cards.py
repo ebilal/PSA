@@ -49,7 +49,7 @@ def base_card_a():
         "date_months": [],
         "generated_query_patterns": ["caching approaches", "memoization patterns"],
         "prototype_examples": [],
-        "query_fingerprint": "abc123",
+        "query_fingerprint": [],
     }
 
 
@@ -68,7 +68,7 @@ def base_card_b():
         "date_months": [],
         "generated_query_patterns": ["database optimization"],
         "prototype_examples": [],
-        "query_fingerprint": "def456",
+        "query_fingerprint": [],
     }
 
 
@@ -87,7 +87,7 @@ def base_card_c():
         "date_months": [],
         "generated_query_patterns": [],
         "prototype_examples": [],
-        "query_fingerprint": "ghi789",
+        "query_fingerprint": [],
     }
 
 
@@ -350,7 +350,7 @@ def test_refine_cards_integration_full(tmp_path):
             "date_months": [],
             "generated_query_patterns": ["test pattern"],
             "prototype_examples": [],
-            "query_fingerprint": "xyz",
+            "query_fingerprint": [],
         }
     ]
     base_cards_path = tmp_path / "anchor_cards.json"

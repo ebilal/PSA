@@ -166,24 +166,26 @@ def refine_cards(base_cards: list[dict], misses: list[dict], max_patterns: int =
 
         # If this anchor has misses, extract and add ngrams
         if anchor_id in missed_queries_by_anchor:
-            existing_patterns = set(card.get("generated_query_patterns", []))  # Deduplicate
-            new_patterns = []
+            existing_list = card.get("generated_query_patterns", [])
+            existing_set = set(existing_list)
+            candidates = []
+            seen = set()
 
             # Extract ngrams from all missed queries
             for query in missed_queries_by_anchor[anchor_id]:
                 ngrams = _extract_ngrams(query)
                 for ngram in ngrams:
-                    if ngram not in existing_patterns and ngram not in new_patterns:
-                        new_patterns.append(ngram)
+                    if ngram not in existing_set and ngram not in seen:
+                        candidates.append(ngram)
+                        seen.add(ngram)
 
-            # Sort longer patterns first, then truncate to max_patterns
-            new_patterns.sort(key=lambda x: (-len(x.split()), x))
-            available_slots = max(0, max_patterns - len(existing_patterns))
-            new_patterns = new_patterns[:available_slots]
+            # Sort longer patterns first, then alpha, to prefer longer patterns
+            candidates.sort(key=lambda x: (-len(x.split()), x))
+            available_slots = max(0, max_patterns - len(existing_list))
+            new_patterns = candidates[:available_slots]
 
-            # Update card with extended patterns
-            updated_patterns = list(existing_patterns) + new_patterns
-            new_card["generated_query_patterns"] = updated_patterns
+            # Update card with extended patterns, preserving original list order
+            new_card["generated_query_patterns"] = existing_list + new_patterns
 
         refined_cards.append(new_card)
 
