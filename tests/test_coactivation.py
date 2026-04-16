@@ -250,3 +250,140 @@ class TestCoActivationSelector:
         assert isinstance(result[0], SelectedAnchor)
         assert result[0].mode == "coactivation"
         assert result[0].candidate is None
+
+    def test_min_k_pads_when_threshold_rejects_all(self):
+        """min_k=3: all scores below threshold → still returns exactly 3 top refined-score anchors."""
+        n_anchors = 8
+        dim = 768
+
+        # Assign distinct refined scores so we know which 3 are top
+        # anchor index 0 → 0.40, 1 → 0.35, 2 → 0.30, rest → 0.10
+        refined_scores_fixed = [0.40, 0.35, 0.30, 0.10, 0.10, 0.10, 0.10, 0.10]
+
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
+            batch = ce_scores.shape[0]
+            n = ce_scores.shape[1]
+            scores = (
+                torch.tensor(refined_scores_fixed[:n], dtype=torch.float32)
+                .unsqueeze(0)
+                .expand(batch, -1)
+            )
+            # threshold above all scores → nothing passes
+            threshold = torch.full((batch,), 0.9)
+            return scores, threshold
+
+        mock_model = MagicMock(spec=CoActivationModel)
+        mock_model.side_effect = fake_forward
+
+        selector = CoActivationSelector(model=mock_model, device="cpu", min_k=3)
+
+        query_vec = _make_query_vec(dim)
+        anchor_scores = _make_anchor_scores(n_anchors, dim)
+
+        result = selector.select(query_vec=query_vec, anchor_scores=anchor_scores)
+
+        assert len(result) == 3
+        returned_ids = {sa.anchor_id for sa in result}
+        assert returned_ids == {0, 1, 2}, (
+            f"Expected top-3 anchor ids {{0, 1, 2}}, got {returned_ids}"
+        )
+
+    def test_min_k_does_not_truncate_when_threshold_selects_more(self):
+        """min_k=2: threshold naturally selects 5 anchors → output has length 5 (floor doesn't cap)."""
+        n_anchors = 8
+        dim = 768
+
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
+            batch = ce_scores.shape[0]
+            n = ce_scores.shape[1]
+            # First 5 anchors score 0.8 (above threshold 0.5), rest score 0.1
+            scores = torch.full((batch, n), 0.1)
+            scores[:, :5] = 0.8
+            threshold = torch.full((batch,), 0.5)
+            return scores, threshold
+
+        mock_model = MagicMock(spec=CoActivationModel)
+        mock_model.side_effect = fake_forward
+
+        selector = CoActivationSelector(model=mock_model, device="cpu", min_k=2)
+
+        query_vec = _make_query_vec(dim)
+        anchor_scores = _make_anchor_scores(n_anchors, dim)
+
+        result = selector.select(query_vec=query_vec, anchor_scores=anchor_scores)
+
+        assert len(result) == 5, (
+            f"Expected 5 selected anchors (threshold selects 5, min_k=2 is a floor not a cap), got {len(result)}"
+        )
+
+    def test_top_ce_budget_truncates_model_input(self):
+        """top_ce_budget=3: model forward sees only the top-3 CE-ranked anchors out of 10."""
+        n_anchors = 10
+        dim = 768
+
+        captured_n = []
+
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
+            # Record the N dimension the model actually received
+            captured_n.append(ce_scores.shape[1])
+            batch = ce_scores.shape[0]
+            n = ce_scores.shape[1]
+            # All scores above threshold → select all that the model sees
+            scores = torch.full((batch, n), 0.8)
+            threshold = torch.full((batch,), 0.5)
+            return scores, threshold
+
+        mock_model = MagicMock(spec=CoActivationModel)
+        mock_model.side_effect = fake_forward
+
+        selector = CoActivationSelector(model=mock_model, device="cpu", top_ce_budget=3)
+
+        query_vec = _make_query_vec(dim)
+        anchor_scores = _make_anchor_scores(n_anchors, dim)
+
+        result = selector.select(query_vec=query_vec, anchor_scores=anchor_scores)
+
+        assert captured_n == [3], (
+            f"Expected model to see N=3 anchors (top_ce_budget=3), got {captured_n}"
+        )
+        # Only the first 3 CE-ranked anchors should appear in the output
+        assert len(result) == 3
+        returned_ids = {sa.anchor_id for sa in result}
+        assert returned_ids == {0, 1, 2}
+
+    def test_top_ce_budget_none_uses_all_anchors(self):
+        """top_ce_budget=None (default): model forward sees all 10 anchors."""
+        n_anchors = 10
+        dim = 768
+
+        captured_n = []
+
+        def fake_forward(
+            ce_scores, centroids, query_vec, anchor_features=None, query_frame_features=None
+        ):
+            captured_n.append(ce_scores.shape[1])
+            batch = ce_scores.shape[0]
+            n = ce_scores.shape[1]
+            scores = torch.full((batch, n), 0.8)
+            threshold = torch.full((batch,), 0.5)
+            return scores, threshold
+
+        mock_model = MagicMock(spec=CoActivationModel)
+        mock_model.side_effect = fake_forward
+
+        selector = CoActivationSelector(model=mock_model, device="cpu", top_ce_budget=None)
+
+        query_vec = _make_query_vec(dim)
+        anchor_scores = _make_anchor_scores(n_anchors, dim)
+
+        selector.select(query_vec=query_vec, anchor_scores=anchor_scores)
+
+        assert captured_n == [n_anchors], (
+            f"Expected model to see all {n_anchors} anchors when top_ce_budget=None, got {captured_n}"
+        )
