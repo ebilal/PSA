@@ -204,20 +204,38 @@ def test_anchor_index_load_prefers_refined_cards(tmp_path):
 
     raw = [
         {
-            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
-            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
-            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
-            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "anchor_id": 1,
+            "name": "raw-name",
+            "meaning": "raw meaning",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
             "generated_query_patterns": ["raw pattern"],
             "query_fingerprint": [],
         }
     ]
     refined = [
         {
-            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
-            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
-            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
-            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "anchor_id": 1,
+            "name": "raw-name",
+            "meaning": "raw meaning",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
             "generated_query_patterns": ["raw pattern", "refined pattern"],
             "query_fingerprint": [],
         }
@@ -239,10 +257,19 @@ def test_anchor_index_load_falls_back_to_raw_when_no_refined(tmp_path):
 
     raw = [
         {
-            "anchor_id": 1, "name": "raw-name", "meaning": "raw meaning",
-            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
-            "prototype_examples": [], "near_but_different": [], "centroid": [0.0] * 768,
-            "memory_count": 1, "is_novelty": False, "status": "active", "metadata": {},
+            "anchor_id": 1,
+            "name": "raw-name",
+            "meaning": "raw meaning",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
             "generated_query_patterns": ["raw pattern"],
             "query_fingerprint": [],
         }

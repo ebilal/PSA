@@ -234,9 +234,7 @@ class AnchorIndex:
         elif os.path.exists(raw_path):
             cards_path = raw_path
         else:
-            raise FileNotFoundError(
-                f"No anchor_cards.json or anchor_cards_refined.json at {path}"
-            )
+            raise FileNotFoundError(f"No anchor_cards.json or anchor_cards_refined.json at {path}")
 
         with open(cards_path) as f:
             cards_data = json.load(f)
