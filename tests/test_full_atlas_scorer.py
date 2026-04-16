@@ -135,3 +135,82 @@ def test_from_model_path_loads_cross_encoder():
     mock_load.assert_called_once_with("/fake/model/path", device="mps")
     assert scorer.atlas is atlas
     assert scorer._cross_encoder is mock_ce
+
+
+def test_override_used_when_provided():
+    """Verify that override text is passed to cross_encoder.predict instead of card text."""
+    n = 2
+    atlas = _make_mock_atlas(n)
+    ce = _make_mock_cross_encoder(n)
+
+    # Override anchor_id=0 only
+    override_dict = {0: "Override text for anchor 0"}
+
+    scorer = FullAtlasScorer(
+        cross_encoder=ce,
+        atlas=atlas,
+        card_text_override_by_anchor_id=override_dict,
+    )
+
+    query = "test query"
+    results = scorer.score_all(query)
+
+    # Verify cross_encoder.predict was called with override for anchor 0
+    call_args = ce.predict.call_args[0][0]  # first positional argument
+    assert len(call_args) == n
+
+    # First pair should use override text
+    assert call_args[0] == (query, "Override text for anchor 0")
+    # Second pair should use card's original text
+    assert call_args[1] == (query, "Anchor 1: some description")
+
+    # Verify results are correct
+    assert len(results) == n
+    assert results[0].anchor_id == 0
+
+
+def test_fallback_to_card_text_when_no_override():
+    """Verify that card.to_stable_card_text() is used when no override provided."""
+    n = 2
+    atlas = _make_mock_atlas(n)
+    ce = _make_mock_cross_encoder(n)
+
+    # Create scorer WITHOUT override
+    scorer = FullAtlasScorer(cross_encoder=ce, atlas=atlas)
+
+    query = "test query"
+    results = scorer.score_all(query)
+
+    # Verify cross_encoder.predict was called with card text for both
+    call_args = ce.predict.call_args[0][0]
+    assert len(call_args) == n
+    assert call_args[0] == (query, "Anchor 0: some description")
+    assert call_args[1] == (query, "Anchor 1: some description")
+
+    # Verify results are correct
+    assert len(results) == n
+
+
+def test_partial_override():
+    """Verify that only specified anchor_ids use override, others fall back."""
+    n = 3
+    atlas = _make_mock_atlas(n)
+    ce = _make_mock_cross_encoder(n)
+
+    # Override only anchor_id 1
+    override_dict = {1: "Override text 1"}
+
+    scorer = FullAtlasScorer(
+        cross_encoder=ce,
+        atlas=atlas,
+        card_text_override_by_anchor_id=override_dict,
+    )
+
+    query = "test query"
+    scorer.score_all(query)
+
+    call_args = ce.predict.call_args[0][0]
+
+    assert call_args[0] == (query, "Anchor 0: some description")
+    assert call_args[1] == (query, "Override text 1")
+    assert call_args[2] == (query, "Anchor 2: some description")

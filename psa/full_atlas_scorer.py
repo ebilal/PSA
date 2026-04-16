@@ -81,9 +81,15 @@ class FullAtlasScorer:
         anchor_scores = scorer.score_all(query, query_vec=embedding)
     """
 
-    def __init__(self, cross_encoder, atlas):
+    def __init__(
+        self,
+        cross_encoder,
+        atlas,
+        card_text_override_by_anchor_id: Optional[dict[int, str]] = None,
+    ):
         self._cross_encoder = cross_encoder
         self.atlas = atlas
+        self._card_text_override = card_text_override_by_anchor_id or {}
 
     def score_all(self, query: str, query_vec: Optional[np.ndarray] = None) -> List[AnchorScore]:
         """
@@ -109,7 +115,10 @@ class FullAtlasScorer:
     def _cross_encoder_score(self, query: str, batch_size: int = 64) -> List[AnchorScore]:
         """Score all anchors with the cross-encoder in batched predict calls."""
         cards = self.atlas.cards
-        pairs = [(query, card.to_stable_card_text()) for card in cards]
+        pairs = [
+            (query, self._card_text_override.get(card.anchor_id, card.to_stable_card_text()))
+            for card in cards
+        ]
 
         # Batch to avoid MPS memory exhaustion on repeated calls
         all_scores = []
@@ -163,7 +172,13 @@ class FullAtlasScorer:
         return results
 
     @classmethod
-    def from_model_path(cls, model_path: str, atlas, device: str = "mps") -> "FullAtlasScorer":
+    def from_model_path(
+        cls,
+        model_path: str,
+        atlas,
+        device: str = "mps",
+        card_text_override_by_anchor_id: Optional[dict[int, str]] = None,
+    ) -> "FullAtlasScorer":
         """
         Factory: load a cross-encoder from disk and construct a FullAtlasScorer.
 
@@ -176,6 +191,14 @@ class FullAtlasScorer:
         device:
             Device for cross-encoder inference. Default "mps" — must match
             EmbeddingModel device to avoid SIGSEGV from mixed-device inference.
+        card_text_override_by_anchor_id:
+            Optional dict mapping anchor_id to override card text. When provided,
+            overrides card.to_stable_card_text() for the specified anchors during
+            cross-encoder scoring.
         """
         ce = _load_cross_encoder(model_path, device=device)
-        return cls(cross_encoder=ce, atlas=atlas)
+        return cls(
+            cross_encoder=ce,
+            atlas=atlas,
+            card_text_override_by_anchor_id=card_text_override_by_anchor_id,
+        )
