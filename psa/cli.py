@@ -346,7 +346,7 @@ def cmd_atlas(args):
     """Handle 'psa atlas <subcommand>'."""
     action = getattr(args, "atlas_action", None)
     if not action:
-        print("Usage: psa atlas {build,status,health}")
+        print("Usage: psa atlas {build,status,health,refine}")
         return
 
     if action in ("build", "rebuild"):
@@ -355,6 +355,8 @@ def cmd_atlas(args):
         _cmd_atlas_status(args)
     elif action == "health":
         _cmd_atlas_health(args)
+    elif action == "refine":
+        _cmd_atlas_refine(args)
 
 
 def _cmd_atlas_build(args):
@@ -445,6 +447,73 @@ def _cmd_atlas_health(args):
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+
+def _cmd_atlas_refine(args):
+    """Refine anchor cards for the current atlas using a miss log."""
+    import importlib.util
+    import json
+    import os
+    from pathlib import Path
+
+    from .tenant import TenantManager
+    from .atlas import AtlasManager
+
+    tenant_id = getattr(args, "tenant", "default")
+    miss_log_path = args.miss_log
+    max_patterns = getattr(args, "max_patterns", 20)
+
+    if not os.path.exists(miss_log_path):
+        print(f"  Error: miss log not found: {miss_log_path}")
+        sys.exit(1)
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+    version = mgr.latest_version()
+    if version is None:
+        print(f"  Error: no atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
+        sys.exit(1)
+
+    atlas_dir = Path(tenant.root_dir) / f"atlas_v{version}"
+    base_cards_path = atlas_dir / "anchor_cards.json"
+    output_path = atlas_dir / "anchor_cards_refined.json"
+
+    if not base_cards_path.exists():
+        print(f"  Error: {base_cards_path} not found.")
+        sys.exit(1)
+
+    # Load the refinement script as a module (it lives outside the psa package)
+    script_path = Path(__file__).parent.parent / "scripts" / "refine_anchor_cards.py"
+    if not script_path.exists():
+        print(f"  Error: refinement script not found at {script_path}.")
+        sys.exit(1)
+
+    spec = importlib.util.spec_from_file_location("refine_anchor_cards", script_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    with open(base_cards_path) as f:
+        base_cards = json.load(f)
+
+    misses = []
+    with open(miss_log_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                misses.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    refined = mod.refine_cards(base_cards, misses, max_patterns=max_patterns)
+
+    with open(output_path, "w") as f:
+        json.dump(refined, f, indent=2)
+
+    print(f"  Refined cards written to {output_path}")
+    print(f"  Anchors: {len(refined)}, miss-log entries consumed: {len(misses)}")
 
 
 def cmd_label(args):
@@ -1438,6 +1507,21 @@ def main():
     atlas_sub.add_parser("status", help="Show atlas version and anchor count")
     atlas_sub.add_parser("health", help="Show health report (novelty rate, utilization skew)")
     atlas_sub.add_parser("rebuild", help="Force rebuild the atlas (same as build)")
+    p_atlas_refine = atlas_sub.add_parser(
+        "refine",
+        help="Refine anchor card generated_query_patterns from a miss log",
+    )
+    p_atlas_refine.add_argument(
+        "--miss-log",
+        required=True,
+        help="Path to a JSONL miss log produced by benchmark runs",
+    )
+    p_atlas_refine.add_argument(
+        "--max-patterns",
+        type=int,
+        default=20,
+        help="Max total generated_query_patterns per anchor after refinement (default: 20)",
+    )
 
     # lifecycle
     p_lifecycle = sub.add_parser(
