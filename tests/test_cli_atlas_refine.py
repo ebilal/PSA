@@ -132,3 +132,26 @@ def test_atlas_refine_errors_when_miss_log_missing(tmp_path, monkeypatch, capsys
         with pytest.raises(SystemExit) as exc_info:
             main()
     assert exc_info.value.code != 0
+
+
+def test_atlas_refine_skips_write_on_empty_miss_log(tmp_path, monkeypatch, capsys):
+    """`psa atlas refine` warns and skips write when miss log has 0 valid entries."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text("\n\n  \n")  # blank lines only
+
+    with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
+        main()
+
+    out = capsys.readouterr().out
+    assert "0 valid entries" in out.lower() or "0 valid entries" in out
+    assert not (atlas_dir / "anchor_cards_refined.json").exists()

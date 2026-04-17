@@ -507,6 +507,11 @@ def _cmd_atlas_refine(args):
             except json.JSONDecodeError:
                 continue
 
+    if not misses:
+        print(f"  Warning: miss log {miss_log_path} has 0 valid entries.")
+        print("  Nothing to refine — skipping write (anchor_cards_refined.json unchanged).")
+        return
+
     refined = mod.refine_cards(base_cards, misses, max_patterns=max_patterns)
 
     with open(output_path, "w") as f:
@@ -1054,7 +1059,7 @@ def _cmd_longmemeval(args):
                         CoActivationSelector.from_model_path(
                             coact_path,
                             device=_dev,
-                            min_k=max_k,
+                            min_k=min_k if min_k is not None else max_k,
                             top_ce_budget=ce_budget,
                         )
                     )

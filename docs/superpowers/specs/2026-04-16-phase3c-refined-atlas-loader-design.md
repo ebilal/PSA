@@ -18,14 +18,21 @@ Give the system one canonical way to present refined cards to every consumer (tr
 
 ### Atlas-level refinement
 
-`Atlas.load(atlas_dir)` currently reads `anchor_cards.json` from `atlas_dir`. The change: if `anchor_cards_refined.json` exists in the same directory, load that instead.
+`AnchorIndex.load(atlas_dir)` (called transitively by `Atlas.load()`) currently reads `anchor_cards.json` from `atlas_dir`. The change: if `anchor_cards_refined.json` exists in the same directory, load that instead.
 
 ```python
 @classmethod
-def load(cls, atlas_dir: str) -> "Atlas":
-    cards_path = os.path.join(atlas_dir, "anchor_cards_refined.json")
-    if not os.path.exists(cards_path):
-        cards_path = os.path.join(atlas_dir, "anchor_cards.json")
+def load(cls, path: str, dim: int = 768) -> "AnchorIndex":
+    refined_path = os.path.join(path, "anchor_cards_refined.json")
+    raw_path = os.path.join(path, "anchor_cards.json")
+    if os.path.exists(refined_path):
+        cards_path = refined_path
+    elif os.path.exists(raw_path):
+        cards_path = raw_path
+    else:
+        raise FileNotFoundError(
+            f"No anchor_cards.json or anchor_cards_refined.json at {path}"
+        )
     # ... existing load logic, reading from cards_path
 ```
 

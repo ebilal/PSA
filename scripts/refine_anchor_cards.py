@@ -5,8 +5,7 @@ This script takes a base atlas card file and a miss log, and produces
 refined anchor cards with improved generated_query_patterns for anchors
 that are being missed.
 
-Usage:
-    cd /Users/erhanbilal/Work/Projects/memnexus/.worktrees/phase2a
+Usage (direct invocation — prefer `psa atlas refine` for tenant-aware resolution):
     uv run python scripts/refine_anchor_cards.py \
         --base-atlas PATH/TO/anchor_cards.json \
         --miss-log PATH/TO/misses.jsonl \
