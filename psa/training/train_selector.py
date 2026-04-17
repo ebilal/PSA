@@ -29,6 +29,25 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("psa.training.train_selector")
 
+
+def _select_training_device() -> str:
+    """Pick a device for CrossEncoder.fit().
+
+    MPS crashes sentence-transformers CrossEncoder training with a silent SIGSEGV
+    during Phase 1 warm-start on larger datasets (observed: ~230k pairs on macOS
+    Apple Silicon). CPU is slow but stable. We default to CPU and let operators
+    opt into MPS via ``PSA_SELECTOR_TRAIN_DEVICE=mps`` when they want to
+    experiment (e.g., after a torch/macOS upgrade).
+
+    Inference-time device selection (FullAtlasScorer.from_model_path) is
+    unaffected — saved weights load fine on MPS.
+    """
+    override = os.environ.get("PSA_SELECTOR_TRAIN_DEVICE")
+    if override:
+        return override
+    return "cpu"
+
+
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 
 BASE_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -200,13 +219,9 @@ class SelectorTrainer:
             len(by_type.get("adversarial", [])),
         )
 
-        # Select device: MPS (Apple Silicon) → CPU fallback (no CUDA assumed)
-        import torch
-
-        if torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+        # Select training device. CPU by default — MPS crashes CrossEncoder.fit()
+        # on larger datasets. See _select_training_device() for the rationale.
+        device = _select_training_device()
         logger.info("Training on device: %s", device)
 
         # Load base model — suppress the "Loading weights" HF progress bar
