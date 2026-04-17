@@ -196,6 +196,11 @@ class MempalaceConfig:
         """
         return os.environ.get("PSA_MODE") or self._file_config.get("psa_mode", DEFAULT_PSA_MODE)
 
+    @property
+    def trace_queries(self):
+        """Enable per-query tracing to ~/.psa/tenants/{id}/query_trace.jsonl."""
+        return bool(self._file_config.get("trace_queries", True))
+
     # ── Lifecycle settings ─────────────────────────────────────────────────
 
     @property
