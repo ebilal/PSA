@@ -450,7 +450,8 @@ def _cmd_atlas_health(args):
 
 
 def _cmd_atlas_refine(args):
-    """Refine anchor cards for the current atlas using a miss log."""
+    """Refine anchor cards into a candidate artifact (not inference-visible)."""
+    import datetime as _dt
     import importlib.util
     import json
     import os
@@ -462,6 +463,7 @@ def _cmd_atlas_refine(args):
     tenant_id = getattr(args, "tenant", "default")
     miss_log_path = args.miss_log
     max_patterns = getattr(args, "max_patterns", 20)
+    source = getattr(args, "source", "manual") or "manual"
 
     if not os.path.exists(miss_log_path):
         print(f"  Error: miss log not found: {miss_log_path}")
@@ -477,13 +479,13 @@ def _cmd_atlas_refine(args):
 
     atlas_dir = Path(tenant.root_dir) / f"atlas_v{version}"
     base_cards_path = atlas_dir / "anchor_cards.json"
-    output_path = atlas_dir / "anchor_cards_refined.json"
+    candidate_path = atlas_dir / "anchor_cards_candidate.json"
+    candidate_meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
 
     if not base_cards_path.exists():
         print(f"  Error: {base_cards_path} not found.")
         sys.exit(1)
 
-    # Load the refinement script as a module (it lives outside the psa package)
     script_path = Path(__file__).parent.parent / "scripts" / "refine_anchor_cards.py"
     if not script_path.exists():
         print(f"  Error: refinement script not found at {script_path}.")
@@ -509,16 +511,48 @@ def _cmd_atlas_refine(args):
 
     if not misses:
         print(f"  Warning: miss log {miss_log_path} has 0 valid entries.")
-        print("  Nothing to refine — skipping write (anchor_cards_refined.json unchanged).")
+        print("  Nothing to refine — skipping write (no candidate produced).")
         return
 
     refined = mod.refine_cards(base_cards, misses, max_patterns=max_patterns)
 
-    with open(output_path, "w") as f:
+    # Diff stats for metadata
+    base_by_id = {c.get("anchor_id"): c for c in base_cards}
+    n_anchors_touched = 0
+    n_patterns_added = 0
+    for r in refined:
+        b = base_by_id.get(r.get("anchor_id"), {})
+        before = set(b.get("generated_query_patterns", []) or [])
+        after = set(r.get("generated_query_patterns", []) or [])
+        delta = after - before
+        if delta:
+            n_anchors_touched += 1
+            n_patterns_added += len(delta)
+
+    with open(candidate_path, "w") as f:
         json.dump(refined, f, indent=2)
 
-    print(f"  Refined cards written to {output_path}")
-    print(f"  Anchors: {len(refined)}, miss-log entries consumed: {len(misses)}")
+    meta = {
+        "source": source,
+        "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "tenant_id": tenant_id,
+        "atlas_version": version,
+        "promoted": False,
+        "promoted_at": None,
+        "miss_log_path": str(miss_log_path),
+        "n_anchors_touched": n_anchors_touched,
+        "n_patterns_added": n_patterns_added,
+    }
+    with open(candidate_meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"  Candidate written to {candidate_path}")
+    print(f"  Metadata written to {candidate_meta_path}")
+    print(
+        f"  Source: {source}, anchors touched: {n_anchors_touched}, "
+        f"patterns added: {n_patterns_added}"
+    )
+    print("  Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
 
 
 def cmd_label(args):
@@ -1526,6 +1560,16 @@ def main():
         type=int,
         default=20,
         help="Max total generated_query_patterns per anchor after refinement (default: 20)",
+    )
+    p_atlas_refine.add_argument(
+        "--source",
+        default="manual",
+        help=(
+            "Provenance marker for this refinement — one of "
+            "'manual', 'benchmark', 'oracle', 'query_fingerprint'. "
+            "Defaults to 'manual'. Stored in the candidate's .meta.json and "
+            "preserved verbatim on promotion."
+        ),
     )
 
     # lifecycle

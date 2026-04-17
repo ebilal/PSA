@@ -84,12 +84,14 @@ def test_atlas_refine_writes_refined_cards_file(tmp_path, monkeypatch, capsys):
     with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
         main()
 
-    refined_path = atlas_dir / "anchor_cards_refined.json"
-    assert refined_path.exists(), "refined cards file must be written"
+    candidate_path = atlas_dir / "anchor_cards_candidate.json"
+    assert candidate_path.exists(), "candidate cards file must be written"
 
-    refined_cards = json.loads(refined_path.read_text())
+    # Refined is NOT written by `refine`; only `promote-refinement` touches it.
+    assert not (atlas_dir / "anchor_cards_refined.json").exists()
+
+    refined_cards = json.loads(candidate_path.read_text())
     assert len(refined_cards) == 1
-    # Original pattern preserved, at least one new pattern from the miss log added
     patterns = refined_cards[0]["generated_query_patterns"]
     assert "original pattern" in patterns
     assert len(patterns) > 1
@@ -154,4 +156,81 @@ def test_atlas_refine_skips_write_on_empty_miss_log(tmp_path, monkeypatch, capsy
 
     out = capsys.readouterr().out
     assert "0 valid entries" in out.lower() or "0 valid entries" in out
+    assert not (atlas_dir / "anchor_cards_candidate.json").exists()
     assert not (atlas_dir / "anchor_cards_refined.json").exists()
+
+
+def test_atlas_refine_writes_candidate_metadata(tmp_path, monkeypatch, capsys):
+    """`psa atlas refine` writes anchor_cards_candidate.meta.json with provenance."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text(
+        json.dumps(
+            {
+                "question_id": "q1",
+                "query": "how does token refresh work in the auth flow",
+                "gold_anchor_ids": [1],
+            }
+        )
+        + "\n"
+    )
+
+    with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
+        main()
+
+    meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["source"] == "manual"
+    assert meta["tenant_id"] == "default"
+    assert meta["atlas_version"] == 1
+    assert meta["promoted"] is False
+    assert meta["promoted_at"] is None
+    assert meta["miss_log_path"] == str(miss_log)
+    assert meta["n_anchors_touched"] >= 1
+    assert meta["n_patterns_added"] >= 1
+    assert "created_at" in meta and meta["created_at"]
+
+
+def test_atlas_refine_records_source_from_flag(tmp_path, monkeypatch, capsys):
+    """`--source benchmark` is recorded in the candidate metadata."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text(
+        json.dumps({"query": "baking cookies", "gold_anchor_ids": [1]}) + "\n"
+    )
+
+    with patch(
+        "sys.argv",
+        [
+            "psa",
+            "atlas",
+            "refine",
+            "--miss-log",
+            str(miss_log),
+            "--source",
+            "benchmark",
+        ],
+    ):
+        main()
+
+    meta = json.loads((atlas_dir / "anchor_cards_candidate.meta.json").read_text())
+    assert meta["source"] == "benchmark"
