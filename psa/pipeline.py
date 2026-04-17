@@ -402,17 +402,13 @@ class PSAPipeline:
                         try:
                             self.store.record_selected([m.memory_object_id for m in memories])
                         except Exception:
-                            logger.debug(
-                                "Failed to record selected telemetry", exc_info=True
-                            )
+                            logger.debug("Failed to record selected telemetry", exc_info=True)
 
                     # Re-sort globally by quality_score desc
                     memories.sort(key=lambda m: m.quality_score, reverse=True)
                     timing.fetch_ms = (time.perf_counter() - t0) * 1000
 
-                    logger.debug(
-                        "Fetched %d memories in %.1fms", len(memories), timing.fetch_ms
-                    )
+                    logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
 
                     # Level 2: Memory-level scoring (if available)
                     _pre_ranked = False
@@ -488,9 +484,7 @@ class PSAPipeline:
                         except Exception:
                             logger.debug("Failed to record packed telemetry", exc_info=True)
 
-                    logger.debug(
-                        "Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms
-                    )
+                    logger.debug("Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms)
                     logger.info(
                         "PSA query complete: %.1fms total (%d memories, %d tokens)",
                         timing.total_ms,

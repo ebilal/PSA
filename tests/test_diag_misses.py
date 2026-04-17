@@ -32,14 +32,26 @@ def test_miss_report_counts_empty_selection_only(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        {"query_origin": "interactive", "result_kind": "synthesized",
-         "top_anchor_scores": [{"anchor_id": 1, "score": 2.0, "selected": True, "rank": 1}]},
-        {"query_origin": "interactive", "result_kind": "empty_selection",
-         "top_anchor_scores": [{"anchor_id": 2, "score": 0.9, "selected": False, "rank": 1}]},
-        {"query_origin": "interactive", "result_kind": "empty_selection",
-         "top_anchor_scores": [{"anchor_id": 2, "score": 0.8, "selected": False, "rank": 1}]},
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {
+                "query_origin": "interactive",
+                "result_kind": "synthesized",
+                "top_anchor_scores": [{"anchor_id": 1, "score": 2.0, "selected": True, "rank": 1}],
+            },
+            {
+                "query_origin": "interactive",
+                "result_kind": "empty_selection",
+                "top_anchor_scores": [{"anchor_id": 2, "score": 0.9, "selected": False, "rank": 1}],
+            },
+            {
+                "query_origin": "interactive",
+                "result_kind": "empty_selection",
+                "top_anchor_scores": [{"anchor_id": 2, "score": 0.8, "selected": False, "rank": 1}],
+            },
+        ],
+    )
 
     with patch("psa.diag.misses._load_atlas_for_tenant", return_value=_fake_atlas([1, 2])):
         report = miss_report("default", origins={"interactive"})
@@ -55,24 +67,40 @@ def test_near_miss_only_counts_rank_leq_3_in_empty_records(tmp_path, monkeypatch
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        # Anchor 7 at rank 1 in a SYNTHESIZED record → NOT a near-miss.
-        {"query_origin": "interactive", "result_kind": "synthesized",
-         "top_anchor_scores": [{"anchor_id": 7, "score": 3.0, "selected": True, "rank": 1}]},
-        # Anchor 7 at rank 4 in an empty record → NOT a near-miss (rank too high).
-        {"query_origin": "interactive", "result_kind": "empty_selection",
-         "top_anchor_scores": [
-             {"anchor_id": 8, "score": 1.0, "selected": False, "rank": 1},
-             {"anchor_id": 9, "score": 0.9, "selected": False, "rank": 2},
-             {"anchor_id": 10, "score": 0.8, "selected": False, "rank": 3},
-             {"anchor_id": 7, "score": 0.7, "selected": False, "rank": 4},
-         ]},
-        # Anchor 7 at rank 2 in an empty record → IS a near-miss.
-        {"query_origin": "interactive", "result_kind": "empty_selection",
-         "top_anchor_scores": [{"anchor_id": 7, "score": 0.95, "selected": False, "rank": 2}]},
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            # Anchor 7 at rank 1 in a SYNTHESIZED record → NOT a near-miss.
+            {
+                "query_origin": "interactive",
+                "result_kind": "synthesized",
+                "top_anchor_scores": [{"anchor_id": 7, "score": 3.0, "selected": True, "rank": 1}],
+            },
+            # Anchor 7 at rank 4 in an empty record → NOT a near-miss (rank too high).
+            {
+                "query_origin": "interactive",
+                "result_kind": "empty_selection",
+                "top_anchor_scores": [
+                    {"anchor_id": 8, "score": 1.0, "selected": False, "rank": 1},
+                    {"anchor_id": 9, "score": 0.9, "selected": False, "rank": 2},
+                    {"anchor_id": 10, "score": 0.8, "selected": False, "rank": 3},
+                    {"anchor_id": 7, "score": 0.7, "selected": False, "rank": 4},
+                ],
+            },
+            # Anchor 7 at rank 2 in an empty record → IS a near-miss.
+            {
+                "query_origin": "interactive",
+                "result_kind": "empty_selection",
+                "top_anchor_scores": [
+                    {"anchor_id": 7, "score": 0.95, "selected": False, "rank": 2}
+                ],
+            },
+        ],
+    )
 
-    with patch("psa.diag.misses._load_atlas_for_tenant", return_value=_fake_atlas(list(range(1, 20)))):
+    with patch(
+        "psa.diag.misses._load_atlas_for_tenant", return_value=_fake_atlas(list(range(1, 20)))
+    ):
         report = miss_report("default", origins={"interactive"})
 
     anchor_7 = next((t for t in report.near_miss_anchors if t[0] == 7), None)

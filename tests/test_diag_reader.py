@@ -18,11 +18,14 @@ def test_reader_origins_none_returns_all_records(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / ".psa" / "tenants" / "default" / "query_trace.jsonl"
-    _write_trace(path, [
-        {"run_id": "r1", "query_origin": "interactive"},
-        {"run_id": "r2", "query_origin": "benchmark"},
-        {"run_id": "r3", "query_origin": "labeling"},
-    ])
+    _write_trace(
+        path,
+        [
+            {"run_id": "r1", "query_origin": "interactive"},
+            {"run_id": "r2", "query_origin": "benchmark"},
+            {"run_id": "r3", "query_origin": "labeling"},
+        ],
+    )
 
     records = list(iter_trace_records("default", origins=None))
     assert [r["run_id"] for r in records] == ["r1", "r2", "r3"]
@@ -33,10 +36,13 @@ def test_reader_origins_interactive_filters(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / ".psa" / "tenants" / "default" / "query_trace.jsonl"
-    _write_trace(path, [
-        {"run_id": "r1", "query_origin": "interactive"},
-        {"run_id": "r2", "query_origin": "benchmark"},
-    ])
+    _write_trace(
+        path,
+        [
+            {"run_id": "r1", "query_origin": "interactive"},
+            {"run_id": "r2", "query_origin": "benchmark"},
+        ],
+    )
 
     records = list(iter_trace_records("default", origins={"interactive"}))
     assert [r["run_id"] for r in records] == ["r1"]
@@ -48,9 +54,12 @@ def test_reader_empty_origins_returns_nothing(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / ".psa" / "tenants" / "default" / "query_trace.jsonl"
-    _write_trace(path, [
-        {"run_id": "r1", "query_origin": "interactive"},
-    ])
+    _write_trace(
+        path,
+        [
+            {"run_id": "r1", "query_origin": "interactive"},
+        ],
+    )
 
     records = list(iter_trace_records("default", origins=set()))
     assert records == []
@@ -72,7 +81,7 @@ def test_reader_skips_malformed_lines(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '{"run_id": "r1", "query_origin": "interactive"}\n'
-        'not-json\n'
+        "not-json\n"
         '{"run_id": "r2", "query_origin": "interactive"}\n'
     )
     records = list(iter_trace_records("default", origins=None))

@@ -34,18 +34,21 @@ def test_activation_carry_rate_perfect(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        {
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-            "packed_memories": [{"memory_id": "m1", "source_anchor_id": 1}],
-        },
-        {
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-            "packed_memories": [{"memory_id": "m2", "source_anchor_id": 1}],
-        },
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+                "packed_memories": [{"memory_id": "m1", "source_anchor_id": 1}],
+            },
+            {
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+                "packed_memories": [{"memory_id": "m2", "source_anchor_id": 1}],
+            },
+        ],
+    )
 
     with patch("psa.diag.activation._load_atlas_for_tenant", return_value=_fake_atlas([1])):
         rows = activation_report("default", origins={"interactive"})
@@ -63,13 +66,16 @@ def test_activation_carry_rate_zero(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        {
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-            "packed_memories": [{"memory_id": "m1", "source_anchor_id": 2}],
-        },
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+                "packed_memories": [{"memory_id": "m1", "source_anchor_id": 2}],
+            },
+        ],
+    )
 
     with patch("psa.diag.activation._load_atlas_for_tenant", return_value=_fake_atlas([1, 2])):
         rows = activation_report("default", origins={"interactive"})
@@ -85,18 +91,21 @@ def test_activation_origins_filter_excludes_benchmark(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        {
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-            "packed_memories": [{"memory_id": "m", "source_anchor_id": 1}],
-        },
-        {
-            "query_origin": "benchmark",
-            "selected_anchor_ids": [1],
-            "packed_memories": [{"memory_id": "m", "source_anchor_id": 1}],
-        },
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+                "packed_memories": [{"memory_id": "m", "source_anchor_id": 1}],
+            },
+            {
+                "query_origin": "benchmark",
+                "selected_anchor_ids": [1],
+                "packed_memories": [{"memory_id": "m", "source_anchor_id": 1}],
+            },
+        ],
+    )
 
     with patch("psa.diag.activation._load_atlas_for_tenant", return_value=_fake_atlas([1])):
         rows = activation_report("default", origins={"interactive"})

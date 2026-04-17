@@ -38,12 +38,15 @@ def test_advertisement_gap_positive_for_heavy_rarely_used_anchor(tmp_path, monke
 
     # Anchor 1: 100 memories, rarely activated.
     # Anchor 2: 2 memories, activated most queries.
-    _write_trace(tenant_dir, [
-        {"query_origin": "interactive", "selected_anchor_ids": [2]},
-        {"query_origin": "interactive", "selected_anchor_ids": [2]},
-        {"query_origin": "interactive", "selected_anchor_ids": [2, 1]},  # 1 activates once
-        {"query_origin": "interactive", "selected_anchor_ids": [2]},
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {"query_origin": "interactive", "selected_anchor_ids": [2]},
+            {"query_origin": "interactive", "selected_anchor_ids": [2]},
+            {"query_origin": "interactive", "selected_anchor_ids": [2, 1]},  # 1 activates once
+            {"query_origin": "interactive", "selected_anchor_ids": [2]},
+        ],
+    )
 
     with patch(
         "psa.diag.advertisement._load_atlas_for_tenant",
@@ -65,9 +68,12 @@ def test_advertisement_memory_count_from_atlas_not_sqlite(tmp_path, monkeypatch)
 
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant_dir = tmp_path / ".psa" / "tenants" / "default"
-    _write_trace(tenant_dir, [
-        {"query_origin": "interactive", "selected_anchor_ids": [1]},
-    ])
+    _write_trace(
+        tenant_dir,
+        [
+            {"query_origin": "interactive", "selected_anchor_ids": [1]},
+        ],
+    )
 
     fake_atlas = _fake_atlas([(1, 42)])
     with patch("psa.diag.advertisement._load_atlas_for_tenant", return_value=fake_atlas):

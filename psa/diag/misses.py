@@ -52,9 +52,7 @@ def miss_report(
             aid = score_rec.get("anchor_id")
             if aid is None:
                 continue
-            near_miss_accum.setdefault(aid, []).append(
-                (rank, float(score_rec.get("score", 0.0)))
-            )
+            near_miss_accum.setdefault(aid, []).append((rank, float(score_rec.get("score", 0.0))))
 
     near_miss_rows: list[tuple[int, int, float, float]] = []
     for aid, entries in near_miss_accum.items():

@@ -14,12 +14,21 @@ def _write_minimal_atlas(atlas_dir: Path) -> None:
     atlas_dir.mkdir(parents=True, exist_ok=True)
     cards = [
         {
-            "anchor_id": 1, "name": "a1", "meaning": "m",
-            "memory_types": ["semantic"], "include_terms": [], "exclude_terms": [],
-            "prototype_examples": [], "near_but_different": [],
-            "centroid": [0.0] * 768, "memory_count": 1, "is_novelty": False,
-            "status": "active", "metadata": {},
-            "generated_query_patterns": [], "query_fingerprint": [],
+            "anchor_id": 1,
+            "name": "a1",
+            "meaning": "m",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
+            "generated_query_patterns": [],
+            "query_fingerprint": [],
         }
     ]
     (atlas_dir / "anchor_cards.json").write_text(json.dumps(cards))
@@ -27,11 +36,16 @@ def _write_minimal_atlas(atlas_dir: Path) -> None:
     (atlas_dir / "atlas_meta.json").write_text(
         json.dumps(
             {
-                "version": 1, "tenant_id": "test",
+                "version": 1,
+                "tenant_id": "test",
                 "stats": {
-                    "n_memories": 1, "n_anchors_learned": 1, "n_anchors_novelty": 0,
-                    "mean_cluster_size": 1.0, "min_cluster_size": 1,
-                    "max_cluster_size": 1, "stability_score": 1.0,
+                    "n_memories": 1,
+                    "n_anchors_learned": 1,
+                    "n_anchors_novelty": 0,
+                    "mean_cluster_size": 1.0,
+                    "min_cluster_size": 1,
+                    "max_cluster_size": 1,
+                    "stability_score": 1.0,
                     "built_at": "2026-04-17T00:00:00+00:00",
                 },
             }
@@ -71,6 +85,7 @@ def test_pipeline_query_default_origin_is_interactive(tmp_path, monkeypatch):
     _write_minimal_atlas(atlas_dir)
 
     from psa.pipeline import PSAPipeline
+
     pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
     pipeline.memory_scorer = None
 
@@ -89,6 +104,7 @@ def test_pipeline_query_accepts_query_origin_kwarg(tmp_path, monkeypatch):
     _write_minimal_atlas(atlas_dir)
 
     from psa.pipeline import PSAPipeline
+
     pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
     pipeline.memory_scorer = None
 
@@ -108,6 +124,7 @@ def test_pipeline_query_records_result_kind_for_empty_selection(tmp_path, monkey
     _write_minimal_atlas(atlas_dir)
 
     from psa.pipeline import PSAPipeline
+
     pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
     pipeline.memory_scorer = None
 
@@ -133,6 +150,7 @@ def test_pipeline_query_records_result_kind_for_synthesized(tmp_path, monkeypatc
     _write_minimal_atlas(atlas_dir)
 
     from psa.pipeline import PSAPipeline
+
     pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
     pipeline.memory_scorer = None
 
@@ -158,6 +176,7 @@ def test_pipeline_query_disabled_trace_does_not_write(tmp_path, monkeypatch):
     _write_minimal_atlas(atlas_dir)
 
     from psa.pipeline import PSAPipeline
+
     pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
     pipeline.memory_scorer = None
 
@@ -186,6 +205,7 @@ def test_pipeline_query_records_pipeline_error_on_exception(tmp_path, monkeypatc
     pipeline.embedding_model.embed.side_effect = RuntimeError("embed crashed")
 
     import pytest
+
     with pytest.raises(RuntimeError, match="embed crashed"):
         pipeline.query("will crash")
 
@@ -215,6 +235,7 @@ def test_benchmark_longmemeval_tags_benchmark_origin():
     """longmemeval.run() source must pass query_origin='benchmark'."""
     import inspect as _inspect
     from psa.benchmarks import longmemeval
+
     src = _inspect.getsource(longmemeval)
     assert 'query_origin="benchmark"' in src or "query_origin='benchmark'" in src
 
@@ -223,5 +244,6 @@ def test_inspect_query_tags_inspect_origin():
     """inspect_query's source must pass query_origin='inspect'."""
     import inspect as _inspect
     from psa import inspect as psa_inspect
+
     src = _inspect.getsource(psa_inspect)
     assert 'query_origin="inspect"' in src or "query_origin='inspect'" in src
