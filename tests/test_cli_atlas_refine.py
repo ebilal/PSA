@@ -234,3 +234,119 @@ def test_atlas_refine_records_source_from_flag(tmp_path, monkeypatch, capsys):
 
     meta = json.loads((atlas_dir / "anchor_cards_candidate.meta.json").read_text())
     assert meta["source"] == "benchmark"
+
+
+def test_promote_refinement_creates_refined_and_meta(tmp_path, monkeypatch, capsys):
+    """promote-refinement copies candidate → refined and marks promoted=true."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    # First, refine to create a candidate
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text(
+        json.dumps({"query": "auth token refresh flow", "gold_anchor_ids": [1]}) + "\n"
+    )
+    with patch(
+        "sys.argv",
+        [
+            "psa",
+            "atlas",
+            "refine",
+            "--miss-log",
+            str(miss_log),
+            "--source",
+            "benchmark",
+        ],
+    ):
+        main()
+
+    # Now promote
+    with patch("sys.argv", ["psa", "atlas", "promote-refinement"]):
+        main()
+
+    refined_path = atlas_dir / "anchor_cards_refined.json"
+    refined_meta_path = atlas_dir / "anchor_cards_refined.meta.json"
+    assert refined_path.exists()
+    assert refined_meta_path.exists()
+
+    # Candidate remains in place (not deleted)
+    assert (atlas_dir / "anchor_cards_candidate.json").exists()
+    assert (atlas_dir / "anchor_cards_candidate.meta.json").exists()
+
+    meta = json.loads(refined_meta_path.read_text())
+    assert meta["promoted"] is True
+    assert meta["promoted_at"] is not None
+    assert meta["source"] == "benchmark"  # preserved from candidate
+
+
+def test_promote_refinement_errors_when_no_candidate(tmp_path, monkeypatch, capsys):
+    """promote-refinement with no candidate exits non-zero."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    with patch("sys.argv", ["psa", "atlas", "promote-refinement"]):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    assert exc_info.value.code != 0
+
+    out = capsys.readouterr().out
+    assert "candidate" in out.lower()
+
+
+def test_promote_refinement_overwrites_previous_promotion(tmp_path, monkeypatch, capsys):
+    """Running promote twice replaces the refined artifact cleanly."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original"])
+
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text(
+        json.dumps({"query": "sample query text", "gold_anchor_ids": [1]}) + "\n"
+    )
+    with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
+        main()
+
+    with patch("sys.argv", ["psa", "atlas", "promote-refinement"]):
+        main()
+    first_meta = json.loads((atlas_dir / "anchor_cards_refined.meta.json").read_text())
+
+    # Re-refine with different source, re-promote
+    with patch(
+        "sys.argv",
+        [
+            "psa",
+            "atlas",
+            "refine",
+            "--miss-log",
+            str(miss_log),
+            "--source",
+            "oracle",
+        ],
+    ):
+        main()
+    with patch("sys.argv", ["psa", "atlas", "promote-refinement"]):
+        main()
+    second_meta = json.loads((atlas_dir / "anchor_cards_refined.meta.json").read_text())
+
+    assert second_meta["source"] == "oracle"
+    assert second_meta["promoted_at"] != first_meta["promoted_at"]

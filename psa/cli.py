@@ -346,7 +346,7 @@ def cmd_atlas(args):
     """Handle 'psa atlas <subcommand>'."""
     action = getattr(args, "atlas_action", None)
     if not action:
-        print("Usage: psa atlas {build,status,health,refine}")
+        print("Usage: psa atlas {build,status,health,refine,promote-refinement}")
         return
 
     if action in ("build", "rebuild"):
@@ -357,6 +357,8 @@ def cmd_atlas(args):
         _cmd_atlas_health(args)
     elif action == "refine":
         _cmd_atlas_refine(args)
+    elif action == "promote-refinement":
+        _cmd_atlas_refine_promote(args)
 
 
 def _cmd_atlas_build(args):
@@ -553,6 +555,62 @@ def _cmd_atlas_refine(args):
         f"patterns added: {n_patterns_added}"
     )
     print("  Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
+
+
+def _cmd_atlas_refine_promote(args):
+    """Promote the current candidate refinement into the live refined artifact."""
+    import datetime as _dt
+    import json
+    import shutil
+    from pathlib import Path
+
+    from .tenant import TenantManager
+    from .atlas import AtlasManager
+
+    tenant_id = getattr(args, "tenant", "default")
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+    version = mgr.latest_version()
+    if version is None:
+        print(f"  Error: no atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
+        sys.exit(1)
+
+    atlas_dir = Path(tenant.root_dir) / f"atlas_v{version}"
+    candidate_path = atlas_dir / "anchor_cards_candidate.json"
+    candidate_meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
+    refined_path = atlas_dir / "anchor_cards_refined.json"
+    refined_meta_path = atlas_dir / "anchor_cards_refined.meta.json"
+
+    if not candidate_path.exists():
+        print(f"  Error: no candidate to promote at {candidate_path}.")
+        print("  Run 'psa atlas refine --miss-log PATH' first.")
+        sys.exit(1)
+
+    # Copy cards verbatim
+    shutil.copyfile(candidate_path, refined_path)
+
+    # Rewrite meta with promoted=true / promoted_at=<now>, preserving source.
+    if candidate_meta_path.exists():
+        with open(candidate_meta_path) as f:
+            meta = json.load(f)
+    else:
+        # Candidate without meta — rare but handle gracefully.
+        meta = {
+            "source": "unknown",
+            "tenant_id": tenant_id,
+            "atlas_version": version,
+        }
+
+    meta["promoted"] = True
+    meta["promoted_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    with open(refined_meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"  Promoted: {candidate_path} → {refined_path}")
+    print(f"  Metadata: {refined_meta_path}")
+    print(f"  Source: {meta.get('source', 'unknown')}, promoted_at: {meta['promoted_at']}")
 
 
 def cmd_label(args):
@@ -1569,6 +1627,15 @@ def main():
             "'manual', 'benchmark', 'oracle', 'query_fingerprint'. "
             "Defaults to 'manual'. Stored in the candidate's .meta.json and "
             "preserved verbatim on promotion."
+        ),
+    )
+
+    atlas_sub.add_parser(
+        "promote-refinement",
+        help=(
+            "Promote the current atlas candidate (anchor_cards_candidate.json) to "
+            "the live refined artifact (anchor_cards_refined.json). This is the "
+            "only write path to the live refined file."
         ),
     )
 
