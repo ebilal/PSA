@@ -231,6 +231,20 @@ class AnchorIndex:
 
         if os.path.exists(refined_path):
             cards_path = refined_path
+            # Log provenance for the live refined artifact.
+            meta_path = os.path.join(path, "anchor_cards_refined.meta.json")
+            source = "unknown"
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as _f:
+                        source = json.load(_f).get("source", "unknown") or "unknown"
+                except (OSError, json.JSONDecodeError):
+                    source = "unknown"
+            logger.info(
+                "AnchorIndex loading refined cards from %s (source=%s)",
+                refined_path,
+                source,
+            )
         elif os.path.exists(raw_path):
             cards_path = raw_path
         else:

@@ -416,3 +416,114 @@ def test_from_dict_backward_compat_missing_query_fields():
     card = AnchorCard.from_dict(old_dict)
     assert card.generated_query_patterns == []
     assert card.query_fingerprint == []
+
+
+def test_anchor_index_load_logs_source_unknown_when_meta_missing(tmp_path, caplog):
+    """Loading a refined file with no sibling .meta.json logs source=unknown at INFO."""
+    import json
+    import logging
+    from psa.anchor import AnchorIndex
+
+    cards = [
+        {
+            "anchor_id": 1,
+            "name": "a",
+            "meaning": "m",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
+            "generated_query_patterns": [],
+            "query_fingerprint": [],
+        }
+    ]
+    (tmp_path / "anchor_cards_refined.json").write_text(json.dumps(cards))
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    caplog.set_level(logging.INFO, logger="psa.anchor")
+    AnchorIndex.load(str(tmp_path))
+
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("source=unknown" in m for m in msgs), msgs
+
+
+def test_anchor_index_load_logs_source_from_meta_file(tmp_path, caplog):
+    """Loading a refined file with a sibling .meta.json logs its source."""
+    import json
+    import logging
+    from psa.anchor import AnchorIndex
+
+    cards = [
+        {
+            "anchor_id": 1,
+            "name": "a",
+            "meaning": "m",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
+            "generated_query_patterns": [],
+            "query_fingerprint": [],
+        }
+    ]
+    (tmp_path / "anchor_cards_refined.json").write_text(json.dumps(cards))
+    (tmp_path / "anchor_cards_refined.meta.json").write_text(
+        json.dumps({"source": "oracle", "promoted": True})
+    )
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    caplog.set_level(logging.INFO, logger="psa.anchor")
+    AnchorIndex.load(str(tmp_path))
+
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("source=oracle" in m for m in msgs), msgs
+
+
+def test_anchor_index_load_ignores_candidate_when_no_refined(tmp_path):
+    """A candidate file alone does NOT cause auto-load; falls back to anchor_cards.json."""
+    import json
+    from psa.anchor import AnchorIndex
+
+    raw = [
+        {
+            "anchor_id": 1,
+            "name": "raw",
+            "meaning": "m",
+            "memory_types": ["semantic"],
+            "include_terms": [],
+            "exclude_terms": [],
+            "prototype_examples": [],
+            "near_but_different": [],
+            "centroid": [0.0] * 768,
+            "memory_count": 1,
+            "is_novelty": False,
+            "status": "active",
+            "metadata": {},
+            "generated_query_patterns": ["raw pattern"],
+            "query_fingerprint": [],
+        }
+    ]
+    candidate = [
+        {
+            **raw[0],
+            "generated_query_patterns": ["raw pattern", "candidate pattern"],
+        }
+    ]
+    (tmp_path / "anchor_cards.json").write_text(json.dumps(raw))
+    (tmp_path / "anchor_cards_candidate.json").write_text(json.dumps(candidate))
+    np.save(tmp_path / "centroids.npy", np.zeros((1, 768), dtype=np.float32))
+
+    idx = AnchorIndex.load(str(tmp_path))
+    assert idx._cards[0].generated_query_patterns == ["raw pattern"]
