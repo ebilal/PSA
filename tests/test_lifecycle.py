@@ -84,3 +84,26 @@ def test_retrain_selector_gates_not_met_leaves_state():
     assert result is False
     assert state["selector_mode"] == "cosine"
     assert "selector_model_path" not in state
+
+
+def test_lifecycle_source_does_not_reference_benchmark_path():
+    """Regression: lifecycle.py must not auto-train from benchmark artifacts.
+
+    Benchmark-derived memory scorer training used to run in the slow path.
+    That's a research/production boundary violation; the block was removed
+    in Branch 2. This test locks the removal.
+    """
+    import inspect
+
+    import psa.lifecycle as _mod
+
+    src = inspect.getsource(_mod)
+    assert "benchmarks/longmemeval" not in src, (
+        "lifecycle.py must not reference the benchmark results directory"
+    )
+    assert "MemoryScorerTrainer" not in src, (
+        "lifecycle.py must not import or call MemoryScorerTrainer"
+    )
+    assert 'mode="benchmark"' not in src and "mode='benchmark'" not in src, (
+        "lifecycle.py must not invoke any trainer with mode=benchmark"
+    )

@@ -1697,7 +1697,12 @@ def main():
     p_train.add_argument(
         "--memory-scorer",
         action="store_true",
-        help="Also train memory-level re-ranker (requires benchmark results)",
+        help=(
+            "Train memory-level re-ranker from benchmark results at "
+            "~/.psa/benchmarks/longmemeval/results_*.jsonl. "
+            "Research-only; produces a benchmark-derived model. "
+            "Revisit in Branch 3 once a production-signal path exists."
+        ),
     )
 
     # inspect
