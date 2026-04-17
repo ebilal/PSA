@@ -282,6 +282,10 @@ def test_promote_refinement_creates_refined_and_meta(tmp_path, monkeypatch, caps
     assert meta["promoted"] is True
     assert meta["promoted_at"] is not None
     assert meta["source"] == "benchmark"  # preserved from candidate
+    out = capsys.readouterr().out
+    assert "psa train --coactivation --force" in out, (
+        "promote output must name the recalibration command"
+    )
 
 
 def test_promote_refinement_errors_when_no_candidate(tmp_path, monkeypatch, capsys):

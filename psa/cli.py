@@ -346,7 +346,7 @@ def cmd_atlas(args):
     """Handle 'psa atlas <subcommand>'."""
     action = getattr(args, "atlas_action", None)
     if not action:
-        print("Usage: psa atlas {build,status,health,refine,promote-refinement}")
+        print("Usage: psa atlas {build,status,health,refine,promote-refinement,curate}")
         return
 
     if action in ("build", "rebuild"):
@@ -359,6 +359,8 @@ def cmd_atlas(args):
         _cmd_atlas_refine(args)
     elif action == "promote-refinement":
         _cmd_atlas_refine_promote(args)
+    elif action == "curate":
+        _cmd_atlas_curate(args)
 
 
 def _cmd_atlas_build(args):
@@ -611,6 +613,49 @@ def _cmd_atlas_refine_promote(args):
     print(f"  Promoted: {candidate_path} → {refined_path}")
     print(f"  Metadata: {refined_meta_path}")
     print(f"  Source: {meta.get('source', 'unknown')}, promoted_at: {meta['promoted_at']}")
+    print("  Run 'psa train --coactivation --force' to recalibrate the selector against the promoted cards.")
+
+
+def _cmd_atlas_curate(args):
+    """Run production-signal curation for the current atlas."""
+    from .curation.curator import curate
+
+    tenant_id = getattr(args, "tenant", "default")
+    extractor_name = getattr(args, "extractor", "heuristic")
+
+    try:
+        summary = curate(tenant_id=tenant_id, extractor_name=extractor_name)
+    except NotImplementedError as e:
+        # LLM extractor stub — message already names extractor_llm.py
+        print(f"  Error: {e}")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
+
+    print(
+        f"  Oracle labels read: {summary['oracle_labels_read']}, "
+        f"fingerprints read: {summary['fingerprints_read']}"
+    )
+    print(
+        f"  Anchors with oracle support: {summary['n_anchors_with_oracle_support']}, "
+        f"with endorsed fingerprints: {summary['n_anchors_with_endorsed_fingerprints']}"
+    )
+
+    if not summary["wrote_candidate"]:
+        print(f"  Skipped candidate write: {summary['reason']}")
+        return
+
+    print(
+        f"  Anchors touched: {summary['n_anchors_touched']}, "
+        f"patterns added: {summary['n_patterns_added']}"
+    )
+    print(f"  Candidate written to {summary['candidate_path']}")
+    print(
+        f"  Extractor: {summary['extractor']}, "
+        f"support_semantics: {summary['support_semantics']}"
+    )
+    print("  Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
 
 
 def cmd_label(args):
@@ -1636,6 +1681,25 @@ def main():
             "Promote the current atlas candidate (anchor_cards_candidate.json) to "
             "the live refined artifact (anchor_cards_refined.json). This is the "
             "only write path to the live refined file."
+        ),
+    )
+
+    p_atlas_curate = atlas_sub.add_parser(
+        "curate",
+        help=(
+            "Build a candidate refinement from production signals "
+            "(query fingerprints + oracle labels). Output is never "
+            "inference-visible; run `psa atlas promote-refinement` to promote."
+        ),
+    )
+    p_atlas_curate.add_argument(
+        "--extractor",
+        default="heuristic",
+        choices=["heuristic", "llm"],
+        help=(
+            "Extractor backend. 'heuristic' (default) uses ngram extraction. "
+            "'llm' is a reserved architectural slot; passing it in MVP exits "
+            "non-zero with a pointer to psa/curation/extractor_llm.py."
         ),
     )
 
