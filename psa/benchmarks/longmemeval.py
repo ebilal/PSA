@@ -205,7 +205,7 @@ def run(
             question = example.get("question", "")
             gold_answer = example.get("answer", "")
 
-            result = pipeline.query(question)
+            result = pipeline.query(question, query_origin="benchmark")
             context_text = result.text
 
             messages = [

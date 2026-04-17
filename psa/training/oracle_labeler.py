@@ -439,7 +439,9 @@ class OracleLabeler:
         OracleLabel with the winning oracle anchor set.
         """
         # Step 1: Retrieve candidates
-        result = self.pipeline.query(query, top_k_candidates=top_k_candidates)
+        result = self.pipeline.query(
+            query, top_k_candidates=top_k_candidates, query_origin="labeling"
+        )
         candidates = result.candidates
         candidate_ids = [c.anchor_id for c in candidates]
 

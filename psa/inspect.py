@@ -209,7 +209,7 @@ def inspect_query(
         token_budget=token_budget,
         base_dir=base_dir,
     )
-    result = pipeline.query(query)
+    result = pipeline.query(query, query_origin="inspect")
 
     selected_ids = {s.anchor_id for s in result.selected_anchors}
     selector_score_by_id = {s.anchor_id: s.selector_score for s in result.selected_anchors}
