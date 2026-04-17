@@ -455,6 +455,49 @@ def _match_anchors(
     return matched
 
 
+def inherit_pattern_metadata(
+    old_atlas_dir: str, new_atlas_dir: str, new_cards: list[dict]
+) -> None:
+    """Copy pattern_metadata.json entries from old atlas to new for matched patterns.
+
+    Walks `new_cards` (the just-built atlas) and looks up each
+    (anchor_id, normalize_pattern(pattern)) in the old metadata file. When
+    found, carries the entry forward verbatim. Orphan entries (old patterns
+    absent from new atlas) are dropped. New patterns (not in old metadata)
+    are left unstamped — they'll be backfilled on the next decay run.
+
+    See spec §1.1.
+    """
+    from .forgetting.metadata import FILENAME, normalize_pattern
+
+    old_path = os.path.join(old_atlas_dir, FILENAME)
+    if not os.path.exists(old_path):
+        return
+    try:
+        with open(old_path, encoding="utf-8") as f:
+            old_meta = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not read %s during inheritance: %s", old_path, e)
+        return
+
+    new_meta: dict[str, dict] = {}
+    for card in new_cards:
+        anchor_id = card.get("anchor_id")
+        if anchor_id is None:
+            continue
+        for pattern in card.get("generated_query_patterns") or []:
+            key = f"{anchor_id}::{normalize_pattern(pattern)}"
+            if key in old_meta:
+                new_meta[key] = old_meta[key]
+
+    os.makedirs(new_atlas_dir, exist_ok=True)
+    new_path = os.path.join(new_atlas_dir, FILENAME)
+    tmp_path = new_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(new_meta, f, indent=2)
+    os.replace(tmp_path, new_path)
+
+
 # ── AtlasBuilder ──────────────────────────────────────────────────────────────
 
 
@@ -753,6 +796,16 @@ class AtlasBuilder:
         for card in atlas.cards:
             card.query_fingerprint = atlas.fingerprint_store.get(card.anchor_id)
         new_fingerprints.save()
+
+        # Carry pattern_metadata.json forward for matched (anchor_id, pattern)
+        # pairs. See spec §1.1 — without this, the advertisement-forgetting
+        # clock resets on every atlas rebuild.
+        if previous_atlas is not None:
+            inherit_pattern_metadata(
+                old_atlas_dir=previous_atlas.anchor_dir,
+                new_atlas_dir=output_dir,
+                new_cards=[card.to_dict() for card in atlas.cards],
+            )
 
         logger.info(
             "Atlas v%d built: %d learned + %d novelty anchors, stability=%.3f",
