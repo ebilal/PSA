@@ -613,7 +613,9 @@ def _cmd_atlas_refine_promote(args):
     print(f"  Promoted: {candidate_path} → {refined_path}")
     print(f"  Metadata: {refined_meta_path}")
     print(f"  Source: {meta.get('source', 'unknown')}, promoted_at: {meta['promoted_at']}")
-    print("  Run 'psa train --coactivation --force' to recalibrate the selector against the promoted cards.")
+    print(
+        "  Run 'psa train --coactivation --force' to recalibrate the selector against the promoted cards."
+    )
 
 
 def _cmd_atlas_curate(args):
@@ -651,10 +653,7 @@ def _cmd_atlas_curate(args):
         f"patterns added: {summary['n_patterns_added']}"
     )
     print(f"  Candidate written to {summary['candidate_path']}")
-    print(
-        f"  Extractor: {summary['extractor']}, "
-        f"support_semantics: {summary['support_semantics']}"
-    )
+    print(f"  Extractor: {summary['extractor']}, support_semantics: {summary['support_semantics']}")
     print("  Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
 
 

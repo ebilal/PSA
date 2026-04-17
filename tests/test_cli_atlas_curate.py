@@ -36,20 +36,22 @@ def _write_atlas(atlas_dir: Path, anchor_ids: list[int], patterns: dict[int, lis
     np.save(atlas_dir / "centroids.npy", np.zeros((len(anchor_ids), 768), dtype=np.float32))
     # Match the real AtlasStats dataclass field names (see psa/atlas.py).
     (atlas_dir / "atlas_meta.json").write_text(
-        json.dumps({
-            "version": 1,
-            "tenant_id": "test",
-            "stats": {
-                "n_memories": len(anchor_ids),
-                "n_anchors_learned": len(anchor_ids),
-                "n_anchors_novelty": 0,
-                "mean_cluster_size": 1.0,
-                "min_cluster_size": 1,
-                "max_cluster_size": 1,
-                "stability_score": 1.0,
-                "built_at": "2026-04-17T00:00:00+00:00",
-            },
-        })
+        json.dumps(
+            {
+                "version": 1,
+                "tenant_id": "test",
+                "stats": {
+                    "n_memories": len(anchor_ids),
+                    "n_anchors_learned": len(anchor_ids),
+                    "n_anchors_novelty": 0,
+                    "mean_cluster_size": 1.0,
+                    "min_cluster_size": 1,
+                    "max_cluster_size": 1,
+                    "stability_score": 1.0,
+                    "built_at": "2026-04-17T00:00:00+00:00",
+                },
+            }
+        )
     )
 
 
@@ -67,7 +69,10 @@ def test_cli_atlas_curate_writes_candidate(tmp_path, monkeypatch, capsys):
     labels = tenant_dir / "training" / "oracle_labels.jsonl"
     labels.parent.mkdir(parents=True, exist_ok=True)
     labels.write_text(
-        json.dumps({"query": "how does the auth token refresh flow work", "winning_oracle_set": [1]}) + "\n"
+        json.dumps(
+            {"query": "how does the auth token refresh flow work", "winning_oracle_set": [1]}
+        )
+        + "\n"
     )
     with open(atlas_dir / "fingerprints.json", "w") as f:
         json.dump({"1": ["how does the auth token refresh flow work"]}, f)

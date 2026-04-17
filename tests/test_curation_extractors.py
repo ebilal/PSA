@@ -33,7 +33,7 @@ def test_heuristic_extractor_dedupes_across_pool():
     extractor = HeuristicExtractor()
     pool = [
         "refresh access token flow",
-        "refresh access token flow",   # exact duplicate query
+        "refresh access token flow",  # exact duplicate query
     ]
     out = extractor.extract(pool, n=50)
     # No repeated ngrams across the two identical queries.

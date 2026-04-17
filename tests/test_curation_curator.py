@@ -81,10 +81,13 @@ def test_curate_happy_path_writes_candidate_and_meta(tmp_path, monkeypatch):
     _write_atlas_dir(atlas_dir, [1, 2], patterns={1: [], 2: []})
 
     labels_path = tenant_dir / "training" / "oracle_labels.jsonl"
-    _write_oracle_labels(labels_path, [
-        {"query": "how does the token refresh flow work", "winning_oracle_set": [1]},
-        {"query": "what is the user session expiry", "winning_oracle_set": [2]},
-    ])
+    _write_oracle_labels(
+        labels_path,
+        [
+            {"query": "how does the token refresh flow work", "winning_oracle_set": [1]},
+            {"query": "what is the user session expiry", "winning_oracle_set": [2]},
+        ],
+    )
     _write_fingerprints(atlas_dir, {1: ["how does the token refresh flow work"], 2: []})
 
     summary = curate(tenant_id="default", extractor_name="heuristic")
@@ -157,15 +160,19 @@ def test_curate_skips_write_when_all_patterns_duplicate(tmp_path, monkeypatch):
     # produce from the oracle query below, so extractor output fully
     # duplicates. Compute seeded list by calling extract_ngrams directly.
     from psa.curation.ngrams import extract_ngrams
+
     query_text = "how does the token refresh flow work"
     seeded = extract_ngrams(query_text)
 
     _write_atlas_dir(atlas_dir, [1], patterns={1: seeded})
 
     labels_path = tenant_dir / "training" / "oracle_labels.jsonl"
-    _write_oracle_labels(labels_path, [
-        {"query": query_text, "winning_oracle_set": [1]},
-    ])
+    _write_oracle_labels(
+        labels_path,
+        [
+            {"query": query_text, "winning_oracle_set": [1]},
+        ],
+    )
 
     summary = curate(tenant_id="default", extractor_name="heuristic")
 
@@ -187,6 +194,7 @@ def test_curate_rejects_unknown_extractor(tmp_path, monkeypatch):
     _write_atlas_dir(atlas_dir, [1], patterns={1: []})
 
     import pytest
+
     with pytest.raises(ValueError, match="extractor"):
         curate(tenant_id="default", extractor_name="bogus")
 
@@ -203,10 +211,14 @@ def test_curate_llm_extractor_raises_notimplemented(tmp_path, monkeypatch):
     _write_atlas_dir(atlas_dir, [1], patterns={1: []})
 
     labels_path = tenant_dir / "training" / "oracle_labels.jsonl"
-    _write_oracle_labels(labels_path, [
-        {"query": "a query", "winning_oracle_set": [1]},
-    ])
+    _write_oracle_labels(
+        labels_path,
+        [
+            {"query": "a query", "winning_oracle_set": [1]},
+        ],
+    )
 
     import pytest
+
     with pytest.raises(NotImplementedError):
         curate(tenant_id="default", extractor_name="llm")

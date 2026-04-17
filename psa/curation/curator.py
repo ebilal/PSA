@@ -35,9 +35,7 @@ def _make_extractor(name: str):
         return HeuristicExtractor()
     if name == "llm":
         return LLMExtractor()
-    raise ValueError(
-        f"Unknown extractor: {name!r}. Must be 'heuristic' or 'llm'."
-    )
+    raise ValueError(f"Unknown extractor: {name!r}. Must be 'heuristic' or 'llm'.")
 
 
 def curate(tenant_id: str = "default", extractor_name: str = "heuristic") -> dict[str, Any]:
@@ -65,9 +63,7 @@ def curate(tenant_id: str = "default", extractor_name: str = "heuristic") -> dic
     mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
     atlas = mgr.get_atlas()
     if atlas is None:
-        raise FileNotFoundError(
-            f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first."
-        )
+        raise FileNotFoundError(f"No atlas for tenant '{tenant_id}'. Run 'psa atlas build' first.")
 
     extractor = _make_extractor(extractor_name)
 
