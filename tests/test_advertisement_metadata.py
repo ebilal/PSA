@@ -1,4 +1,4 @@
-"""Tests for psa.forgetting.metadata — pattern metadata storage."""
+"""Tests for psa.advertisement.metadata — pattern metadata storage."""
 
 from __future__ import annotations
 
@@ -6,31 +6,31 @@ import json
 
 
 def test_normalize_pattern_strips_and_lowercases():
-    from psa.forgetting.metadata import normalize_pattern
+    from psa.advertisement.metadata import normalize_pattern
 
     assert normalize_pattern("  HELLO World  ") == "hello world"
 
 
 def test_normalize_pattern_collapses_whitespace():
-    from psa.forgetting.metadata import normalize_pattern
+    from psa.advertisement.metadata import normalize_pattern
 
     assert normalize_pattern("foo   bar\t baz") == "foo bar baz"
 
 
 def test_metadata_key_format():
-    from psa.forgetting.metadata import metadata_key
+    from psa.advertisement.metadata import metadata_key
 
     assert metadata_key(227, "What Is This?") == "227::what is this?"
 
 
 def test_load_metadata_missing_file_returns_empty_dict(tmp_path):
-    from psa.forgetting.metadata import load_metadata
+    from psa.advertisement.metadata import load_metadata
 
     assert load_metadata(str(tmp_path)) == {}
 
 
 def test_save_and_load_roundtrip(tmp_path):
-    from psa.forgetting.metadata import PatternMetadata, load_metadata, save_metadata
+    from psa.advertisement.metadata import PatternMetadata, load_metadata, save_metadata
 
     meta = {
         "1::hello world": PatternMetadata(
@@ -50,11 +50,12 @@ def test_save_and_load_roundtrip(tmp_path):
 
 def test_save_is_atomic_via_tmp_file(tmp_path):
     """The writer uses os.replace — no half-written state if interrupted."""
-    from psa.forgetting.metadata import PatternMetadata, save_metadata
+    from psa.advertisement.metadata import PatternMetadata, save_metadata
 
     meta = {
-        "1::x": PatternMetadata(anchor_id=1, pattern="x", source="manual",
-                                created_at="2026-04-17T00:00:00+00:00"),
+        "1::x": PatternMetadata(
+            anchor_id=1, pattern="x", source="manual", created_at="2026-04-17T00:00:00+00:00"
+        ),
     }
     save_metadata(str(tmp_path), meta)
     # After save, the tmp file should not remain.
@@ -64,7 +65,7 @@ def test_save_is_atomic_via_tmp_file(tmp_path):
 
 def test_load_tolerates_unknown_future_fields(tmp_path):
     """Extra keys in the JSON entries (e.g., reserved pinned, promoted_at) don't crash load."""
-    from psa.forgetting.metadata import load_metadata
+    from psa.advertisement.metadata import load_metadata
 
     raw = {
         "1::x": {
@@ -86,7 +87,7 @@ def test_backfill_unknown_stamps_new_patterns(tmp_path):
 
     Does NOT mutate entries that already exist.
     """
-    from psa.forgetting.metadata import (
+    from psa.advertisement.metadata import (
         PatternMetadata,
         backfill_unknown,
         metadata_key,
@@ -94,7 +95,9 @@ def test_backfill_unknown_stamps_new_patterns(tmp_path):
 
     existing = {
         metadata_key(1, "old pattern"): PatternMetadata(
-            anchor_id=1, pattern="old pattern", source="manual",
+            anchor_id=1,
+            pattern="old pattern",
+            source="manual",
             created_at="2020-01-01T00:00:00+00:00",
         )
     }

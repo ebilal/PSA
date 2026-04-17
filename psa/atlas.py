@@ -455,9 +455,7 @@ def _match_anchors(
     return matched
 
 
-def inherit_pattern_metadata(
-    old_atlas_dir: str, new_atlas_dir: str, new_cards: list[dict]
-) -> None:
+def inherit_pattern_metadata(old_atlas_dir: str, new_atlas_dir: str, new_cards: list[dict]) -> None:
     """Copy pattern_metadata.json entries from old atlas to new for matched patterns.
 
     Walks `new_cards` (the just-built atlas) and looks up each
@@ -468,7 +466,7 @@ def inherit_pattern_metadata(
 
     See spec §1.1.
     """
-    from .forgetting.metadata import FILENAME, normalize_pattern
+    from .advertisement.metadata import FILENAME, normalize_pattern
 
     old_path = os.path.join(old_atlas_dir, FILENAME)
     if not os.path.exists(old_path):

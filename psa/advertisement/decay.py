@@ -26,7 +26,7 @@ from .metadata import (
 )
 from .reinforcement import compute_reinforcement
 
-logger = logging.getLogger("psa.forgetting.decay")
+logger = logging.getLogger("psa.advertisement.decay")
 
 REASON_STALE = "stale_unreinforced"
 
@@ -173,9 +173,7 @@ def decay_report(
     """Run a decay pass. Returns a DecayReport; persists only metadata backfill."""
     atlas = _load_atlas_for_tenant(tenant_id)
     if atlas is None:
-        raise FileNotFoundError(
-            f"No atlas for tenant {tenant_id!r}. Run 'psa atlas build' first."
-        )
+        raise FileNotFoundError(f"No atlas for tenant {tenant_id!r}. Run 'psa atlas build' first.")
 
     now = _now_utc()
     now_iso = now.isoformat()
@@ -193,12 +191,18 @@ def decay_report(
     # Derive reinforcement (ephemeral).
     trace_path = _trace_path(tenant_id)
     reinforcement = compute_reinforcement(
-        atlas, trace_path, origins=origins, window_start=window_start,
+        atlas,
+        trace_path,
+        origins=origins,
+        window_start=window_start,
     )
 
     # Activation counts + shielded anchors (P1).
     activation_counts = _compute_activation_counts(
-        atlas, trace_path, origins, window_start,
+        atlas,
+        trace_path,
+        origins,
+        window_start,
     )
     shielded = _shielded_anchors(activation_counts, params)
 
@@ -252,14 +256,16 @@ def decay_report(
                     continue
 
             # It's a decay candidate.
-            removed.append(RemovedPattern(
-                anchor_id=card.anchor_id,
-                pattern=pattern,
-                source=meta.source,
-                created_at=meta.created_at,
-                last_reinforced_at=last_ts.isoformat() if last_ts else None,
-                reason=REASON_STALE,
-            ))
+            removed.append(
+                RemovedPattern(
+                    anchor_id=card.anchor_id,
+                    pattern=pattern,
+                    source=meta.source,
+                    created_at=meta.created_at,
+                    last_reinforced_at=last_ts.isoformat() if last_ts else None,
+                    reason=REASON_STALE,
+                )
+            )
             by_source[meta.source] = by_source.get(meta.source, 0) + 1
             anchors_touched.add(card.anchor_id)
 

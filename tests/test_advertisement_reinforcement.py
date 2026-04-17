@@ -1,4 +1,4 @@
-"""Tests for psa.forgetting.reinforcement — derived per-run reinforcement map."""
+"""Tests for psa.advertisement.reinforcement — derived per-run reinforcement map."""
 
 from __future__ import annotations
 
@@ -28,22 +28,26 @@ def _fake_atlas_with_patterns(patterns_by_anchor: dict[int, list[str]]) -> Magic
 
 
 def test_reinforcement_substring_match_activates(tmp_path):
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     trace_path = tmp_path / "query_trace.jsonl"
-    _write_trace(trace_path, [
-        {
-            "timestamp": "2026-04-15T10:00:00+00:00",
-            "query": "how does the token refresh flow work in prod",
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-        },
-    ])
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-15T10:00:00+00:00",
+                "query": "how does the token refresh flow work in prod",
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+            },
+        ],
+    )
     atlas = _fake_atlas_with_patterns({1: ["token refresh flow"]})
 
     window_start = datetime.fromisoformat("2026-04-01T00:00:00+00:00")
     rmap = compute_reinforcement(
-        atlas, str(trace_path),
+        atlas,
+        str(trace_path),
         origins={"interactive"},
         window_start=window_start,
     )
@@ -52,21 +56,25 @@ def test_reinforcement_substring_match_activates(tmp_path):
 
 def test_reinforcement_without_activation_does_not_count(tmp_path):
     """Anchor didn't activate — pattern is not reinforced even if substring matches."""
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     trace_path = tmp_path / "query_trace.jsonl"
-    _write_trace(trace_path, [
-        {
-            "timestamp": "2026-04-15T10:00:00+00:00",
-            "query": "token refresh flow details",
-            "query_origin": "interactive",
-            "selected_anchor_ids": [2],  # anchor 2 selected, not 1
-        },
-    ])
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-15T10:00:00+00:00",
+                "query": "token refresh flow details",
+                "query_origin": "interactive",
+                "selected_anchor_ids": [2],  # anchor 2 selected, not 1
+            },
+        ],
+    )
     atlas = _fake_atlas_with_patterns({1: ["token refresh flow"]})
 
     rmap = compute_reinforcement(
-        atlas, str(trace_path),
+        atlas,
+        str(trace_path),
         origins={"interactive"},
         window_start=datetime.fromisoformat("2026-04-01T00:00:00+00:00"),
     )
@@ -74,21 +82,25 @@ def test_reinforcement_without_activation_does_not_count(tmp_path):
 
 
 def test_reinforcement_origin_filter_excludes_benchmark(tmp_path):
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     trace_path = tmp_path / "query_trace.jsonl"
-    _write_trace(trace_path, [
-        {
-            "timestamp": "2026-04-15T10:00:00+00:00",
-            "query": "token refresh flow",
-            "query_origin": "benchmark",
-            "selected_anchor_ids": [1],
-        },
-    ])
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-15T10:00:00+00:00",
+                "query": "token refresh flow",
+                "query_origin": "benchmark",
+                "selected_anchor_ids": [1],
+            },
+        ],
+    )
     atlas = _fake_atlas_with_patterns({1: ["token refresh flow"]})
 
     rmap = compute_reinforcement(
-        atlas, str(trace_path),
+        atlas,
+        str(trace_path),
         origins={"interactive"},
         window_start=datetime.fromisoformat("2026-04-01T00:00:00+00:00"),
     )
@@ -96,21 +108,25 @@ def test_reinforcement_origin_filter_excludes_benchmark(tmp_path):
 
 
 def test_reinforcement_window_bound_excludes_old_records(tmp_path):
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     trace_path = tmp_path / "query_trace.jsonl"
-    _write_trace(trace_path, [
-        {
-            "timestamp": "2020-01-01T00:00:00+00:00",   # way before window
-            "query": "token refresh flow",
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-        },
-    ])
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2020-01-01T00:00:00+00:00",  # way before window
+                "query": "token refresh flow",
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+            },
+        ],
+    )
     atlas = _fake_atlas_with_patterns({1: ["token refresh flow"]})
 
     rmap = compute_reinforcement(
-        atlas, str(trace_path),
+        atlas,
+        str(trace_path),
         origins={"interactive"},
         window_start=datetime.fromisoformat("2026-04-01T00:00:00+00:00"),
     )
@@ -118,33 +134,37 @@ def test_reinforcement_window_bound_excludes_old_records(tmp_path):
 
 
 def test_reinforcement_takes_most_recent_match(tmp_path):
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     trace_path = tmp_path / "query_trace.jsonl"
-    _write_trace(trace_path, [
-        {
-            "timestamp": "2026-04-10T00:00:00+00:00",
-            "query": "token refresh flow",
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-        },
-        {
-            "timestamp": "2026-04-15T00:00:00+00:00",
-            "query": "refresh flow token",  # still substring-matches "token refresh flow"? No.
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-        },
-        {
-            "timestamp": "2026-04-20T00:00:00+00:00",
-            "query": "the token refresh flow in prod",
-            "query_origin": "interactive",
-            "selected_anchor_ids": [1],
-        },
-    ])
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-10T00:00:00+00:00",
+                "query": "token refresh flow",
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+            },
+            {
+                "timestamp": "2026-04-15T00:00:00+00:00",
+                "query": "refresh flow token",  # still substring-matches "token refresh flow"? No.
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+            },
+            {
+                "timestamp": "2026-04-20T00:00:00+00:00",
+                "query": "the token refresh flow in prod",
+                "query_origin": "interactive",
+                "selected_anchor_ids": [1],
+            },
+        ],
+    )
     atlas = _fake_atlas_with_patterns({1: ["token refresh flow"]})
 
     rmap = compute_reinforcement(
-        atlas, str(trace_path),
+        atlas,
+        str(trace_path),
         origins={"interactive"},
         window_start=datetime.fromisoformat("2026-04-01T00:00:00+00:00"),
     )
@@ -154,11 +174,12 @@ def test_reinforcement_takes_most_recent_match(tmp_path):
 
 
 def test_reinforcement_missing_trace_file_returns_empty(tmp_path):
-    from psa.forgetting.reinforcement import compute_reinforcement
+    from psa.advertisement.reinforcement import compute_reinforcement
 
     atlas = _fake_atlas_with_patterns({1: ["anything"]})
     rmap = compute_reinforcement(
-        atlas, str(tmp_path / "does_not_exist.jsonl"),
+        atlas,
+        str(tmp_path / "does_not_exist.jsonl"),
         origins={"interactive"},
         window_start=datetime.fromisoformat("2026-04-01T00:00:00+00:00"),
     )

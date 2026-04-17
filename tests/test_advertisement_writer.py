@@ -1,4 +1,4 @@
-"""Tests for psa.forgetting.writer — candidate + meta + detail file writes."""
+"""Tests for psa.advertisement.writer — candidate + meta + detail file writes."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 
 def _make_report(tmp_path, n_removed=1):
-    from psa.forgetting.decay import (
+    from psa.advertisement.decay import (
         DecayParams,
         DecayReport,
         RemovedPattern,
@@ -16,11 +16,16 @@ def _make_report(tmp_path, n_removed=1):
     atlas_dir.mkdir()
     removed = []
     if n_removed >= 1:
-        removed = [RemovedPattern(
-            anchor_id=1, pattern="stale pattern", source="manual",
-            created_at="2020-01-01T00:00:00+00:00",
-            last_reinforced_at=None, reason="stale_unreinforced",
-        )]
+        removed = [
+            RemovedPattern(
+                anchor_id=1,
+                pattern="stale pattern",
+                source="manual",
+                created_at="2020-01-01T00:00:00+00:00",
+                last_reinforced_at=None,
+                reason="stale_unreinforced",
+            )
+        ]
     return atlas_dir, DecayReport(
         tenant_id="default",
         atlas_version=1,
@@ -43,7 +48,7 @@ def _make_report(tmp_path, n_removed=1):
 
 
 def test_write_decay_candidate_writes_three_files(tmp_path):
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path)
     wrote = write_decay_candidate(str(atlas_dir), report)
@@ -55,7 +60,7 @@ def test_write_decay_candidate_writes_three_files(tmp_path):
 
 
 def test_candidate_cards_has_refined_patterns(tmp_path):
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path)
     write_decay_candidate(str(atlas_dir), report)
@@ -67,7 +72,7 @@ def test_candidate_cards_has_refined_patterns(tmp_path):
 def test_meta_is_summary_no_removed_patterns(tmp_path):
     """anchor_cards_candidate.meta.json must NOT include removed_patterns
     (that belongs in the decay_report file, not the meta summary)."""
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path)
     write_decay_candidate(str(atlas_dir), report)
@@ -80,7 +85,7 @@ def test_meta_is_summary_no_removed_patterns(tmp_path):
 
 
 def test_decay_report_has_full_detail(tmp_path):
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path)
     write_decay_candidate(str(atlas_dir), report)
@@ -93,7 +98,7 @@ def test_decay_report_has_full_detail(tmp_path):
 
 def test_empty_run_skips_all_writes(tmp_path):
     """When n_patterns_removed == 0, no candidate files are written."""
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path, n_removed=0)
     wrote = write_decay_candidate(str(atlas_dir), report)
@@ -106,7 +111,7 @@ def test_empty_run_skips_all_writes(tmp_path):
 
 def test_origins_serialized_sorted(tmp_path):
     """origins set becomes a sorted list in the meta for stable JSON output."""
-    from psa.forgetting.writer import write_decay_candidate
+    from psa.advertisement.writer import write_decay_candidate
 
     atlas_dir, report = _make_report(tmp_path)
     report.origins = {"benchmark", "interactive"}

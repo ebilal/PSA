@@ -24,7 +24,7 @@ from typing import Any
 
 from .metadata import metadata_key, normalize_pattern
 
-logger = logging.getLogger("psa.forgetting.reinforcement")
+logger = logging.getLogger("psa.advertisement.reinforcement")
 
 
 def compute_reinforcement(
@@ -50,9 +50,7 @@ def compute_reinforcement(
     for card in atlas.cards:
         patterns = getattr(card, "generated_query_patterns", []) or []
         if patterns:
-            pattern_index[card.anchor_id] = [
-                (normalize_pattern(p), p) for p in patterns
-            ]
+            pattern_index[card.anchor_id] = [(normalize_pattern(p), p) for p in patterns]
 
     rmap: dict[str, datetime] = {}
     with open(trace_path, encoding="utf-8") as f:

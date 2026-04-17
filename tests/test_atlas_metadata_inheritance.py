@@ -21,14 +21,17 @@ def test_inherit_matched_anchor_and_pattern_copies_metadata(tmp_path):
     new_dir = tmp_path / "atlas_v2"
     new_dir.mkdir()
 
-    _seed_metadata(old_dir, [
-        {
-            "anchor_id": 1,
-            "pattern": "old pattern",
-            "source": "manual",
-            "created_at": "2020-01-01T00:00:00+00:00",
-        }
-    ])
+    _seed_metadata(
+        old_dir,
+        [
+            {
+                "anchor_id": 1,
+                "pattern": "old pattern",
+                "source": "manual",
+                "created_at": "2020-01-01T00:00:00+00:00",
+            }
+        ],
+    )
 
     # New atlas has the same pattern on the same anchor.
     new_cards = [
@@ -49,10 +52,17 @@ def test_inherit_drops_orphans(tmp_path):
     new_dir = tmp_path / "atlas_v2"
     new_dir.mkdir()
 
-    _seed_metadata(old_dir, [
-        {"anchor_id": 1, "pattern": "retired pattern", "source": "manual",
-         "created_at": "2020-01-01T00:00:00+00:00"},
-    ])
+    _seed_metadata(
+        old_dir,
+        [
+            {
+                "anchor_id": 1,
+                "pattern": "retired pattern",
+                "source": "manual",
+                "created_at": "2020-01-01T00:00:00+00:00",
+            },
+        ],
+    )
     # New atlas has a different pattern for anchor 1.
     new_cards = [
         {"anchor_id": 1, "generated_query_patterns": ["fresh pattern"]},
@@ -91,15 +101,18 @@ def test_inherit_preserves_pinned_flag(tmp_path):
     new_dir = tmp_path / "atlas_v2"
     new_dir.mkdir()
 
-    _seed_metadata(old_dir, [
-        {
-            "anchor_id": 1,
-            "pattern": "pinned one",
-            "source": "manual",
-            "created_at": "2020-01-01T00:00:00+00:00",
-            "pinned": True,
-        }
-    ])
+    _seed_metadata(
+        old_dir,
+        [
+            {
+                "anchor_id": 1,
+                "pattern": "pinned one",
+                "source": "manual",
+                "created_at": "2020-01-01T00:00:00+00:00",
+                "pinned": True,
+            }
+        ],
+    )
     new_cards = [
         {"anchor_id": 1, "generated_query_patterns": ["pinned one"]},
     ]

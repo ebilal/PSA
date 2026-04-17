@@ -665,8 +665,8 @@ def _cmd_atlas_decay(args):
     from dataclasses import asdict
     from pathlib import Path
 
-    from .forgetting.decay import DecayParams, decay_report
-    from .forgetting.writer import write_decay_candidate
+    from .advertisement.decay import DecayParams, decay_report
+    from .advertisement.writer import write_decay_candidate
 
     tenant_id = getattr(args, "tenant", "default")
 
@@ -682,10 +682,10 @@ def _cmd_atlas_decay(args):
     params = DecayParams(
         grace_days=_pick(args.grace_days, "grace_days", 30),
         decay_window_days=_pick(args.decay_window_days, "decay_window_days", 60),
-        low_activation_percentile=_pick(args.low_activation_percentile,
-                                        "low_activation_percentile", 25.0),
-        min_anchor_activations=_pick(args.min_anchor_activations,
-                                     "min_anchor_activations", 10),
+        low_activation_percentile=_pick(
+            args.low_activation_percentile, "low_activation_percentile", 25.0
+        ),
+        min_anchor_activations=_pick(args.min_anchor_activations, "min_anchor_activations", 10),
     )
 
     origins = _resolve_origins(args)
@@ -699,6 +699,7 @@ def _cmd_atlas_decay(args):
     # Resolve atlas dir for write.
     from .atlas import AtlasManager
     from .tenant import TenantManager
+
     tm = TenantManager()
     tenant = tm.get_or_create(tenant_id)
     mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
@@ -732,12 +733,16 @@ def _cmd_atlas_decay(args):
         return
 
     # Tabular output.
-    print(f"tenant: {tenant_id}   atlas v{report.atlas_version}   "
-          f"origins: {', '.join(sorted(origins))}")
-    print(f"params: grace={params.grace_days}d  "
-          f"decay_window={params.decay_window_days}d  "
-          f"activation_floor: <p{params.low_activation_percentile:g} "
-          f"or <{params.min_anchor_activations} activations")
+    print(
+        f"tenant: {tenant_id}   atlas v{report.atlas_version}   "
+        f"origins: {', '.join(sorted(origins))}"
+    )
+    print(
+        f"params: grace={params.grace_days}d  "
+        f"decay_window={params.decay_window_days}d  "
+        f"activation_floor: <p{params.low_activation_percentile:g} "
+        f"or <{params.min_anchor_activations} activations"
+    )
     print()
     print("Summary:")
     print(f"  Total patterns scanned: {report.n_patterns_scanned:>6}")
@@ -768,6 +773,7 @@ def _load_decay_config() -> dict:
     """Load the `decay` block from ~/.psa/config.json. Missing file → {}."""
     import json as _json
     import os as _os
+
     path = _os.path.expanduser("~/.psa/config.json")
     if not _os.path.exists(path):
         return {}
@@ -2040,15 +2046,22 @@ def main():
             "promote-refinement` to apply."
         ),
     )
-    p_atlas_decay.add_argument("--dry-run", action="store_true",
-                               help="Print the report; write no candidate files. "
-                                    "Metadata backfill is still persisted (non-destructive).")
+    p_atlas_decay.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the report; write no candidate files. "
+        "Metadata backfill is still persisted (non-destructive).",
+    )
     p_atlas_decay.add_argument("--grace-days", type=int, default=None)
     p_atlas_decay.add_argument("--decay-window-days", type=int, default=None)
     p_atlas_decay.add_argument("--low-activation-percentile", type=float, default=None)
     p_atlas_decay.add_argument("--min-anchor-activations", type=int, default=None)
-    p_atlas_decay.add_argument("--include-origin", action="append", default=None,
-                               help="Repeatable. Default: interactive only.")
+    p_atlas_decay.add_argument(
+        "--include-origin",
+        action="append",
+        default=None,
+        help="Repeatable. Default: interactive only.",
+    )
     p_atlas_decay.add_argument("--verbose", action="store_true")
     p_atlas_decay.add_argument("--json", action="store_true")
 

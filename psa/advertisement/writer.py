@@ -18,7 +18,7 @@ import os
 from dataclasses import asdict
 from typing import Any
 
-logger = logging.getLogger("psa.forgetting.writer")
+logger = logging.getLogger("psa.advertisement.writer")
 
 
 def write_decay_candidate(atlas_dir: str, report: Any) -> bool:

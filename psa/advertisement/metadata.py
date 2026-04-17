@@ -20,7 +20,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Optional
 
-logger = logging.getLogger("psa.forgetting.metadata")
+logger = logging.getLogger("psa.advertisement.metadata")
 
 FILENAME = "pattern_metadata.json"
 
