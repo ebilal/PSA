@@ -247,3 +247,52 @@ def test_inspect_query_tags_inspect_origin():
 
     src = _inspect.getsource(psa_inspect)
     assert 'query_origin="inspect"' in src or "query_origin='inspect'" in src
+
+
+def test_coactivation_trace_logs_refined_scores_not_ce(tmp_path, monkeypatch):
+    """In coactivation mode, top_anchor_scores carries the refined scores the
+    selector actually decided over — NOT the raw CE scores that fed into it.
+
+    Regression: the pipeline used to label raw CE scores as
+    'coactivation_refined', which broke 'near-miss under live selector'
+    semantics.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PSA_TRACE", raising=False)
+
+    tenant_dir = tmp_path / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_minimal_atlas(atlas_dir)
+
+    from psa.full_atlas_scorer import AnchorScore
+    from psa.pipeline import PSAPipeline
+    from psa.selector import SelectedAnchor
+
+    pipeline = PSAPipeline.from_tenant(tenant_id="default", selector_mode="cosine")
+    pipeline.memory_scorer = None
+
+    # Force the coactivation path with fully mocked scorer + selector so we can
+    # dictate the refined scores.
+    fake_ce_scores = [
+        AnchorScore(anchor_id=1, ce_score=99.0, centroid=[0.0] * 768),
+    ]
+    pipeline.full_atlas_scorer = MagicMock()
+    pipeline.full_atlas_scorer.score_all.return_value = fake_ce_scores
+
+    pipeline.coactivation_selector = MagicMock()
+    pipeline.coactivation_selector.select.return_value = [
+        SelectedAnchor(anchor_id=1, selector_score=0.42, mode="coactivation", candidate=None),
+    ]
+    # Side-channel attribute: refined score is 0.42, NOT the 99.0 CE score.
+    pipeline.coactivation_selector.last_refined_scores = [(1, 0.42)]
+
+    pipeline.query("probe")
+
+    rec = json.loads((tenant_dir / "query_trace.jsonl").read_text().strip())
+    assert rec["selection_mode"] == "coactivation"
+    assert len(rec["top_anchor_scores"]) == 1
+    entry = rec["top_anchor_scores"][0]
+    assert entry["anchor_id"] == 1
+    assert entry["score_source"] == "coactivation_refined"
+    # The logged score must be the REFINED 0.42, not the raw CE 99.0.
+    assert entry["score"] == 0.42

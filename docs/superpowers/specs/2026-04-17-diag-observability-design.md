@@ -381,14 +381,16 @@ All three subcommands emit the same envelope under `--json`:
 {
   "tenant_id": "default",
   "atlas_version": 14,
-  "trace_records": 8412,
+  "trace_records_total": 8412,
   "rows": [ ... ]
 }
 ```
 
 Where `rows` is the list of the subcommand's dataclass serialized to dicts. For `psa diag misses` the envelope also carries top-level fields (`empty_queries`, `empty_rate`) alongside `rows` (the near-miss anchors).
 
-Wrapping with `tenant_id` + `atlas_version` + `trace_records` makes notebook use cleaner: one object carries context, not a bare array. Any downstream tooling (if built) can key on the metadata to compare tenants or versions.
+Wrapping with `tenant_id` + `atlas_version` + `trace_records_total` makes notebook use cleaner: one object carries context, not a bare array. Any downstream tooling (if built) can key on the metadata to compare tenants or versions.
+
+The key is named `trace_records_total` (not just `trace_records`) to be explicit: it's the total line count of `query_trace.jsonl` regardless of the `--include-origin` filter applied to the displayed rows. A field named `trace_records` would falsely imply the rollup was computed over that many records; in fact the rows reflect only the subset matching the active origin filter. Callers who need the post-filter count can count the returned `rows`.
 
 ### Files
 

@@ -251,16 +251,40 @@ class PSAPipeline:
                         # Level 1a: co-activation model selection
                         selected = self.coactivation_selector.select(query_vec, anchor_scores)
                         selection_mode = "coactivation"
-                        _trace["top_anchor_scores"] = [
-                            {
-                                "anchor_id": s.anchor_id,
-                                "score": round(float(s.ce_score), 4),
-                                "score_source": "coactivation_refined",
-                                "rank": rank + 1,
-                                "selected": s.anchor_id in {sa.anchor_id for sa in selected},
-                            }
-                            for rank, s in enumerate(anchor_scores[:24])
-                        ]
+                        # Log the REFINED scores the selector actually decided over,
+                        # re-ranked by refined score desc. Fall back to raw CE if the
+                        # side-channel attribute isn't populated (shouldn't happen when
+                        # select() was called, but defensive).
+                        refined_pairs = getattr(
+                            self.coactivation_selector, "last_refined_scores", None
+                        )
+                        selected_ids = {sa.anchor_id for sa in selected}
+                        if refined_pairs:
+                            refined_sorted = sorted(refined_pairs, key=lambda p: p[1], reverse=True)
+                            _trace["top_anchor_scores"] = [
+                                {
+                                    "anchor_id": aid,
+                                    "score": round(float(score), 4),
+                                    "score_source": "coactivation_refined",
+                                    "rank": rank + 1,
+                                    "selected": aid in selected_ids,
+                                }
+                                for rank, (aid, score) in enumerate(refined_sorted[:24])
+                            ]
+                        else:
+                            # Defensive fallback: label honestly as pre-coactivation CE
+                            # scores so rollups can detect this and exclude them from
+                            # "near miss under live selector" interpretations.
+                            _trace["top_anchor_scores"] = [
+                                {
+                                    "anchor_id": s.anchor_id,
+                                    "score": round(float(s.ce_score), 4),
+                                    "score_source": "full_atlas",
+                                    "rank": rank + 1,
+                                    "selected": s.anchor_id in selected_ids,
+                                }
+                                for rank, s in enumerate(anchor_scores[:24])
+                            ]
                     else:
                         # Level 1b: top-k from full-atlas scores, wrapped as SelectedAnchor
                         top_scores = anchor_scores[: self.selector.max_k]

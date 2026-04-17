@@ -316,6 +316,16 @@ class CoActivationSelector:
         scores_np = refined_scores[0].cpu().numpy()  # (N,)
         threshold = float(thresholds[0].cpu().item())
 
+        # Expose the full (anchor_id, refined_score) list via an instance
+        # attribute so callers (e.g., pipeline.query's trace emitter) can log
+        # the scores the selector actually decided over — not the raw CE
+        # scores feeding into the model. Ordered to match anchor_scores
+        # (which is already CE-rank-sorted; the curator/tracer can resort as
+        # needed).
+        self.last_refined_scores: list[tuple[int, float]] = [
+            (anchor_scores[i].anchor_id, float(scores_np[i])) for i in range(n)
+        ]
+
         # Apply adaptive threshold
         selected_indices = [i for i in range(n) if scores_np[i] >= threshold]
 

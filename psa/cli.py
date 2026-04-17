@@ -1598,7 +1598,7 @@ def _cmd_diag_activation(args):
                 {
                     "tenant_id": tenant_id,
                     "atlas_version": version,
-                    "trace_records": total,
+                    "trace_records_total": total,
                     "origins": sorted(origins),
                     "rows": [asdict(r) for r in rows],
                 }
@@ -1607,7 +1607,7 @@ def _cmd_diag_activation(args):
         return
 
     print(
-        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"tenant: {tenant_id}   atlas v{version}   trace records (total): {total:,}"
         f"   origins: {', '.join(sorted(origins))}"
     )
     print()
@@ -1642,7 +1642,7 @@ def _cmd_diag_advertisement(args):
                 {
                     "tenant_id": tenant_id,
                     "atlas_version": version,
-                    "trace_records": total,
+                    "trace_records_total": total,
                     "origins": sorted(origins),
                     "rows": [asdict(r) for r in rows],
                 }
@@ -1651,7 +1651,7 @@ def _cmd_diag_advertisement(args):
         return
 
     print(
-        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"tenant: {tenant_id}   atlas v{version}   trace records (total): {total:,}"
         f"   origins: {', '.join(sorted(origins))}"
     )
     print()
@@ -1682,7 +1682,7 @@ def _cmd_diag_misses(args):
                 {
                     "tenant_id": tenant_id,
                     "atlas_version": version,
-                    "trace_records": total,
+                    "trace_records_total": total,
                     "origins": sorted(origins),
                     "total_queries": report.total_queries,
                     "empty_queries": report.empty_queries,
@@ -1705,7 +1705,7 @@ def _cmd_diag_misses(args):
         return
 
     print(
-        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"tenant: {tenant_id}   atlas v{version}   trace records (total): {total:,}"
         f"   origins: {', '.join(sorted(origins))}"
     )
     print()

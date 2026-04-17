@@ -86,7 +86,7 @@ def test_cli_diag_activation_json_envelope(tmp_path, monkeypatch, capsys):
     envelope = json.loads(out)
     assert envelope["tenant_id"] == "default"
     assert envelope["atlas_version"] == 1
-    assert envelope["trace_records"] == 1
+    assert envelope["trace_records_total"] == 1
     assert envelope["origins"] == ["interactive"]
     assert isinstance(envelope["rows"], list)
     assert any(row["anchor_id"] == 1 for row in envelope["rows"])
