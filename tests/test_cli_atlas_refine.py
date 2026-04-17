@@ -214,9 +214,7 @@ def test_atlas_refine_records_source_from_flag(tmp_path, monkeypatch, capsys):
     _write_atlas(atlas_dir, patterns=["original"])
 
     miss_log = tmp_path / "misses.jsonl"
-    miss_log.write_text(
-        json.dumps({"query": "baking cookies", "gold_anchor_ids": [1]}) + "\n"
-    )
+    miss_log.write_text(json.dumps({"query": "baking cookies", "gold_anchor_ids": [1]}) + "\n")
 
     with patch(
         "sys.argv",
@@ -320,9 +318,7 @@ def test_promote_refinement_overwrites_previous_promotion(tmp_path, monkeypatch,
     _write_atlas(atlas_dir, patterns=["original"])
 
     miss_log = tmp_path / "misses.jsonl"
-    miss_log.write_text(
-        json.dumps({"query": "sample query text", "gold_anchor_ids": [1]}) + "\n"
-    )
+    miss_log.write_text(json.dumps({"query": "sample query text", "gold_anchor_ids": [1]}) + "\n")
     with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
         main()
 
