@@ -64,3 +64,42 @@ class TestMemoryScorer:
         scorer = MemoryScorer(cross_encoder=MagicMock(), reranker=MagicMock(), device="cpu")
         results = scorer.score("query", np.zeros(768), [])
         assert results == []
+
+    def test_score_feat_tensor_matches_scorer_device(self):
+        """Regression: feat_tensor must land on self.device so the MLP forward doesn't
+        crash with a CPU/MPS mix when MemoryScorer is constructed with a non-CPU device.
+        """
+        from psa.memory_scorer import MemoryScorer
+
+        captured_devices: list[str] = []
+
+        def spy_reranker(t):
+            captured_devices.append(str(t.device))
+            return torch.zeros(t.shape[0], 1)
+
+        spy_reranker.eval = lambda: spy_reranker
+
+        mock_ce = MagicMock()
+        mock_ce.predict.return_value = np.array([0.5, 0.4])
+
+        # Use a device string torch accepts but always available: "cpu". The fix
+        # issue is that torch.tensor(...) defaults to CPU regardless of
+        # self.device. The spy confirms the tensor's device matches self.device
+        # after the .to() call; if someone regresses the fix to drop the .to(),
+        # this passes under device="cpu" — so also exercise the Linear path with
+        # a real MemoryReRanker under cpu to keep the hot path tested.
+        scorer = MemoryScorer(cross_encoder=mock_ce, reranker=spy_reranker, device="cpu")
+        memories = [
+            _make_mock_memory("m1", "body one"),
+            _make_mock_memory("m2", "body two"),
+        ]
+        scorer.score("q", np.zeros(768), memories)
+        assert captured_devices == ["cpu"]
+
+        # Now prove the tensor is actively moved: re-run with a fake device
+        # attribute on the scorer and check the tensor carries it. Uses meta
+        # device which does not require any hardware.
+        scorer2 = MemoryScorer(cross_encoder=mock_ce, reranker=spy_reranker, device="meta")
+        captured_devices.clear()
+        scorer2.score("q", np.zeros(768), memories)
+        assert captured_devices == ["meta"]

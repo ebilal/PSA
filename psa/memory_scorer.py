@@ -195,7 +195,7 @@ class MemoryScorer:
             _build_feature_vector(ce_scores[i], memories[i], query_vec, token_budget)
             for i in range(len(memories))
         ]
-        feat_tensor = torch.tensor(feature_rows, dtype=torch.float32)
+        feat_tensor = torch.tensor(feature_rows, dtype=torch.float32).to(self.device)
 
         # Switch reranker to inference mode (nn.Module.eval(), not Python eval)
         self.reranker.eval()
