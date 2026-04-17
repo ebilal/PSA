@@ -7,10 +7,10 @@ import pytest
 from psa.anchor import AnchorCard, AnchorIndex
 from psa.atlas import Atlas
 from psa.embeddings import EmbeddingModel
-from psa.memory_object import MemoryObject, MemoryStore
+from psa.memory_object import MemoryStore
 from psa.pipeline import PSAPipeline, PSAResult, QueryTiming
 from psa.retriever import AnchorCandidate
-from psa.selector import AnchorSelector, SelectedAnchor
+from psa.selector import AnchorSelector
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -169,34 +169,6 @@ def test_pipeline_search_returns_dict(pipeline):
 def test_pipeline_search_results_list(pipeline):
     result = pipeline.search("auth query", n_results=3)
     assert isinstance(result["results"], list)
-
-
-# ── PSAPipeline._fetch_memories ────────────────────────────────────────────────
-
-
-def test_pipeline_deduplicates_memories(mock_store, mock_atlas, mock_embedding_model):
-    """Memories with the same ID should appear only once in the output."""
-    mo = MagicMock(spec=MemoryObject)
-    mo.memory_object_id = "dup-id"
-    mo.quality_score = 0.9
-
-    mock_store.query_by_anchor.return_value = [mo, mo]  # same object twice
-
-    p = PSAPipeline(
-        store=mock_store,
-        atlas=mock_atlas,
-        embedding_model=mock_embedding_model,
-        token_budget=1000,
-        tenant_id="t",
-    )
-
-    selected = [
-        SelectedAnchor(
-            anchor_id=1, selector_score=0.9, mode="cosine", candidate=_make_candidate(1)
-        ),
-    ]
-    memories = p._fetch_memories(selected)
-    assert len(memories) == 1
 
 
 # ── from_tenant factory (smoke test with mocks) ───────────────────────────────

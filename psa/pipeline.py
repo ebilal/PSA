@@ -144,6 +144,8 @@ class PSAPipeline:
         self,
         query: str,
         top_k_candidates: int = 32,
+        *,
+        query_origin: str = "interactive",
     ) -> PSAResult:
         """
         Run the full PSA query pipeline.
@@ -154,107 +156,389 @@ class PSAPipeline:
             User query string.
         top_k_candidates:
             Retriever shortlist size (default 24 per plan).
+        query_origin:
+            Tag for the trace record (``"interactive"`` by default).
+            Pass ``"labeling"``, ``"benchmark"``, or ``"inspect"`` from
+            non-interactive callers so diag rollups can filter cleanly.
 
         Returns
         -------
         PSAResult with packed context and timing.
         """
-        timing = QueryTiming()
+        import datetime as _dt
+        import hashlib as _h
 
-        # Step 1: Embed query
-        t0 = time.perf_counter()
-        query_vec = self.embedding_model.embed(query)
-        timing.embed_ms = (time.perf_counter() - t0) * 1000
+        from .trace import new_trace_record, write_trace
 
-        # Step 1.5: Extract query frame
-        query_frame = extract_query_frame(query)
-        logger.debug(
-            "QueryFrame: target=%s mode=%s entities=%s confidence=%.2f",
-            query_frame.answer_target,
-            query_frame.retrieval_mode,
-            query_frame.entities,
-            query_frame.confidence,
+        t_start = time.perf_counter()
+        _run_id = (
+            _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+            + "_"
+            + _h.md5(query.encode(), usedforsecurity=False).hexdigest()[:6]
         )
+        _trace = new_trace_record(
+            run_id=_run_id,
+            timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            tenant_id=self.tenant_id,
+            atlas_version=getattr(self.atlas, "version", 0),
+            query=query,
+            query_origin=query_origin,
+        )
+        _trace["token_budget"] = self.token_budget
+        # Maps memory_object_id → the selected anchor_id via which it was first fetched.
+        _memory_to_source_anchor: dict[str, int] = {}
 
-        # Steps 2 + 3: Retrieve and select anchors (3-level degradation)
-        if self.full_atlas_scorer is not None:
-            # Level 1: Full-atlas scoring path
+        timing = QueryTiming()
+        result: Optional[PSAResult] = None
+
+        try:
+            # Step 1: Embed query
             t0 = time.perf_counter()
-            anchor_scores = self.full_atlas_scorer.score_all(query, query_vec=query_vec)
-            timing.retrieve_ms = (time.perf_counter() - t0) * 1000
+            query_vec = self.embedding_model.embed(query)
+            timing.embed_ms = (time.perf_counter() - t0) * 1000
 
+            # Step 1.5: Extract query frame
+            query_frame = extract_query_frame(query)
             logger.debug(
-                "Full-atlas scored %d anchors in %.1fms",
-                len(anchor_scores),
-                timing.retrieve_ms,
+                "QueryFrame: target=%s mode=%s entities=%s confidence=%.2f",
+                query_frame.answer_target,
+                query_frame.retrieval_mode,
+                query_frame.entities,
+                query_frame.confidence,
             )
 
-            candidates = []  # no retriever shortlist in full-atlas mode
+            # Steps 2 + 3: Retrieve and select anchors (3-level degradation)
+            if self.full_atlas_scorer is not None:
+                # Level 1: Full-atlas scoring path
+                t0 = time.perf_counter()
+                anchor_scores = self.full_atlas_scorer.score_all(query, query_vec=query_vec)
+                timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
-            if not anchor_scores:
-                packed = PackedContext(
-                    query=query,
-                    text="(no anchor candidates found — atlas may be empty or unbuilt)",
-                    token_count=0,
-                    memory_ids=[],
-                    sections=[],
-                    untyped_count=0,
-                )
-                return PSAResult(
-                    query=query,
-                    packed_context=packed,
-                    selected_anchors=[],
-                    candidates=[],
-                    timing=timing,
-                    tenant_id=self.tenant_id,
-                    psa_mode=self.psa_mode,
-                    selection_mode="full_atlas",
+                logger.debug(
+                    "Full-atlas scored %d anchors in %.1fms",
+                    len(anchor_scores),
+                    timing.retrieve_ms,
                 )
 
-            t0 = time.perf_counter()
-            if self.coactivation_selector is not None:
-                # Level 1a: co-activation model selection
-                selected = self.coactivation_selector.select(query_vec, anchor_scores)
-                selection_mode = "coactivation"
-            else:
-                # Level 1b: top-k from full-atlas scores, wrapped as SelectedAnchor
-                top_scores = anchor_scores[: self.selector.max_k]
-                selected = [
-                    SelectedAnchor(
-                        anchor_id=s.anchor_id,
-                        selector_score=s.ce_score,
-                        mode="full_atlas",
-                        candidate=None,
+                candidates = []  # no retriever shortlist in full-atlas mode
+
+                if not anchor_scores:
+                    packed = PackedContext(
+                        query=query,
+                        text="(no anchor candidates found — atlas may be empty or unbuilt)",
+                        token_count=0,
+                        memory_ids=[],
+                        sections=[],
+                        untyped_count=0,
                     )
-                    for s in top_scores
-                ]
-                selection_mode = "full_atlas"
-            timing.select_ms = (time.perf_counter() - t0) * 1000
-        else:
-            # Level 2: Legacy retriever + selector path
-            t0 = time.perf_counter()
-            candidates = self._retriever.retrieve(
-                query=query,
-                embedding_model=self.embedding_model,
-                top_k=top_k_candidates,
-                query_vec=query_vec,
-            )
-            timing.retrieve_ms = (time.perf_counter() - t0) * 1000
-
-            logger.debug("Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms)
-
-            if not candidates:
-                packed = PackedContext(
+                    result = PSAResult(
+                        query=query,
+                        packed_context=packed,
+                        selected_anchors=[],
+                        candidates=[],
+                        timing=timing,
+                        tenant_id=self.tenant_id,
+                        psa_mode=self.psa_mode,
+                        selection_mode="full_atlas",
+                    )
+                    _trace["selection_mode"] = "full_atlas"
+                    _trace["result_kind"] = "empty_selection"
+                    _trace["empty_selection"] = True
+                    # top_anchor_scores stays []
+                else:
+                    t0 = time.perf_counter()
+                    if self.coactivation_selector is not None:
+                        # Level 1a: co-activation model selection
+                        selected = self.coactivation_selector.select(query_vec, anchor_scores)
+                        selection_mode = "coactivation"
+                        _trace["top_anchor_scores"] = [
+                            {
+                                "anchor_id": s.anchor_id,
+                                "score": round(float(s.ce_score), 4),
+                                "score_source": "coactivation_refined",
+                                "rank": rank + 1,
+                                "selected": s.anchor_id in {sa.anchor_id for sa in selected},
+                            }
+                            for rank, s in enumerate(anchor_scores[:24])
+                        ]
+                    else:
+                        # Level 1b: top-k from full-atlas scores, wrapped as SelectedAnchor
+                        top_scores = anchor_scores[: self.selector.max_k]
+                        selected = [
+                            SelectedAnchor(
+                                anchor_id=s.anchor_id,
+                                selector_score=s.ce_score,
+                                mode="full_atlas",
+                                candidate=None,
+                            )
+                            for s in top_scores
+                        ]
+                        selection_mode = "full_atlas"
+                        selected_ids = {sa.anchor_id for sa in selected}
+                        _trace["top_anchor_scores"] = [
+                            {
+                                "anchor_id": s.anchor_id,
+                                "score": round(float(s.ce_score), 4),
+                                "score_source": "full_atlas",
+                                "rank": rank + 1,
+                                "selected": s.anchor_id in selected_ids,
+                            }
+                            for rank, s in enumerate(anchor_scores[:24])
+                        ]
+                    timing.select_ms = (time.perf_counter() - t0) * 1000
+            else:
+                # Level 2: Legacy retriever + selector path
+                t0 = time.perf_counter()
+                candidates = self._retriever.retrieve(
                     query=query,
-                    text="(no anchor candidates found — atlas may be empty or unbuilt)",
+                    embedding_model=self.embedding_model,
+                    top_k=top_k_candidates,
+                    query_vec=query_vec,
+                )
+                timing.retrieve_ms = (time.perf_counter() - t0) * 1000
+
+                logger.debug(
+                    "Retrieved %d candidates in %.1fms", len(candidates), timing.retrieve_ms
+                )
+
+                if not candidates:
+                    packed = PackedContext(
+                        query=query,
+                        text="(no anchor candidates found — atlas may be empty or unbuilt)",
+                        token_count=0,
+                        memory_ids=[],
+                        sections=[],
+                        untyped_count=0,
+                    )
+                    result = PSAResult(
+                        query=query,
+                        packed_context=packed,
+                        selected_anchors=[],
+                        candidates=[],
+                        timing=timing,
+                        tenant_id=self.tenant_id,
+                        psa_mode=self.psa_mode,
+                        selection_mode="legacy",
+                    )
+                    _trace["selection_mode"] = "legacy"
+                    _trace["result_kind"] = "empty_selection"
+                    _trace["empty_selection"] = True
+                else:
+                    t0 = time.perf_counter()
+                    selected = self.selector.select(
+                        query=query,
+                        candidates=candidates,
+                        query_vec=query_vec,
+                    )
+                    timing.select_ms = (time.perf_counter() - t0) * 1000
+                    selection_mode = "legacy"
+                    selected_ids = {sa.anchor_id for sa in selected}
+                    _trace["top_anchor_scores"] = [
+                        {
+                            "anchor_id": c.anchor_id,
+                            "score": round(float(c.rrf_score), 4),
+                            "score_source": "retriever",
+                            "rank": rank + 1,
+                            "selected": c.anchor_id in selected_ids,
+                        }
+                        for rank, c in enumerate(candidates[:24])
+                    ]
+
+            # The two early-return paths above set result; skip selection-dependent work.
+            if result is None:
+                logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
+
+                # Accumulate query fingerprints for above-threshold selected anchors
+                if self.atlas.fingerprint_store is not None and selected:
+                    for sa in selected:
+                        self.atlas.fingerprint_store.append(sa.anchor_id, query)
+                    self.atlas.fingerprint_store.save()
+
+                # No anchors met the threshold — nothing relevant in memory
+                if not selected:
+                    packed = PackedContext(
+                        query=query,
+                        text="(no relevant memories found for this query)",
+                        token_count=0,
+                        memory_ids=[],
+                        sections=[],
+                        untyped_count=0,
+                    )
+                    result = PSAResult(
+                        query=query,
+                        packed_context=packed,
+                        selected_anchors=[],
+                        candidates=candidates,
+                        timing=timing,
+                        tenant_id=self.tenant_id,
+                        psa_mode=self.psa_mode,
+                        selection_mode=selection_mode,
+                    )
+                    _trace["selection_mode"] = selection_mode
+                    _trace["result_kind"] = "empty_selection"
+                    _trace["empty_selection"] = True
+                    _trace["selected_anchor_ids"] = []
+                else:
+                    # Step 4: Fetch memories for selected anchors (inline for source tracking)
+                    t0 = time.perf_counter()
+                    seen_ids: set = set()
+                    memories: List[MemoryObject] = []
+                    for sa in selected:
+                        anchor_memories = self.store.query_by_anchor(
+                            tenant_id=self.tenant_id,
+                            anchor_id=sa.anchor_id,
+                            limit=50,
+                        )
+                        for mo in anchor_memories:
+                            if mo.memory_object_id in _memory_to_source_anchor:
+                                continue  # first selected anchor wins on multi-assign
+                            _memory_to_source_anchor[mo.memory_object_id] = sa.anchor_id
+                            if mo.memory_object_id not in seen_ids:
+                                seen_ids.add(mo.memory_object_id)
+                                memories.append(mo)
+
+                    # Record usage telemetry: these memories were fetched for selected anchors
+                    if memories:
+                        try:
+                            self.store.record_selected([m.memory_object_id for m in memories])
+                        except Exception:
+                            logger.debug(
+                                "Failed to record selected telemetry", exc_info=True
+                            )
+
+                    # Re-sort globally by quality_score desc
+                    memories.sort(key=lambda m: m.quality_score, reverse=True)
+                    timing.fetch_ms = (time.perf_counter() - t0) * 1000
+
+                    logger.debug(
+                        "Fetched %d memories in %.1fms", len(memories), timing.fetch_ms
+                    )
+
+                    # Level 2: Memory-level scoring (if available)
+                    _pre_ranked = False
+                    if self.memory_scorer is not None and memories:
+                        t0_l2 = time.perf_counter()
+                        scored_memories = self.memory_scorer.score(
+                            query=query,
+                            query_vec=query_vec,
+                            memories=memories,
+                        )
+                        scored_memories = self._constraint_scorer.adjust_scores(
+                            scored_memories, query_frame
+                        )
+                        memories = [sm.memory for sm in scored_memories]
+                        logger.debug(
+                            "Level 2 scored %d memories in %.1fms",
+                            len(memories),
+                            (time.perf_counter() - t0_l2) * 1000,
+                        )
+                        _pre_ranked = True
+                    elif memories:
+                        from .memory_scorer import ScoredMemory
+
+                        scored_as_list = [
+                            ScoredMemory(
+                                memory_object_id=m.memory_object_id,
+                                final_score=m.quality_score,
+                                memory=m,
+                            )
+                            for m in memories
+                        ]
+                        scored_as_list = self._constraint_scorer.adjust_scores(
+                            scored_as_list, query_frame
+                        )
+                        memories = [sm.memory for sm in scored_as_list]
+                        _pre_ranked = True
+
+                    # Step 5: Synthesize context
+                    t0 = time.perf_counter()
+                    _synthesis_succeeded = False
+                    try:
+                        synthesis_text = self._synthesizer.synthesize(
+                            query=query,
+                            memories=memories,
+                            query_vec=query_vec,
+                            token_budget=self.token_budget,
+                        )
+                        packed = PackedContext(
+                            query=query,
+                            text=synthesis_text,
+                            token_count=len(synthesis_text) // 4,
+                            memory_ids=[m.memory_object_id for m in memories],
+                            sections=[],
+                            untyped_count=0,
+                        )
+                        _synthesis_succeeded = True
+                    except Exception:
+                        logger.debug("Synthesis failed, falling back to packer", exc_info=True)
+                        packed = self._packer.pack_memories_direct(
+                            query=query,
+                            memories=memories,
+                            token_budget=self.token_budget,
+                            query_vec=query_vec,
+                            store=self.store,
+                            pre_ranked=_pre_ranked,
+                        )
+                    timing.pack_ms = (time.perf_counter() - t0) * 1000
+
+                    # Record usage telemetry: these memories made it into packed context
+                    if packed.memory_ids:
+                        try:
+                            self.store.record_packed(packed.memory_ids)
+                        except Exception:
+                            logger.debug("Failed to record packed telemetry", exc_info=True)
+
+                    logger.debug(
+                        "Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms
+                    )
+                    logger.info(
+                        "PSA query complete: %.1fms total (%d memories, %d tokens)",
+                        timing.total_ms,
+                        len(memories),
+                        packed.token_count,
+                    )
+
+                    result = PSAResult(
+                        query=query,
+                        packed_context=packed,
+                        selected_anchors=selected,
+                        candidates=candidates,
+                        timing=timing,
+                        tenant_id=self.tenant_id,
+                        psa_mode=self.psa_mode,
+                        selection_mode=selection_mode,
+                    )
+                    _trace["selection_mode"] = selection_mode
+                    _trace["result_kind"] = (
+                        "synthesized" if _synthesis_succeeded else "packer_fallback"
+                    )
+                    _trace["selected_anchor_ids"] = [sa.anchor_id for sa in selected]
+                    _trace["packed_memories"] = [
+                        {
+                            "memory_id": mid,
+                            "source_anchor_id": _memory_to_source_anchor.get(mid, -1),
+                        }
+                        for mid in packed.memory_ids
+                    ]
+
+        finally:
+            # Tail: populate remaining trace fields, write once, return.
+            if result is None:
+                # An exception bubbled out of the pipeline body. Synthesize a
+                # stub result so callers never see None, and tag the trace as
+                # pipeline_error — semantically distinct from empty_selection
+                # so the miss rollup doesn't count crashes as misses.
+                packed_fallback = PackedContext(
+                    query=query,
+                    text="(pipeline error)",
                     token_count=0,
                     memory_ids=[],
                     sections=[],
                     untyped_count=0,
                 )
-                return PSAResult(
+                result = PSAResult(
                     query=query,
-                    packed_context=packed,
+                    packed_context=packed_fallback,
                     selected_anchors=[],
                     candidates=[],
                     timing=timing,
@@ -262,171 +546,30 @@ class PSAPipeline:
                     psa_mode=self.psa_mode,
                     selection_mode="legacy",
                 )
+                _trace["result_kind"] = "pipeline_error"
+                # empty_selection stays False — this is a crash, not an empty selection.
 
-            t0 = time.perf_counter()
-            selected = self.selector.select(
-                query=query,
-                candidates=candidates,
-                query_vec=query_vec,
-            )
-            timing.select_ms = (time.perf_counter() - t0) * 1000
-            selection_mode = "legacy"
+            _trace["tokens_used"] = result.packed_context.token_count
+            _trace["timing_ms"] = {
+                "embed": round(timing.embed_ms, 1),
+                "retrieve": round(timing.retrieve_ms, 1),
+                "select": round(timing.select_ms, 1),
+                "fetch": round(timing.fetch_ms, 1),
+                "pack": round(timing.pack_ms, 1),
+                "total": round((time.perf_counter() - t_start) * 1000, 1),
+            }
+            # Populate packed_memories only if not already set (success path sets it above).
+            if not _trace["packed_memories"]:
+                _trace["packed_memories"] = [
+                    {
+                        "memory_id": mid,
+                        "source_anchor_id": _memory_to_source_anchor.get(mid, -1),
+                    }
+                    for mid in result.packed_context.memory_ids
+                ]
+            write_trace(_trace, tenant_id=self.tenant_id)
 
-        logger.debug("Selected %d anchors in %.1fms", len(selected), timing.select_ms)
-
-        # Accumulate query fingerprints for above-threshold selected anchors
-        if self.atlas.fingerprint_store is not None and selected:
-            for sa in selected:
-                self.atlas.fingerprint_store.append(sa.anchor_id, query)
-            self.atlas.fingerprint_store.save()
-
-        # No anchors met the threshold — nothing relevant in memory
-        if not selected:
-            packed = PackedContext(
-                query=query,
-                text="(no relevant memories found for this query)",
-                token_count=0,
-                memory_ids=[],
-                sections=[],
-                untyped_count=0,
-            )
-            return PSAResult(
-                query=query,
-                packed_context=packed,
-                selected_anchors=[],
-                candidates=candidates,
-                timing=timing,
-                tenant_id=self.tenant_id,
-                psa_mode=self.psa_mode,
-                selection_mode=selection_mode,
-            )
-
-        # Step 4: Fetch memories for selected anchors
-        t0 = time.perf_counter()
-        memories = self._fetch_memories(selected)
-        timing.fetch_ms = (time.perf_counter() - t0) * 1000
-
-        logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)
-
-        # Level 2: Memory-level scoring (if available)
-        _pre_ranked = False
-        if self.memory_scorer is not None and memories:
-            t0_l2 = time.perf_counter()
-            scored_memories = self.memory_scorer.score(
-                query=query,
-                query_vec=query_vec,
-                memories=memories,
-            )
-            scored_memories = self._constraint_scorer.adjust_scores(scored_memories, query_frame)
-            memories = [sm.memory for sm in scored_memories]
-            logger.debug(
-                "Level 2 scored %d memories in %.1fms",
-                len(memories),
-                (time.perf_counter() - t0_l2) * 1000,
-            )
-            _pre_ranked = True
-        elif memories:
-            from .memory_scorer import ScoredMemory
-
-            scored_as_list = [
-                ScoredMemory(
-                    memory_object_id=m.memory_object_id,
-                    final_score=m.quality_score,
-                    memory=m,
-                )
-                for m in memories
-            ]
-            scored_as_list = self._constraint_scorer.adjust_scores(scored_as_list, query_frame)
-            memories = [sm.memory for sm in scored_as_list]
-            _pre_ranked = True
-
-        # Step 5: Synthesize context
-        t0 = time.perf_counter()
-        try:
-            synthesis_text = self._synthesizer.synthesize(
-                query=query,
-                memories=memories,
-                query_vec=query_vec,
-                token_budget=self.token_budget,
-            )
-            packed = PackedContext(
-                query=query,
-                text=synthesis_text,
-                token_count=len(synthesis_text) // 4,
-                memory_ids=[m.memory_object_id for m in memories],
-                sections=[],
-                untyped_count=0,
-            )
-        except Exception:
-            logger.debug("Synthesis failed, falling back to packer", exc_info=True)
-            packed = self._packer.pack_memories_direct(
-                query=query,
-                memories=memories,
-                token_budget=self.token_budget,
-                query_vec=query_vec,
-                store=self.store,
-                pre_ranked=_pre_ranked,
-            )
-        timing.pack_ms = (time.perf_counter() - t0) * 1000
-
-        # Record usage telemetry: these memories made it into packed context
-        if packed.memory_ids:
-            try:
-                self.store.record_packed(packed.memory_ids)
-            except Exception:
-                logger.debug("Failed to record packed telemetry", exc_info=True)
-
-        logger.debug("Packed %d tokens in %.1fms", packed.token_count, timing.pack_ms)
-        logger.info(
-            "PSA query complete: %.1fms total (%d memories, %d tokens)",
-            timing.total_ms,
-            len(memories),
-            packed.token_count,
-        )
-
-        return PSAResult(
-            query=query,
-            packed_context=packed,
-            selected_anchors=selected,
-            candidates=candidates,
-            timing=timing,
-            tenant_id=self.tenant_id,
-            psa_mode=self.psa_mode,
-            selection_mode=selection_mode,
-        )
-
-    def _fetch_memories(self, selected: List[SelectedAnchor]) -> List[MemoryObject]:
-        """
-        Fetch non-duplicate memories for selected anchors.
-
-        Memories are sorted within each anchor by quality_score desc,
-        then deduplicated across anchors by memory_object_id.
-        """
-        seen_ids: set = set()
-        memories: List[MemoryObject] = []
-
-        for sel in selected:
-            anchor_memories = self.store.query_by_anchor(
-                tenant_id=self.tenant_id,
-                anchor_id=sel.anchor_id,
-                limit=50,
-            )
-            for mo in anchor_memories:
-                if mo.memory_object_id in seen_ids:
-                    continue
-                seen_ids.add(mo.memory_object_id)
-                memories.append(mo)
-
-        # Record usage telemetry: these memories were fetched for selected anchors
-        if memories:
-            try:
-                self.store.record_selected([m.memory_object_id for m in memories])
-            except Exception:
-                logger.debug("Failed to record selected telemetry", exc_info=True)
-
-        # Re-sort globally by quality_score desc
-        memories.sort(key=lambda m: m.quality_score, reverse=True)
-        return memories
+        return result
 
     def packed_context_for_anchors(
         self,

@@ -70,10 +70,11 @@ One JSON line per `pipeline.query()` call, appended to `~/.psa/tenants/{id}/quer
 ### Field semantics (the load-bearing ones)
 
 - **`query_origin`**: `"interactive" | "benchmark" | "labeling" | "inspect"`. Tags the caller so rollups can separate real production traffic from offline/training runs. Default `"interactive"` covers `psa search` and the MCP server; other values are passed in by callers (`OracleLabeler`, `longmemeval.run`, `psa inspect`). See §2 for the call-site changes that set this.
-- **`result_kind`**: `"empty_selection" | "synthesized" | "packer_fallback"`. Derived at pipeline exit:
+- **`result_kind`**: `"empty_selection" | "synthesized" | "packer_fallback" | "pipeline_error"`. Derived at pipeline exit:
   - `empty_selection` when `selected_anchor_ids == []` (nothing cleared threshold)
   - `packer_fallback` when the synthesizer raised and the packer's `pack_memories_direct` produced the context
   - `synthesized` in the normal path
+  - `pipeline_error` when an unexpected exception bubbled out of the pipeline body and a stub result was synthesized in `finally`. Semantically distinct from `empty_selection` — a crash is not a miss. Miss rollups ignore `pipeline_error` records so failures don't contaminate the below-threshold metric.
 - **`empty_selection`** (bool): redundant with `result_kind == "empty_selection"` but kept for grep-ability in operational contexts.
 - **`selection_mode`**: `"coactivation" | "trained" | "cosine" | "legacy"`. Records which selector path produced the scores.
 - **`top_anchor_scores`**: up to 24 entries, ranked by the score the live selector actually decided over. `score_source` names which score is stored:
