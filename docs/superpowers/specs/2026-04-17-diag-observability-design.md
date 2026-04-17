@@ -51,9 +51,9 @@ One JSON line per `pipeline.query()` call, appended to `~/.psa/tenants/{id}/quer
   "selection_mode": "coactivation",
   "result_kind": "synthesized",
   "top_anchor_scores": [
-    {"anchor_id": 227, "score": 3.21, "selected": true, "score_source": "coactivation_input", "rank": 1},
-    {"anchor_id": 316, "score": 2.87, "selected": true, "score_source": "coactivation_input", "rank": 2},
-    {"anchor_id": 415, "score": 1.04, "selected": false, "score_source": "coactivation_input", "rank": 3}
+    {"anchor_id": 227, "score": 3.21, "selected": true, "score_source": "coactivation_refined", "rank": 1},
+    {"anchor_id": 316, "score": 2.87, "selected": true, "score_source": "coactivation_refined", "rank": 2},
+    {"anchor_id": 415, "score": 1.04, "selected": false, "score_source": "coactivation_refined", "rank": 3}
   ],
   "selected_anchor_ids": [227, 316],
   "empty_selection": false,
@@ -76,7 +76,12 @@ One JSON line per `pipeline.query()` call, appended to `~/.psa/tenants/{id}/quer
   - `synthesized` in the normal path
 - **`empty_selection`** (bool): redundant with `result_kind == "empty_selection"` but kept for grep-ability in operational contexts.
 - **`selection_mode`**: `"coactivation" | "trained" | "cosine" | "legacy"`. Records which selector path produced the scores.
-- **`top_anchor_scores`**: up to 24 entries, ranked by the score the live selector actually decided over. For coactivation mode that's the refined score (not raw CE). `score_source` names which score is stored: `"coactivation_input" | "full_atlas" | "retriever"`. This uniformity means rollups can filter by mode cleanly.
+- **`top_anchor_scores`**: up to 24 entries, ranked by the score the live selector actually decided over. `score_source` names which score is stored:
+  - `"coactivation_refined"` — the refined score the coactivation selector decided over (not the raw CE score feeding into it).
+  - `"full_atlas"` — the CE score from `FullAtlasScorer` (trained/cosine mode with no coactivation).
+  - `"retriever"` — the RRF score from the legacy BM25+dense retrieval path.
+
+  This uniformity means rollups can filter by mode cleanly; the name always matches the score actually used for selection.
 - **`packed_memories[*].source_anchor_id`**: the selected anchor through which this memory entered the fetched set — NOT the memory's stored `primary_anchor_id`. Implemented by keeping `dict[memory_id → selected_anchor_id]` during `_fetch_memories()`. On multi-assignment (rare), record the first selected anchor that fetched the memory.
 - **No per-memory `token_cost` field.** The synthesized path in `pipeline.query()` builds a `PackedContext` from LLM output without per-memory token accounting (`pipeline.py:352-355`: `token_count=len(synthesis_text) // 4`, `memory_ids=[...]`, `sections=[]`). Attributing output tokens back to input memories would require instrumenting the synthesizer or a separate attribution pass — out of scope for MVP. The `carry_rate` metric (binary: did ≥1 memory from this anchor appear in `packed_memories`) works without token attribution; the mean-token-contribution view is deferred.
 - **`query`**: plaintext. Redaction/hashing is a later concern; single comment in the writer acknowledges it.
@@ -186,13 +191,18 @@ def iter_trace_records(
     Missing file yields nothing (no error). Malformed JSON lines are skipped
     with a debug log.
 
-    When `origins` is None (the CLI default will be {"interactive"}), only
-    records matching that set are yielded. Pass a wider set or None-equivalent
-    sentinel to include benchmark/labeling/inspect traces.
+    origins contract:
+        - None (default)       → NO filter; every record is yielded.
+        - set[str] (non-empty) → only records whose `query_origin` is in the set.
+        - empty set            → no records yielded (explicit filter-everything-out).
+
+    The CLI explicitly passes `origins={"interactive"}` as ITS default. The
+    reader itself does not assume a default; this keeps the library contract
+    and the CLI contract independent and testable.
     """
 ```
 
-All three reports below accept an `origins` filter with the same default — the CLI wires `--include-origin` to override it.
+All three report functions below accept the same `origins` parameter and forward it to `iter_trace_records`. The CLI's `--include-origin` flag constructs the set it passes in; the library functions never second-guess the caller.
 
 ### Activation report
 
