@@ -53,11 +53,15 @@ Per-pattern metadata lives in a sibling file, not on the card itself. Cards stay
     "anchor_id": 227,
     "pattern": "what are some quick healthy lunch ideas?",
     "source": "atlas_build",
-    "created_at": "2026-03-15T12:34:56+00:00",
-    "promoted_at": null
+    "created_at": "2026-03-15T12:34:56+00:00"
   }
 }
 ```
+
+**Reserved future fields** (schema-forward, not consumed by this branch):
+
+- `promoted_at: str | null` — when the pattern first landed on the live `anchor_cards_refined.json`. No code path in this branch sets it; meaningful values require the creation-time stamping follow-up that teaches `psa atlas promote-refinement` to update metadata. Until then, consumers treat the field as absent-or-null. Keeping it reserved (rather than shipping it always-null) avoids the "active-looking dead field" anti-pattern.
+- `pinned: bool` — P3 protection flag. See §3.
 
 **Key format:** `"{anchor_id}::{normalized_pattern}"` where
 
@@ -81,6 +85,42 @@ The raw pattern is stored alongside the key so the file is human-readable withou
 | `unknown` | Backfilled retroactively — see §5.2 backfill policy. |
 
 Reserved for future: `pinned` isn't a source value — it's a separate boolean flag `pinned: true` on the metadata entry (P3 protection). MVP supports `pinned` in the schema but has no CLI to set it yet; that's a one-command follow-up.
+
+### §1.1 — Atlas rebuild inheritance
+
+`pattern_metadata.json` lives per atlas version (`atlas_v{N}/pattern_metadata.json`). Without an explicit inheritance rule, `psa atlas build` would create `atlas_v{N+1}/` with no metadata, and the next decay run would backfill every pattern as `source="unknown", created_at=<now>` — resetting the forgetting clock on every rebuild and defeating the point of persisting `created_at`.
+
+**Inheritance rule**, matching the existing `FingerprintStore.inherit_from()` pattern:
+
+During `AtlasManager.rebuild()`, after the new atlas has been built and anchor matching has run, perform a metadata copy-forward pass:
+
+```python
+# In psa/atlas.py, after centroid matching during rebuild:
+old_meta = load_pattern_metadata(previous_atlas.anchor_dir)
+new_meta: dict[str, dict] = {}
+for card in new_atlas.cards:
+    for pattern in card.generated_query_patterns:
+        key = f"{card.anchor_id}::{normalize_pattern(pattern)}"
+        if key in old_meta:
+            # Matched anchor (anchor_id preserved across rebuild) + matched
+            # pattern text — carry the entry forward verbatim.
+            new_meta[key] = old_meta[key]
+save_pattern_metadata(new_atlas.anchor_dir, new_meta)
+```
+
+What this does and doesn't handle:
+
+- **Matched anchor + matched pattern**: metadata copied forward, `created_at` preserved. This is the common case — most patterns survive a rebuild.
+- **Matched anchor, new pattern** (Qwen produced different wording at rebuild time): no entry in old metadata, no entry copied, backfill stamps it as `source="unknown"` on the next decay run. Acceptable. The pattern IS new to the new atlas version.
+- **Matched anchor, removed pattern** (pattern was on v{N} but not v{N+1}): old metadata entry is orphaned (not copied forward). Orphans disappear with the old atlas directory and its file.
+- **New anchor** (introduced at rebuild): no entries exist; backfill stamps all its patterns on next decay run. Correct.
+- **Retired anchor** (dropped at rebuild): old entries stay in the old atlas dir's metadata but don't carry forward. Retired atlas dirs are already out of scope for decay.
+
+**Why the inheritance walks new cards, not old:** by iterating the new atlas's patterns and querying old metadata, we naturally drop orphans (old entries with no matching new pattern) without needing to track them explicitly. The new metadata file is exactly right-sized for the new atlas.
+
+**Normalization consistency:** `normalize_pattern` is applied on both sides. A pattern whose text drifts slightly between rebuilds (e.g., punctuation change) retains its metadata as long as normalization collapses the difference.
+
+**Operational consequence:** after a rebuild, the first decay run's `n_patterns_backfilled_this_run` count equals (approximately) the number of patterns introduced or re-worded at rebuild time — a useful diagnostic for how stable the atlas topology is across rebuilds.
 
 ## §2 — Reinforcement signal (R1: activation + substring)
 
@@ -353,6 +393,7 @@ Reinforcement respects the active origin filter. Default `{"interactive"}`. Same
 | `tests/test_forgetting_reinforcement.py` | Substring + activation; origin filtering; window bound; ephemeral (not persisted). |
 | `tests/test_forgetting_decay.py` | D1 rule; P1 two-part shield; P3 pin respect; source-grouped counts; empty-run guard. |
 | `tests/test_cli_atlas_decay.py` | Dry-run vs. real; JSON envelope; promote-gate integration (runs through promote-refinement); coexistence with refine/curate candidates. |
+| `tests/test_atlas_metadata_inheritance.py` | `AtlasManager.rebuild()` carries metadata forward for matched patterns; orphans are dropped; new patterns are not pre-stamped. |
 
 ### Modified
 
@@ -360,6 +401,7 @@ Reinforcement respects the active origin filter. Default `{"interactive"}`. Same
 |---|---|
 | `psa/cli.py` | New `decay` subparser + handler. Promote command's recalibration hint remains unchanged (promoted decayed cards need the same `psa train --coactivation --force` follow-up). |
 | `psa/config.py` | Document `decay` config block; add accessor if the config class uses explicit keys. |
+| `psa/atlas.py` | `AtlasManager.rebuild()` gains a metadata-inheritance step after centroid matching (§1.1). Mirrors how `FingerprintStore.inherit_from()` is already called during rebuild. |
 
 ### Not touched (explicitly)
 
@@ -372,6 +414,7 @@ Reinforcement respects the active origin filter. Default `{"interactive"}`. Same
 ## Success criteria
 
 - `psa atlas decay --dry-run` prints a report without writing any candidate files. `pattern_metadata.json` may be updated with backfilled entries (provenance-only, non-destructive).
+- `psa atlas build` (rebuild) carries `pattern_metadata.json` forward for matched `(anchor_id, normalized_pattern)` pairs. New patterns are left unstamped (get backfilled next decay run); orphaned entries are dropped. `created_at` is preserved for patterns that survive the rebuild.
 - `psa atlas decay` (real) writes exactly three files: `anchor_cards_candidate.json`, `anchor_cards_candidate.meta.json`, `anchor_cards_candidate.decay_report.json`. None of them is `anchor_cards_refined.json`.
 - After `psa atlas promote-refinement`, the promoted cards have fewer patterns and the loader picks them up via Branch 1's preference.
 - `pattern_metadata.json` persists backfilled entries for previously unstamped patterns; the operator can see the backfill count in the summary.
