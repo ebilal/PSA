@@ -1533,6 +1533,215 @@ def cmd_compress(args):
         print("  (dry run -- nothing stored)")
 
 
+def _resolve_origins(args) -> set[str]:
+    """Default to {'interactive'}; --include-origin widens the set."""
+    origins = {"interactive"}
+    extra = getattr(args, "include_origin", None) or []
+    origins.update(extra)
+    return origins
+
+
+def _atlas_meta_for_tenant(tenant_id: str) -> tuple[int, int]:
+    """Return (atlas_version, trace_records_count)."""
+    import os as _os
+
+    from .atlas import AtlasManager
+    from .tenant import TenantManager
+
+    tm = TenantManager()
+    tenant = tm.get_or_create(tenant_id)
+    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
+    atlas = mgr.get_atlas()
+    version = atlas.version if atlas is not None else 0
+
+    trace_path = _os.path.expanduser(f"~/.psa/tenants/{tenant_id}/query_trace.jsonl")
+    n = 0
+    if _os.path.exists(trace_path):
+        with open(trace_path) as f:
+            for line in f:
+                if line.strip():
+                    n += 1
+    return version, n
+
+
+def _cmd_diag_activation(args):
+    from dataclasses import asdict
+
+    from .diag.activation import activation_report
+
+    tenant_id = getattr(args, "tenant", "default")
+    origins = _resolve_origins(args)
+    rows = activation_report(tenant_id, origins=origins)
+
+    # Filter by min-selections, then sort.
+    min_sel = getattr(args, "min_selections", 0)
+    if min_sel > 0:
+        rows = [r for r in rows if r.n_selected >= min_sel]
+    sort_key = getattr(args, "sort", "n_selected")
+    if sort_key == "carry_rate_asc":
+        rows.sort(key=lambda r: (r.carry_rate, -r.n_selected))
+    elif sort_key == "gap":
+        rows.sort(key=lambda r: (1.0 - r.carry_rate) * r.n_selected, reverse=True)
+    else:  # n_selected
+        rows.sort(key=lambda r: r.n_selected, reverse=True)
+
+    limit = getattr(args, "limit", 20)
+    if limit and limit > 0:
+        rows = rows[:limit]
+
+    version, total = _atlas_meta_for_tenant(tenant_id)
+    if getattr(args, "json", False):
+        import json as _json
+
+        print(
+            _json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "atlas_version": version,
+                    "trace_records": total,
+                    "origins": sorted(origins),
+                    "rows": [asdict(r) for r in rows],
+                }
+            )
+        )
+        return
+
+    print(
+        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"   origins: {', '.join(sorted(origins))}"
+    )
+    print()
+    print(f"{'anchor':<32} {'n_sel':>6} {'n_carry':>8} {'carry%':>8}")
+    for r in rows:
+        print(
+            f"{r.anchor_name[:32]:<32} {r.n_selected:>6} {r.n_carried:>8}"
+            f" {r.carry_rate * 100:>7.1f}%"
+        )
+
+
+def _cmd_diag_advertisement(args):
+    from dataclasses import asdict
+
+    from .diag.advertisement import advertisement_report
+
+    tenant_id = getattr(args, "tenant", "default")
+    origins = _resolve_origins(args)
+    rows = advertisement_report(tenant_id, origins=origins)
+    rows.sort(key=lambda r: r.advertisement_gap, reverse=True)
+
+    limit = getattr(args, "limit", 20)
+    if limit and limit > 0:
+        rows = rows[:limit]
+
+    version, total = _atlas_meta_for_tenant(tenant_id)
+    if getattr(args, "json", False):
+        import json as _json
+
+        print(
+            _json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "atlas_version": version,
+                    "trace_records": total,
+                    "origins": sorted(origins),
+                    "rows": [asdict(r) for r in rows],
+                }
+            )
+        )
+        return
+
+    print(
+        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"   origins: {', '.join(sorted(origins))}"
+    )
+    print()
+    print(f"{'anchor':<32} {'mem#':>5} {'mem%':>5} {'act_rate':>9} {'act%':>5} {'gap':>6}")
+    for r in rows:
+        print(
+            f"{r.anchor_name[:32]:<32} {r.memory_count:>5} {r.memory_percentile:>4.0f}% "
+            f"{r.activation_rate:>8.2%} {r.activation_percentile:>4.0f}% {r.advertisement_gap:>+5.0f}"
+        )
+
+
+def _cmd_diag_misses(args):
+    from .diag.misses import miss_report
+
+    tenant_id = getattr(args, "tenant", "default")
+    origins = _resolve_origins(args)
+    n_recent = getattr(args, "recent", 20)
+    top_k = getattr(args, "top_near_miss", 10)
+    report = miss_report(tenant_id, n_recent=n_recent, origins=origins)
+    near_miss_trimmed = report.near_miss_anchors[:top_k]
+
+    version, total = _atlas_meta_for_tenant(tenant_id)
+    if getattr(args, "json", False):
+        import json as _json
+
+        print(
+            _json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "atlas_version": version,
+                    "trace_records": total,
+                    "origins": sorted(origins),
+                    "total_queries": report.total_queries,
+                    "empty_queries": report.empty_queries,
+                    "empty_rate": report.empty_rate,
+                    "rows": [
+                        {"anchor_id": aid, "count": c, "mean_rank": mr, "mean_score": ms}
+                        for aid, c, mr, ms in near_miss_trimmed
+                    ],
+                    "recent_misses": [
+                        {
+                            "timestamp": m.get("timestamp"),
+                            "query": m.get("query"),
+                            "top_anchor_scores": m.get("top_anchor_scores", [])[:3],
+                        }
+                        for m in report.recent_misses
+                    ],
+                }
+            )
+        )
+        return
+
+    print(
+        f"tenant: {tenant_id}   atlas v{version}   trace records: {total:,}"
+        f"   origins: {', '.join(sorted(origins))}"
+    )
+    print()
+    print(
+        f"Empty-selection rate:  {report.empty_queries:,} / {report.total_queries:,}"
+        f"  ({report.empty_rate * 100:.2f}%)"
+    )
+    print()
+    print("Top near-miss anchors (rank <= 3 in empty-selection records only):")
+    for i, (aid, count, mean_rank, mean_score) in enumerate(near_miss_trimmed, start=1):
+        print(
+            f"  {i}. anchor-{aid:<5}  {count:>4} near-misses"
+            f"   mean rank {mean_rank:.1f}   mean score {mean_score:.2f}"
+        )
+    print()
+    print("Recent empty queries:")
+    for m in report.recent_misses[-min(n_recent, 10) :]:
+        ts = (m.get("timestamp") or "").replace("T", " ")[:19]
+        q = (m.get("query") or "")[:60]
+        print(f"  {ts}  {q!r}")
+
+
+def cmd_diag(args):
+    """Handle 'psa diag <subcommand>'."""
+    action = getattr(args, "diag_action", None)
+    if not action:
+        print("Usage: psa diag {activation,advertisement,misses}")
+        return
+    if action == "activation":
+        _cmd_diag_activation(args)
+    elif action == "advertisement":
+        _cmd_diag_advertisement(args)
+    elif action == "misses":
+        _cmd_diag_misses(args)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MemPalace — Give your AI a memory. No API key required.",
@@ -1701,6 +1910,44 @@ def main():
             "non-zero with a pointer to psa/curation/extractor_llm.py."
         ),
     )
+
+    # diag
+    p_diag = sub.add_parser("diag", help="Diagnostic rollups over the per-query trace log")
+    p_diag.add_argument(
+        "--tenant", default="default", help="Tenant identifier (default: 'default')"
+    )
+    diag_sub = p_diag.add_subparsers(dest="diag_action")
+
+    p_diag_act = diag_sub.add_parser("activation", help="Anchor activation + carry rates")
+    p_diag_act.add_argument("--limit", type=int, default=20)
+    p_diag_act.add_argument("--min-selections", type=int, default=0)
+    p_diag_act.add_argument(
+        "--sort",
+        default="n_selected",
+        choices=["n_selected", "carry_rate_asc", "gap"],
+        help=(
+            "Default n_selected (most-used first); use carry_rate_asc to "
+            "surface worst context switches"
+        ),
+    )
+    p_diag_act.add_argument(
+        "--include-origin",
+        action="append",
+        default=None,
+        help="Repeatable. Default: interactive only.",
+    )
+    p_diag_act.add_argument("--json", action="store_true")
+
+    p_diag_adv = diag_sub.add_parser("advertisement", help="Memory-count vs activation gap")
+    p_diag_adv.add_argument("--limit", type=int, default=20)
+    p_diag_adv.add_argument("--include-origin", action="append", default=None)
+    p_diag_adv.add_argument("--json", action="store_true")
+
+    p_diag_mis = diag_sub.add_parser("misses", help="Below-threshold queries + near-miss anchors")
+    p_diag_mis.add_argument("--recent", type=int, default=20)
+    p_diag_mis.add_argument("--top-near-miss", type=int, default=10)
+    p_diag_mis.add_argument("--include-origin", action="append", default=None)
+    p_diag_mis.add_argument("--json", action="store_true")
 
     # lifecycle
     p_lifecycle = sub.add_parser(
@@ -1969,6 +2216,10 @@ def main():
             p_lifecycle.print_help()
             return
         cmd_lifecycle(args)
+        return
+
+    if args.command == "diag":
+        cmd_diag(args)
         return
 
     if args.command == "hook":

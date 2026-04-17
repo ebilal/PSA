@@ -309,7 +309,9 @@ psa diag activation [--tenant T] [--limit N] [--min-selections N]
                     [--include-origin ORIGIN] [--json]
 ```
 
-Default: `--sort n_selected` descending (matches "most-used first"), `--limit 20`, `--min-selections 10`, origins `{"interactive"}`.
+Default: `--sort n_selected` descending (matches "most-used first"), `--limit 20`, `--min-selections 0`, origins `{"interactive"}`.
+
+**On `--min-selections` default.** We default to `0` (no noise-floor) so a fresh tenant running `psa diag activation` sees *something* instead of an empty table. For mature tenants using the `carry_rate_asc` sort diagnostically, `--min-selections 10` is recommended to suppress one-off activations that otherwise crowd the bottom.
 
 **Recommended operator-facing sort: `--sort carry_rate_asc`.** Surfaces anchors with the worst contribute-rate first, filtered to those with meaningful activation volume. That's the "worst context switches" view. Default was left as `n_selected` because it's the most intuitive first view; `carry_rate_asc` is the diagnostic follow-up. Both documented in `--help`.
 
