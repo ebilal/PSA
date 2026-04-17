@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from psa.curation.extractor_heuristic import HeuristicExtractor
 
 
@@ -50,3 +52,11 @@ def test_heuristic_extractor_prefers_longer_patterns():
     # The first (kept) pattern should be among the longest available.
     max_len = max(len(p.split()) for p in out)
     assert len(out[0].split()) == max_len
+
+
+def test_llm_extractor_stub_raises_notimplemented():
+    from psa.curation.extractor_llm import LLMExtractor
+
+    extractor = LLMExtractor()
+    with pytest.raises(NotImplementedError, match="extractor_llm.py"):
+        extractor.extract(["some query"], n=5)
