@@ -220,3 +220,90 @@ def test_evaluate_removal_happy_path(tmp_path):
     assert len(result.removal_candidates) == 1
     assert result.removal_candidates[0].pattern_text == "pattern"
     assert result.removal_candidates[0].anchor_id == 1
+
+
+def test_apply_removals_mutates_refined_and_archives_row(tmp_path, monkeypatch):
+    """End-to-end: refined file gets pattern removed, row soft-archived, marker written."""
+    import json
+    from psa.advertisement.ledger import (
+        apply_removals,
+        RemovalCandidate,
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    atlas_dir = tmp_path / ".psa" / "tenants" / "default" / "atlas_v1"
+    atlas_dir.mkdir(parents=True)
+    # Seed a refined file with two patterns; one will be removed.
+    cards = [
+        {
+            "anchor_id": 1,
+            "generated_query_patterns": ["keep this pattern", "remove this pattern"],
+        }
+    ]
+    (atlas_dir / "anchor_cards_refined.json").write_text(json.dumps(cards))
+
+    db = _seed(tmp_path, ledger=-2.0, cnc=20)
+    candidate = RemovalCandidate(
+        pattern_id="pid-x",
+        anchor_id=1,
+        pattern_text="remove this pattern",
+        ledger=-2.0,
+        consecutive_negative_cycles=20,
+        shadow_ledger=-2.0,
+        shadow_consecutive=20,
+    )
+    apply_removals(
+        db=db,
+        tenant_id="default",
+        atlas_dir=str(atlas_dir),
+        candidates=[candidate],
+    )
+
+    # Refined file updated
+    after = json.loads((atlas_dir / "anchor_cards_refined.json").read_text())
+    assert after[0]["generated_query_patterns"] == ["keep this pattern"]
+    # Row archived
+    row = db.execute(
+        "SELECT removed_at, removal_reason, final_ledger FROM pattern_ledger"
+    ).fetchone()
+    assert row[0] is not None
+    assert row[1] == "stage2_sustained_negative"
+    assert row[2] == -2.0
+    # Marker written
+    marker = tmp_path / ".psa" / "tenants" / "default" / "atlas_reload_requested"
+    assert marker.exists()
+
+
+def test_apply_removals_creates_refined_from_base_when_absent(tmp_path, monkeypatch):
+    """No refined file yet: read base, write refined, leave base untouched."""
+    import json
+    from psa.advertisement.ledger import apply_removals, RemovalCandidate
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    atlas_dir = tmp_path / ".psa" / "tenants" / "default" / "atlas_v1"
+    atlas_dir.mkdir(parents=True)
+    base_cards = [{"anchor_id": 1, "generated_query_patterns": ["keep", "remove"]}]
+    (atlas_dir / "anchor_cards.json").write_text(json.dumps(base_cards))
+
+    db = _seed(tmp_path, ledger=-2.0, cnc=20)
+    candidate = RemovalCandidate(
+        pattern_id="pid-x",
+        anchor_id=1,
+        pattern_text="remove",
+        ledger=-2.0,
+        consecutive_negative_cycles=20,
+        shadow_ledger=-2.0,
+        shadow_consecutive=20,
+    )
+    apply_removals(
+        db=db, tenant_id="default", atlas_dir=str(atlas_dir), candidates=[candidate]
+    )
+
+    # Base untouched
+    base_after = json.loads((atlas_dir / "anchor_cards.json").read_text())
+    assert base_after == base_cards
+    # Refined created with the removal applied
+    refined = json.loads(
+        (atlas_dir / "anchor_cards_refined.json").read_text()
+    )
+    assert refined[0]["generated_query_patterns"] == ["keep"]

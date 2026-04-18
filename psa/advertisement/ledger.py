@@ -13,13 +13,17 @@ pattern text changes (regeneration at atlas rebuild).
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import sqlite3
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from psa.advertisement.attribution import attribute_bm25_argmax
 from psa.advertisement.metadata import normalize_pattern
+from psa.advertisement.reload import write_reload_marker
 
 
 def pattern_id_for(anchor_id: int, pattern_text: str) -> str:
@@ -345,3 +349,99 @@ def evaluate_removal(
         n_in_grace=n_in_grace,
         n_at_risk=n_at_risk,
     )
+
+
+def _atomic_write_json(path: str, obj) -> None:
+    """Write JSON via tmp + os.replace for durability."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cards-", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _load_live_cards(atlas_dir: str):
+    """Prefer refined; fall back to base. Returns (cards, source_file_name)."""
+    refined = os.path.join(atlas_dir, "anchor_cards_refined.json")
+    base = os.path.join(atlas_dir, "anchor_cards.json")
+    if os.path.exists(refined):
+        with open(refined) as f:
+            return json.load(f), "anchor_cards_refined.json"
+    with open(base) as f:
+        return json.load(f), "anchor_cards.json"
+
+
+def apply_removals(
+    *,
+    db,
+    tenant_id: str,
+    atlas_dir: str,
+    candidates: list,
+) -> int:
+    """Drop candidate patterns from refined cards; archive ledger rows; write marker.
+
+    Returns the number of successfully-applied removals.
+    """
+    if not candidates:
+        return 0
+
+    cards, _ = _load_live_cards(atlas_dir)
+    # Index cards by anchor_id for quick lookup
+    by_anchor: dict[int, dict] = {}
+    for c in cards:
+        aid = c.get("anchor_id") if isinstance(c, dict) else getattr(c, "anchor_id", None)
+        if aid is not None:
+            by_anchor[aid] = c
+
+    changed_anchors: set[int] = set()
+    applied: list = []
+    for cand in candidates:
+        card = by_anchor.get(cand.anchor_id)
+        if card is None:
+            continue
+        patterns = card.get("generated_query_patterns", [])
+        # Remove by normalized-text match so format drift doesn't defeat us.
+        target = normalize_pattern(cand.pattern_text)
+        new_patterns = [p for p in patterns if normalize_pattern(p) != target]
+        if len(new_patterns) == len(patterns):
+            continue
+        card["generated_query_patterns"] = new_patterns
+        changed_anchors.add(cand.anchor_id)
+        applied.append(cand)
+
+    if not applied:
+        return 0
+
+    refined_path = os.path.join(atlas_dir, "anchor_cards_refined.json")
+    _atomic_write_json(refined_path, cards)
+
+    now = _now_iso()
+    for cand in applied:
+        db.execute(
+            """
+            UPDATE pattern_ledger
+            SET removed_at = ?,
+                removal_reason = ?,
+                final_ledger = ?,
+                final_shadow_ledger = ?
+            WHERE pattern_id = ?
+            """,
+            (
+                now,
+                "stage2_sustained_negative",
+                cand.ledger,
+                cand.shadow_ledger,
+                cand.pattern_id,
+            ),
+        )
+    db.commit()
+
+    write_reload_marker(tenant_id=tenant_id, changed_anchor_ids=changed_anchors)
+    return len(applied)
