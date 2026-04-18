@@ -445,3 +445,35 @@ def apply_removals(
 
     write_reload_marker(tenant_id=tenant_id, changed_anchor_ids=changed_anchors)
     return len(applied)
+
+
+def reset_ledger_on_rebuild(*, db, new_atlas, grace_days: int) -> None:
+    """Archive every active row; insert fresh rows for new atlas's patterns.
+
+    Called from AtlasBuilder.build_atlas() AFTER the metadata-inheritance pass,
+    so stage 1 and stage 2 both see a consistent rebuild event.
+    """
+    now = _now_iso()
+    db.execute(
+        """
+        UPDATE pattern_ledger
+        SET removed_at = ?,
+            removal_reason = 'atlas_rebuild_reset',
+            final_ledger = ledger,
+            final_shadow_ledger = shadow_ledger
+        WHERE removed_at IS NULL
+        """,
+        (now,),
+    )
+    for card in new_atlas.cards:
+        for pattern in getattr(card, "generated_query_patterns", []):
+            upsert_ledger(
+                db=db,
+                pattern_id=pattern_id_for(card.anchor_id, pattern),
+                anchor_id=card.anchor_id,
+                pattern_text=pattern,
+                ledger_delta=0.0,
+                shadow_delta=0.0,
+                grace_days=grace_days,
+            )
+    db.commit()
