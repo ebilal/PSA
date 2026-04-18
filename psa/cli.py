@@ -2382,6 +2382,11 @@ def main():
     # status
     sub.add_parser("status", help="Show what's been filed")
 
+    # advertisement (stage 2 ledger inspection)
+    from .advertisement.cli import build_parser as _build_ad_parser
+
+    p_advertisement = _build_ad_parser(sub)
+
     args = parser.parse_args()
 
     if not args.command:
@@ -2436,6 +2441,17 @@ def main():
             return
         args.name = name
         cmd_instructions(args)
+        return
+
+    if args.command == "advertisement":
+        from .advertisement.cli import dispatch as _ad_dispatch
+
+        if not getattr(args, "advertisement_action", None):
+            p_advertisement.print_help()
+            return
+        rc = _ad_dispatch(args)
+        if rc:
+            sys.exit(rc)
         return
 
     dispatch = {
