@@ -459,17 +459,27 @@ When `apply_removals` runs:
 
 Both removal paths mutate the same live surface (`anchor_cards_refined.json`). They cannot race in execution — stage 1 is operator-invoked, stage 2 runs in nightly lifecycle — but they CAN stomp on each other via stale-candidate promotion. The coexistence rules below close that hole.
 
-### §10.1 — Stale-candidate hazard + fix (required stage 1 modification)
+### §10.1 — Stale-candidate hazard + fix (required stage 1 modification, covers ALL candidate producers)
 
-**Hazard.** `psa atlas promote-refinement` currently copies `anchor_cards_candidate.json` wholesale over `anchor_cards_refined.json` (`psa/cli.py:594`). Scenario:
+**Hazard.** `psa atlas promote-refinement` copies `anchor_cards_candidate.json` wholesale over `anchor_cards_refined.json` (`psa/cli.py:594`). It is a **shared** promotion path — candidates can come from any of three producers today:
 
-1. Operator runs `psa atlas decay` at 09:00 — candidate is generated from refined state `S`.
+| Producer | CLI surface | Current writer |
+|---|---|---|
+| Advertisement decay (stage 1) | `psa atlas decay` | `psa/advertisement/writer.py` |
+| Pattern refinement | `psa atlas refine` | refine path in `psa/cli.py` |
+| Production-signal curation | `psa atlas curate` | `psa/curation/curator.py` |
+
+**Any stale candidate** from any of these three can overwrite stage 2 removals when promoted. Fixing only the decay path leaves the hazard open on the refine and curate paths.
+
+**Scenario (applies to every producer):**
+
+1. Operator runs any candidate-producing command at 09:00 — candidate is generated from refined state `S`.
 2. Stage 2 runs in lifecycle overnight — removes pattern P from refined, refined is now `S' = S − P`.
 3. Operator runs `psa atlas promote-refinement` the next morning. Wholesale copy replaces `S'` with the candidate, which was built from `S` and still contains `P`.
 
-Pattern P is silently resurrected.
+Pattern P is silently resurrected — irrespective of which producer generated the candidate.
 
-**Fix (modifies stage 1, minimum viable).** When `psa atlas decay` generates a candidate, it records in `anchor_cards_candidate.meta.json`:
+**Fix (modifies stage 1 — every candidate producer + the shared promoter).** Every writer that produces `anchor_cards_candidate.json` must also stamp `anchor_cards_candidate.meta.json` with:
 
 ```json
 {
@@ -482,22 +492,29 @@ Pattern P is silently resurrected.
 
 The hash is computed over the exact bytes of `anchor_cards_refined.json` at candidate-generation time. If the refined file doesn't exist yet, `refined_existed_at_generation=false` and hash is null.
 
-At promotion time, `psa atlas promote-refinement` recomputes the current hash of `anchor_cards_refined.json` and compares against the candidate's recorded value. On mismatch, promotion refuses with:
+**Shared hash-stamp utility.** To prevent drift across three writers, stamping logic lives in one place — a new helper `stamp_refined_hash(meta_dict, atlas_dir)` in `psa/advertisement/writer.py` (or a new `psa/atlas_promotion.py` if we want to keep it producer-neutral; implementation plan decides). Each of the three producers calls the helper before writing its meta file.
+
+**Gate at promotion.** `psa atlas promote-refinement` (in `psa/cli.py`) loads the candidate's meta, recomputes the current hash of `anchor_cards_refined.json`, and compares against the candidate's recorded value. On mismatch, promotion refuses with:
 
 ```
 psa atlas promote-refinement: refined cards changed since candidate was generated.
+  candidate source:       decay | refine | curate   (from meta.source)
   candidate generated at: 2026-04-17T09:00:00Z
   recorded refined hash:  sha256:ab1c…
   current refined hash:   sha256:ef42…
-  likely cause: stage 2 advertisement decay removed patterns, or another candidate was promoted, between candidate generation and now.
-  fix: rerun `psa atlas decay` to regenerate the candidate against current refined state.
+  likely cause: stage 2 advertisement decay removed patterns, or another
+                candidate was promoted, between candidate generation and now.
+  fix: rerun the command that generated this candidate (psa atlas <source>)
+       to regenerate against current refined state.
 ```
 
-Operator re-runs `psa atlas decay`, the new candidate is generated against `S'`, promotion succeeds.
+Operator re-runs the producing command, the new candidate is generated against `S'`, promotion succeeds.
 
-**Why this lives in stage 1 code.** `psa atlas decay` and `psa atlas promote-refinement` are stage 1 surfaces. Stage 2 must not intrude on their internals beyond this minimum. The hash-check is one field in meta + one comparison at promotion. Small, bounded, reviewable.
+**Why this lives in stage 1 code.** The three candidate producers and `promote-refinement` are all stage 1 surfaces. Stage 2 does not intrude beyond adding one shared helper + one comparison at promotion. Small, bounded, reviewable.
 
-**Note on first-run:** on a system that has never had a refined file, the first `psa atlas decay` records `refined_existed_at_generation=false`, and promotion only refuses if a refined file now exists (meaning stage 2 created one in the interim). The check is symmetric.
+**Behavior on legacy candidates.** Candidates generated before this change have no `refined_hash_at_generation` field in their meta. Promotion must decide: refuse (safe default, forces operator to regenerate) or warn-and-proceed (preserves pre-upgrade workflows). Spec choice: **refuse** — the error message calls out the missing field and directs the operator to rerun the producing command. Backward compatibility is not worth the hazard window; the one-time rerun cost is small.
+
+**Note on first-run:** on a system that has never had a refined file, the first candidate records `refined_existed_at_generation=false`, and promotion only refuses if a refined file now exists (meaning stage 2 created one in the interim). The check is symmetric across producers.
 
 ### §10.2 — Other coexistence rules
 
@@ -651,14 +668,14 @@ Hard-deletes archived rows past retention. Runs automatically weekly from lifecy
 | `tests/test_cli_advertisement.py` | `status`, `diff`, `rebuild-ledger`, `purge` output shapes; dry-run behaviour. |
 | `tests/test_ledger_trace_ordering.py` | Trace-first-ledger-second semantics: ledger skipped when trace disabled; ledger writes only after trace returns success. |
 | `tests/test_ledger_reload_marker.py` | Marker file is written atomically after stage 2 removal; `PSAPipeline.reload_atlas()` picks it up. |
-| `tests/test_promote_refinement_hash_gate.py` | Promotion refuses on refined-hash mismatch; succeeds when hashes match; handles first-run (`refined_existed_at_generation=false`). |
+| `tests/test_promote_refinement_hash_gate.py` | Hash-stamp helper produces matching values; promotion refuses on refined-hash mismatch for candidates from every producer (decay, refine, curate); promotion refuses legacy candidates missing the hash field; promotion succeeds when hashes match; handles first-run (`refined_existed_at_generation=false`). |
 
 ### Modified (stage 2 code)
 
 | File | Change |
 |---|---|
 | `psa/pipeline.py` | After selector returns, compute attribution once, populate `trace_record.retrieval_attribution`, write trace first, then conditionally call `ledger.record_query_signals(...)` only if trace write succeeded. Adds `reload_atlas()` method that re-reads refined cards and rebuilds BM25 index; checks marker file between queries for long-lived consumers. |
-| `psa/anchor_retriever.py` | Expose BM25-side top-K shortlist on the `RetrievalResult` so `pipeline.py` can pass it to attribution. One additive field. `AnchorRetriever.reindex_from_cards(cards)` callable from `reload_atlas`. |
+| `psa/retriever.py` | Expose BM25-side top-K shortlist on the `RetrievalResult` so `pipeline.py` can pass it to attribution. One additive field. `AnchorRetriever.reindex_from_cards(cards)` callable from `reload_atlas`. |
 | `psa/lifecycle.py` | New `advertisement_decay_pass(...)` step in fast path, between "mine new sessions" and "prune memories". Writes the reload marker file after any successful removal. |
 | `psa/atlas.py` | `AtlasManager.rebuild()` calls `ledger.reset_ledger_on_rebuild(...)` after the existing metadata-inheritance pass. |
 | `psa/trace.py` | `write_trace(...)` returns `bool` (True on success, False on failure or when tracing is disabled). `new_trace_record(...)` adds optional `retrieval_attribution: []` field. |
@@ -666,12 +683,16 @@ Hard-deletes archived rows past retention. Runs automatically weekly from lifecy
 | `psa/cli.py` | Wire `advertisement` subparser dispatching to `psa/advertisement/cli.py`. |
 | `psa/mcp_server.py` | Long-lived consumer of the pipeline — checks reload marker file between queries and calls `pipeline.reload_atlas()` when the marker is newer than the last reload timestamp. |
 
-### Modified (stage 1 code — §10.1 prerequisite)
+### Modified (stage 1 code — §10.1 prerequisite, covers ALL candidate producers)
+
+`promote-refinement` is the shared promotion path for three candidate producers (decay, refine, curate). Every producer must stamp `refined_hash_at_generation`, and the shared promoter must gate on it. Hash-stamp logic lives in a single helper to prevent drift.
 
 | File | Change |
 |---|---|
-| `psa/advertisement/writer.py` | At candidate write time, compute SHA-256 of `anchor_cards_refined.json` (or record null if the file does not exist). Store in `anchor_cards_candidate.meta.json` as `refined_hash_at_generation`, `refined_path_at_generation`, `refined_existed_at_generation`. Atomic JSON writer is lifted into a shared utility for both stage 1 and stage 2 to use. |
-| `psa/cli.py` | `psa atlas promote-refinement` loads the candidate's meta, recomputes the current refined hash, and refuses promotion on mismatch with a clear error message directing the operator to rerun `psa atlas decay`. |
+| `psa/advertisement/writer.py` | Add `stamp_refined_hash(meta_dict, atlas_dir)` helper (computes SHA-256 of `anchor_cards_refined.json` bytes, or records null if absent; writes `refined_hash_at_generation`, `refined_path_at_generation`, `refined_existed_at_generation`). Existing decay-candidate meta writer calls the helper. Atomic JSON writer is lifted into a shared utility (also used by stage 2 removal in §9.1). |
+| `psa/curation/curator.py` | Curate candidate writer calls `stamp_refined_hash(...)` on its meta file before persisting. No change to curation logic itself. |
+| `psa/cli.py` (refine path) | Refine candidate writer (inside `_cmd_atlas_refine` or equivalent) calls `stamp_refined_hash(...)` on its meta file before persisting. |
+| `psa/cli.py` (promote path) | `psa atlas promote-refinement` loads the candidate's meta, recomputes the current refined hash, and refuses promotion on mismatch with a clear error message directing the operator to rerun the producing command (determined via `meta.source`). Legacy candidates without the hash field are refused by default, with a message pointing to the regeneration command. |
 
 ### Not touched
 
@@ -688,7 +709,7 @@ Hard-deletes archived rows past retention. Runs automatically weekly from lifecy
 - With `tracking_enabled=true, trace_queries=false`: pipeline startup fails with `AdvertisementDecayConfigError` before any query runs.
 - With `tracking_enabled=true, removal_enabled=false`: attribution is computed inline, trace is written first, ledger rows are populated only when trace write succeeded; nightly lifecycle logs summary counts; no mutation of `anchor_cards_refined.json`; `psa advertisement status` / `diff` report live data.
 - With `tracking_enabled=true, removal_enabled=true`: nightly pass removes eligible patterns; `anchor_cards_refined.json` is updated atomically (created from base cards if absent); ledger rows are soft-archived; reload marker file is written; stage 2 removals become visible on next pipeline instantiation (or after `reload_atlas()` for long-lived processes like the MCP server).
-- Stage 1's `psa atlas decay` produces candidate output that now carries `refined_hash_at_generation`. `psa atlas promote-refinement` refuses promotion when the current refined hash differs from the recorded value, preventing stale candidates from overwriting stage 2 removals. A pattern removed by stage 1 promotion does not re-appear in stage 2's active ledger view.
+- All stage 1 candidate producers (`psa atlas decay`, `psa atlas refine`, `psa atlas curate`) stamp `refined_hash_at_generation` via the shared helper. `psa atlas promote-refinement` refuses promotion when the current refined hash differs from the recorded value OR when the hash field is missing (legacy candidate). This prevents stale candidates from any producer from overwriting stage 2 removals. A pattern removed by stage 1 promotion does not re-appear in stage 2's active ledger view.
 - P1 (low-activation shield) and P3 (pinned exemption) protect stage 2 removals, via direct reuse of stage 1's logic.
 - `psa advertisement rebuild-ledger` reconstructs the ledger from trace with matching final values (within floating-point tolerance) when `retrieval_attribution` augmentation is present, AND the trace-first-ledger-second ordering is enforced at write time so every ledger event has a trace counterpart.
 - Atlas rebuild archives all active ledger rows with `removal_reason="atlas_rebuild_reset"` and inserts fresh rows for every pattern in the new atlas's cards.
