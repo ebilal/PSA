@@ -303,3 +303,12 @@ class AnchorRetriever:
     def invalidate_bm25_cache(self):
         """Call after atlas cards change (e.g., after card text refinement)."""
         self._bm25 = None
+
+    def reindex_from_cards(self, cards) -> None:
+        """Replace the atlas card list and invalidate the BM25 index.
+
+        Called by PSAPipeline.reload_atlas() after re-reading refined cards.
+        BM25 rebuilds lazily on next retrieve() call.
+        """
+        self.atlas.cards = cards
+        self.invalidate_bm25_cache()

@@ -214,6 +214,19 @@ class PSAPipeline:
             self._ad_config = AdvertisementDecayConfig.from_mempalace(MempalaceConfig())
         return self._ad_config
 
+    def reload_atlas(self) -> None:
+        """Re-read the refined atlas surface and reindex the retriever.
+
+        Long-lived consumers (MCP server) call this when the stage 2 reload
+        marker advances. Safe to call at any time between queries; no in-flight
+        query is affected (the retriever's BM25 index rebuild is lazy).
+        """
+        from .atlas import Atlas
+
+        new_atlas = Atlas.load(self.atlas.anchor_dir)
+        self.atlas = new_atlas
+        self._retriever.reindex_from_cards(new_atlas.cards)
+
     def query(
         self,
         query: str,
