@@ -293,3 +293,7 @@ def test_retrieve_with_bm25_topk_populates_shortlist():
     assert 1 in result.bm25_topk_anchor_ids
     # The anchor_ids field holds the regular retrieve-result order.
     assert set(result.anchor_ids).issubset({1, 2, 3})
+    # candidates field should also be populated so pipeline callers
+    # don't have to re-run retrieve().
+    assert len(result.candidates) >= 1
+    assert all(hasattr(c, "anchor_id") for c in result.candidates)

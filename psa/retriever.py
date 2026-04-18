@@ -60,7 +60,9 @@ class AnchorCandidate:
 
 @dataclass
 class RetrievalResult:
-    """Retrieval output wrapper that also carries the BM25-side shortlist.
+    """Retrieval output wrapper that also carries the BM25-side shortlist
+    AND the full candidate list (avoids re-running retrieve() in callers
+    that need both).
 
     Used by pipeline-level callers (e.g., stage 2 ledger attribution) that
     need to know which anchors were in the BM25 top-K before RRF fusion.
@@ -71,6 +73,7 @@ class RetrievalResult:
     anchor_ids: List[int]
     scores: List[float]
     bm25_topk_anchor_ids: List[int] = field(default_factory=list)
+    candidates: List[AnchorCandidate] = field(default_factory=list)
 
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -294,6 +297,7 @@ class AnchorRetriever:
             anchor_ids=[c.anchor_id for c in candidates],
             scores=[c.rrf_score for c in candidates],
             bm25_topk_anchor_ids=bm25_topk_anchor_ids,
+            candidates=list(candidates),
         )
 
     def invalidate_bm25_cache(self):

@@ -404,12 +404,7 @@ class PSAPipeline:
                         query_vec=query_vec,
                     )
                     _bm25_topk_anchor_ids = _retrieval.bm25_topk_anchor_ids
-                    candidates = self._retriever.retrieve(
-                        query=query,
-                        embedding_model=self.embedding_model,
-                        top_k=top_k_candidates,
-                        query_vec=query_vec,
-                    )
+                    candidates = _retrieval.candidates
                 else:
                     _bm25_topk_anchor_ids = None
                     candidates = self._retriever.retrieve(
