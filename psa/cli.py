@@ -593,6 +593,50 @@ def _cmd_atlas_refine_promote(args):
         print("  Run 'psa atlas refine --miss-log PATH' first.")
         sys.exit(1)
 
+    # Stage-2 coexistence gate: refuse stale candidates.
+    # A candidate generated against refined state S must not overwrite a
+    # refined file that is no longer in state S (because stage 2 decay removed
+    # patterns, or another candidate was promoted, between generation and now).
+    import hashlib
+
+    if candidate_meta_path.exists():
+        with open(candidate_meta_path) as f:
+            meta_for_gate = json.load(f)
+    else:
+        meta_for_gate = None
+
+    if meta_for_gate is None or "refined_hash_at_generation" not in meta_for_gate:
+        print(
+            "  Error: candidate meta is missing refined_hash_at_generation "
+            "(legacy candidate pre-dating the hash gate)."
+        )
+        print(
+            "  Rerun the producing command (psa atlas decay | refine | curate) "
+            "to regenerate the candidate against current refined state."
+        )
+        sys.exit(1)
+
+    recorded_hash = meta_for_gate.get("refined_hash_at_generation")
+    recorded_existed = meta_for_gate.get("refined_existed_at_generation", True)
+
+    if refined_path.exists():
+        current_hash = "sha256:" + hashlib.sha256(refined_path.read_bytes()).hexdigest()
+        current_existed = True
+    else:
+        current_hash = None
+        current_existed = False
+
+    if recorded_existed != current_existed or recorded_hash != current_hash:
+        source = meta_for_gate.get("source", "unknown")
+        print("  Error: refined cards changed since candidate was generated.")
+        print(f"    candidate source:       {source}")
+        print(f"    recorded refined hash:  {recorded_hash}")
+        print(f"    current refined hash:   {current_hash}")
+        print("  Likely cause: stage 2 advertisement decay removed patterns, or")
+        print("  another candidate was promoted, between candidate generation and now.")
+        print(f"  Fix: rerun `psa atlas {source}` to regenerate the candidate.")
+        sys.exit(1)
+
     # Copy cards verbatim
     shutil.copyfile(candidate_path, refined_path)
 
