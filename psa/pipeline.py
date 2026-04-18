@@ -100,6 +100,64 @@ class PSAResult:
         }
 
 
+# ── compose_and_record ────────────────────────────────────────────────────────
+
+
+def compose_and_record(
+    *,
+    tenant_id: str,
+    trace_record: dict,
+    attribution,
+    selected_anchor_ids,
+    config,
+    record_signals_fn=None,
+) -> None:
+    """Write trace first; only if it succeeded, record ledger signals.
+
+    The stage 2 ledger is a materialised view of events the trace records.
+    To guarantee ``psa advertisement rebuild-ledger`` is canonical, trace must
+    be source of truth: if the trace write fails or is disabled, skip the
+    ledger write so the two cannot drift.
+
+    ``record_signals_fn`` is injectable for unit tests. Production callers
+    omit it and the function constructs the default ledger writer.
+    """
+    from .trace import write_trace
+
+    trace_record["retrieval_attribution"] = [
+        {
+            "anchor_id": a.anchor_id,
+            "bm25_argmax_pattern": a.argmax_pattern,
+            "bm25_epsilon_tied": list(a.eps_tied_patterns),
+            "bm25_floor_passed": a.bm25_floor_passed,
+        }
+        for a in attribution
+    ]
+    trace_written = write_trace(trace_record, tenant_id=tenant_id)
+    if not trace_written:
+        return
+    if not getattr(config, "tracking_enabled", False):
+        return
+    if record_signals_fn is None:
+        import sqlite3
+
+        def _default(**kw):
+            db_path = os.path.expanduser(f"~/.psa/tenants/{tenant_id}/memory.sqlite3")
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            with sqlite3.connect(db_path) as db:
+                from .advertisement.ledger import create_schema, record_query_signals
+
+                create_schema(db)
+                record_query_signals(db=db, **kw)
+
+        record_signals_fn = _default
+    record_signals_fn(
+        attribution=attribution,
+        selected_anchor_ids=selected_anchor_ids,
+        config=config,
+    )
+
+
 # ── PSAPipeline ───────────────────────────────────────────────────────────────
 
 
@@ -140,6 +198,22 @@ class PSAPipeline:
         self._synthesizer = AnchorSynthesizer()
         self._constraint_scorer = ConstraintScorer()
 
+        # Stage 2 advertisement-decay config. Defaults are off — tracking is
+        # lazily evaluated from the user's MempalaceConfig when the pipeline
+        # first runs a query. Kept as a property rather than an __init__ arg
+        # so existing callers stay unchanged.
+        self._ad_config = None
+
+    @property
+    def ad_config(self):
+        """Load AdvertisementDecayConfig on first access."""
+        if self._ad_config is None:
+            from .advertisement.config import AdvertisementDecayConfig
+            from .config import MempalaceConfig
+
+            self._ad_config = AdvertisementDecayConfig.from_mempalace(MempalaceConfig())
+        return self._ad_config
+
     def query(
         self,
         query: str,
@@ -168,7 +242,7 @@ class PSAPipeline:
         import datetime as _dt
         import hashlib as _h
 
-        from .trace import new_trace_record, write_trace
+        from .trace import new_trace_record
 
         t_start = time.perf_counter()
         _run_id = (
@@ -190,6 +264,7 @@ class PSAPipeline:
 
         timing = QueryTiming()
         result: Optional[PSAResult] = None
+        _bm25_topk_anchor_ids: Optional[List[int]] = None
 
         try:
             # Step 1: Embed query
@@ -313,12 +388,36 @@ class PSAPipeline:
             else:
                 # Level 2: Legacy retriever + selector path
                 t0 = time.perf_counter()
-                candidates = self._retriever.retrieve(
-                    query=query,
-                    embedding_model=self.embedding_model,
-                    top_k=top_k_candidates,
-                    query_vec=query_vec,
-                )
+                # When stage 2 tracking is enabled, additionally capture the
+                # BM25-side top-K shortlist so record_query_signals can gate
+                # template credit on lexical contribution.
+                try:
+                    _tracking = self.ad_config.tracking_enabled
+                except Exception:
+                    _tracking = False
+                if _tracking:
+                    _retrieval = self._retriever.retrieve_with_bm25_topk(
+                        query=query,
+                        embedding_model=self.embedding_model,
+                        top_k=top_k_candidates,
+                        bm25_topk_floor=self.ad_config.bm25_topk_floor,
+                        query_vec=query_vec,
+                    )
+                    _bm25_topk_anchor_ids = _retrieval.bm25_topk_anchor_ids
+                    candidates = self._retriever.retrieve(
+                        query=query,
+                        embedding_model=self.embedding_model,
+                        top_k=top_k_candidates,
+                        query_vec=query_vec,
+                    )
+                else:
+                    _bm25_topk_anchor_ids = None
+                    candidates = self._retriever.retrieve(
+                        query=query,
+                        embedding_model=self.embedding_model,
+                        top_k=top_k_candidates,
+                        query_vec=query_vec,
+                    )
                 timing.retrieve_ms = (time.perf_counter() - t0) * 1000
 
                 logger.debug(
@@ -585,7 +684,32 @@ class PSAPipeline:
                     }
                     for mid in result.packed_context.memory_ids
                 ]
-            write_trace(_trace, tenant_id=self.tenant_id)
+            # Stage 2: trace-first, ledger-second. When tracking is disabled,
+            # compose_and_record writes trace and skips the ledger entirely.
+            _retrieved_anchor_ids = [c.anchor_id for c in candidates] if "candidates" in locals() else []
+            _selected_ids = set(_trace.get("selected_anchor_ids", []))
+            if _bm25_topk_anchor_ids is not None:
+                from .advertisement.ledger import compute_attribution
+
+                _attribution = compute_attribution(
+                    query=query,
+                    retrieved_anchor_ids=_retrieved_anchor_ids,
+                    atlas=self.atlas,
+                    bm25_topk_anchor_ids=_bm25_topk_anchor_ids,
+                    epsilon=self.ad_config.epsilon,
+                )
+                _cfg = self.ad_config
+            else:
+                _attribution = []
+                _cfg = type("DisabledConfig", (), {"tracking_enabled": False})()
+
+            compose_and_record(
+                tenant_id=self.tenant_id,
+                trace_record=_trace,
+                attribution=_attribution,
+                selected_anchor_ids=_selected_ids,
+                config=_cfg,
+            )
 
         return result
 
