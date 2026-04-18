@@ -8,9 +8,9 @@
 
 **Goal:** Extend the shipped advertisement-forgetting system with a pattern-level signal ledger that captures per-query attribution (retrieval, selector pick, selector decline) and supports automated nightly decay gated by a tracking/removal split and a shadow-policy safety net.
 
-**Architecture:** A new `pattern_ledger` SQLite sidecar table materialized from per-query inline writes. Attribution is BM25 argmax (with ε-tie split and a BM25 contribution floor) computed at query time. A nightly lifecycle pass applies exponential decay and a sustained-negative-cycles removal rule. A shadow policy (more aggressive knob set) runs in parallel columns for counterfactual calibration without altering live behaviour. The shipped candidate/promote flow (`psa atlas decay`) stays in place for operator-gated removal; the stage 2 path is a complementary automated lane.
+**Architecture:** A new `pattern_ledger` SQLite sidecar table materialized from per-query inline writes. Attribution is BM25 argmax (with ε-tie split and a BM25 contribution floor) computed at query time. A nightly lifecycle pass applies exponential decay and a sustained-negative-cycles removal rule, mutating `anchor_cards_refined.json` — the live loader-preferred surface — when `removal_enabled=true`. A shadow policy (more aggressive knob set) runs in parallel columns for counterfactual calibration without altering live behaviour. The shipped candidate/promote flow (`psa atlas decay`) stays in place for operator-gated removal with one small modification (refined-hash invalidation at promotion) so the two paths cannot stomp each other.
 
-**Tech Stack:** SQLite (tenant store), existing `AnchorRetriever` BM25 scoring for attribution, `MempalaceConfig` + env overrides for tuning, existing `psa/trace.py` schema (minor optional augmentation).
+**Tech Stack:** SQLite (tenant store), existing `AnchorRetriever` BM25 scoring for attribution, `MempalaceConfig` + env overrides for tuning, existing `psa/trace.py` schema (minor optional augmentation). Trace is source of truth for ledger events; write ordering is trace-first-ledger-second.
 
 ---
 
@@ -25,15 +25,19 @@ Stage 1 (shipped in `psa/advertisement/`) established the first advertisement-fa
 - **Candidate/promote gate**: `psa atlas decay` writes `anchor_cards_candidate.json` + summary + detail report; operator promotes via `psa atlas promote-refinement`.
 - **Atlas rebuild inheritance**: metadata copy-forward for matched `(anchor_id, normalized_pattern)` pairs.
 
-**Stage 2 does not replace any of that.** Everything listed above stays, unchanged.
+**Stage 2 does not replace any of that.** Everything listed above stays, with one targeted modification called out below (refined-hash invalidation at promotion; see §10.1).
 
 ### What stays
 
 - `pattern_metadata.json` remains the provenance record of truth.
-- `psa atlas decay` remains the operator-driven, candidate-gated removal path.
+- `psa atlas decay` remains the operator-driven, candidate-gated removal path. Its candidate-generation logic is unchanged.
 - R1 substring reinforcement remains the signal used by `psa atlas decay`.
 - P1 and P3 protections apply to both stage 1 and stage 2 removal paths.
 - Atlas rebuild metadata inheritance is unchanged.
+
+### One stage 1 modification required by stage 2
+
+`psa atlas promote-refinement` must refuse to promote a candidate whose generation predates the current state of `anchor_cards_refined.json`. Without this, stage 2 removals can be silently overwritten by a stage 1 candidate that was generated before stage 2 ran. Full spec in §10.1; this is the minimum-viable coexistence enabler.
 
 ### What stage 2 adds
 
@@ -42,7 +46,7 @@ Stage 1 (shipped in `psa/advertisement/`) established the first advertisement-fa
 - **Automated nightly decay pass** in `lifecycle.py` fast path. Applies exponential decay, evaluates the sustained-negative-cycles removal rule, and either reports-only or removes depending on the `tracking_enabled`/`removal_enabled` split.
 - **Shadow policy**: a more-aggressive knob set logged in parallel columns so B-vs-A disagreement rate is observable before any knob is tuned.
 - **`psa advertisement status` / `psa advertisement diff`** CLIs for inspecting ledger distribution and shadow-policy counterfactuals.
-- **Coexistence with candidate/promote flow**: when `removal_enabled=false`, stage 2's decisions surface in the status CLI and lifecycle logs but take no destructive action. When `removal_enabled=true`, stage 2 removes patterns directly from the live `anchor_cards.json` and soft-archives the ledger row. Operators can still run `psa atlas decay` at any time for candidate-gated batch review.
+- **Coexistence with candidate/promote flow**: when `removal_enabled=false`, stage 2's decisions surface in the status CLI and lifecycle logs but take no destructive action. When `removal_enabled=true`, stage 2 removes patterns directly from the live loader-preferred surface — `anchor_cards_refined.json`, creating it from base cards if absent — and soft-archives the ledger row. Operators can still run `psa atlas decay` at any time for candidate-gated batch review; promotion is gated on refined-hash-match to prevent stale candidates from overwriting stage 2 removals.
 
 ### Why persistent ledger + inline lifecycle logic is justified
 
@@ -60,10 +64,11 @@ The shipped design's load-bearing architectural principle is: **"reinforcement i
 
 4. **Shadow policy needs parallel state.** Computing both B (live) and A (shadow) ledgers from scratch on every inspection doubles the cost. More importantly, the whole point of the shadow column is to make "does A disagree with B" a simple read, not a multi-minute derivation.
 
-**Drift mitigations:**
+**Drift mitigations (enforced, not aspirational):**
 
-- Trace remains the source of truth for events. The ledger never gains signals not present in the trace.
-- `psa advertisement rebuild-ledger` recomputes the ledger from trace + augmentation fields. Canonical regenerator; if drift is ever suspected, run this.
+- **Write ordering is trace-first-ledger-second** from the same call site with the same attribution payload (see §6). If trace write fails, ledger write is skipped. Guarantees every ledger event has a corresponding trace record.
+- **Config validation couples tracking to tracing.** `tracking_enabled=true` with `trace_queries=false` is a config error; the pipeline refuses to start until one flag changes. Without this, "trace is source of truth" would be a claim the runtime cannot uphold.
+- `psa advertisement rebuild-ledger` recomputes the ledger from trace + augmentation fields. Canonical regenerator; if drift is ever suspected, run this. Its canonicity holds because the two guarantees above ensure trace captures every ledger event.
 - On atlas rebuild, the ledger is archived wholesale and rebuilt from the new atlas's fresh patterns (§8). This bounds the drift window to one atlas version.
 - The ledger is scoped to `generated_query_patterns` only. It does not hold or derive metadata (`source`, `created_at`, `pinned`) — those remain in `pattern_metadata.json`, single-source.
 
@@ -320,11 +325,31 @@ def record_query_signals(
             )
 ```
 
-**Ordering constraint:** `record_query_signals` runs after `selected_anchor_ids` is known and before the trace record is written. In `pipeline.py`, that is between the current selector call and the `trace.write_trace(...)` call.
+**Ordering constraint: trace first, ledger second.** The attribution payload (per-anchor argmax, ε-tied ids, BM25 scores) is computed once by `pipeline.py` after selector runs. It is written into the trace record's `retrieval_attribution` field FIRST. Only after `trace.write_trace(...)` returns successfully does `record_query_signals(...)` run, consuming the same payload. If trace writing fails or is disabled, ledger writing is skipped. This guarantees every ledger event has a corresponding trace record — the precondition for `rebuild-ledger` being canonical.
 
-**Performance:** one UPSERT per credited pattern per query. Typical query with 24 retrieved anchors × ~1 argmax each = ≤24 UPSERTs. On a laptop-local SQLite this is ~1–3 ms.
+```
+# In pipeline.py, after selector returns:
+attribution = compute_attribution(query, retrieved_anchor_ids, atlas, bm25_topk_anchor_ids, config)
+trace_record["retrieval_attribution"] = attribution
+trace_written = trace.write_trace(trace_record, tenant_id=tenant_id)
+if trace_written and config.tracking_enabled:
+    ledger.record_query_signals(tenant_id, attribution, selected_anchor_ids, config)
+```
 
-**Failure policy:** the ledger write is best-effort. A write exception logs a warning and returns — it must never break a live query (matches `trace.write_trace`'s reliability contract).
+`trace.write_trace` must return a boolean success indicator (currently returns None — minor change). Existing callers that ignore the return value continue to work; the new gate only kicks in for ledger writes.
+
+**Config precondition.** `tracking_enabled=true` requires `trace_queries=true`. Pipeline startup validates this at config-load time and fails fast with a clear error:
+
+```
+AdvertisementDecayConfigError: tracking_enabled=true requires trace_queries=true.
+Ledger writes only fire when the preceding trace write succeeds, so tracing
+must be enabled for ledger accumulation to work. Set trace_queries=true or
+tracking_enabled=false.
+```
+
+**Performance:** one UPSERT per credited pattern per query. Typical query with 24 retrieved anchors × ~1 argmax each = ≤24 UPSERTs. On a laptop-local SQLite this is ~1–3 ms. Trace write already runs on the same path; the ordering change adds no I/O.
+
+**Failure policy:** both trace and ledger writes are best-effort in the sense that an exception is logged, not raised. They must never break a live query. The ordering ensures that if ledger wrote, trace also wrote.
 
 ## §7 — Lifecycle integration
 
@@ -402,33 +427,89 @@ def reset_ledger_on_rebuild(tenant_id, old_atlas_version, new_atlas):
 
 ## §9 — Removal mechanics
 
+### §9.1 — Target file
+
+Stage 2 mutates **`anchor_cards_refined.json`** — the loader-preferred surface at `psa/anchor.py:228`. Writing to the base `anchor_cards.json` would be invisible to the running pipeline whenever a refined file exists.
+
+Three on-disk cases at removal time:
+
+- **Refined file exists** (from prior stage 1 promotion or a prior stage 2 removal): mutate in place — remove pattern strings, write atomically (tmp + `os.replace`).
+- **Refined file absent** (atlas just built, never refined): read `anchor_cards.json`, apply stage 2 removals to the in-memory copy, write as `anchor_cards_refined.json`. Base file is never modified.
+- **Atomic writer shared with stage 1**: the JSON write helper in `psa/advertisement/writer.py` is lifted to a shared utility so stage 1 promotion and stage 2 removal use the same atomic writer. No format drift risk.
+
+### §9.2 — Per-removal steps
+
 When `apply_removals` runs:
 
 1. For each candidate pattern:
-   - Remove the pattern string from `anchor.generated_query_patterns` in memory.
-   - Persist the updated `AnchorCard` via the existing atlas persistence path (`anchor_cards.json` write).
+   - Remove the pattern string from the in-memory copy of `anchor.generated_query_patterns` loaded from the refined file (or base, if refined is absent).
+   - Persist the updated JSON atomically to `anchor_cards_refined.json`.
    - Soft-archive the ledger row: set `removed_at=now`, `removal_reason="stage2_sustained_negative"`, `final_ledger`, `final_shadow_ledger`.
    - Log a structured removal entry: `{pattern_id, anchor_id, pattern_text, final_ledger, consecutive_negative_cycles, shadow_agreed}`.
 
-2. **BM25 re-index timing:** lazy at next query. `AnchorRetriever` detects that the anchor's pattern set changed (by hash or mtime) and re-tokenizes on read. No lifecycle-time reindex cost.
+2. **Reload visibility — next pipeline instantiation.** `PSAPipeline` and `AnchorRetriever` hold atlas cards and the BM25 index in memory. There is no file-mtime reload path today. Stage 2 does not add one as a prerequisite. Consequence: a stage 2 removal becomes visible on the next pipeline construction (next `psa search`, next CLI invocation, next MCP server start).
 
-3. **Metadata hygiene:** removed patterns are NOT deleted from `pattern_metadata.json`. The entry becomes orphaned next atlas rebuild (§1.1 inheritance drops orphans naturally). Between rebuilds, the orphan is harmless.
+3. **Reload hook for long-lived processes.** Stage 2 writes a marker file `~/.psa/tenants/{tenant_id}/atlas_reload_requested` atomically after removal (content: ISO8601 timestamp + list of changed anchor ids, for diagnostics). Long-lived consumers (MCP server is the only one today) check the marker between queries and call `PSAPipeline.reload_atlas()` when the marker's mtime is newer than the last reload. `reload_atlas()` re-reads refined cards and rebuilds the BM25 index. Short-lived CLI invocations ignore the marker — they load fresh anyway. An explicit lazy-mtime-check inside `AnchorRetriever` is out of scope; defer to follow-up if another long-lived consumer appears.
 
-4. **Hard delete:** a separate step (`purge_archived_ledgers`) runs weekly, deleting rows with `removed_at < now - 90d`. Matches memory forgetting cadence. Exposed as `psa advertisement purge --older-than 90d`.
+4. **Metadata hygiene:** removed patterns are NOT deleted from `pattern_metadata.json`. The entry becomes orphaned next atlas rebuild (§1.1 of stage 1 inheritance drops orphans naturally). Between rebuilds, the orphan is harmless.
+
+5. **Hard delete:** a separate step (`purge_archived_ledgers`) runs weekly, deleting rows with `removed_at < now - 90d`. Matches memory forgetting cadence. Exposed as `psa advertisement purge --older-than 90d`.
 
 ## §10 — Coexistence with `psa atlas decay`
 
-Both removal paths operate on the same `generated_query_patterns` list. Coexistence rules:
+Both removal paths mutate the same live surface (`anchor_cards_refined.json`). They cannot race in execution — stage 1 is operator-invoked, stage 2 runs in nightly lifecycle — but they CAN stomp on each other via stale-candidate promotion. The coexistence rules below close that hole.
 
-1. **No locking.** The two paths are not concurrent — `psa atlas decay` is operator-invoked and `lifecycle.py` is a nightly scheduled job; they don't race in practice.
-2. **Stage 1 removes via candidate promotion.** Operator runs `psa atlas decay` → writes `anchor_cards_candidate.json` → reviews → `psa atlas promote-refinement`. Nothing touches live cards until promotion.
-3. **Stage 2 removes directly.** When `removal_enabled=true`, stage 2's removal mutates `anchor_cards.json` in place.
-4. **Stage 2 respects stage 1 protections.** P1 shield and P3 pin both apply to stage 2 candidate selection (imported from `psa/advertisement/decay.py`).
+### §10.1 — Stale-candidate hazard + fix (required stage 1 modification)
+
+**Hazard.** `psa atlas promote-refinement` currently copies `anchor_cards_candidate.json` wholesale over `anchor_cards_refined.json` (`psa/cli.py:594`). Scenario:
+
+1. Operator runs `psa atlas decay` at 09:00 — candidate is generated from refined state `S`.
+2. Stage 2 runs in lifecycle overnight — removes pattern P from refined, refined is now `S' = S − P`.
+3. Operator runs `psa atlas promote-refinement` the next morning. Wholesale copy replaces `S'` with the candidate, which was built from `S` and still contains `P`.
+
+Pattern P is silently resurrected.
+
+**Fix (modifies stage 1, minimum viable).** When `psa atlas decay` generates a candidate, it records in `anchor_cards_candidate.meta.json`:
+
+```json
+{
+  ...existing fields...,
+  "refined_hash_at_generation": "sha256:ab1c…",
+  "refined_path_at_generation": ".../atlas_v14/anchor_cards_refined.json",
+  "refined_existed_at_generation": true
+}
+```
+
+The hash is computed over the exact bytes of `anchor_cards_refined.json` at candidate-generation time. If the refined file doesn't exist yet, `refined_existed_at_generation=false` and hash is null.
+
+At promotion time, `psa atlas promote-refinement` recomputes the current hash of `anchor_cards_refined.json` and compares against the candidate's recorded value. On mismatch, promotion refuses with:
+
+```
+psa atlas promote-refinement: refined cards changed since candidate was generated.
+  candidate generated at: 2026-04-17T09:00:00Z
+  recorded refined hash:  sha256:ab1c…
+  current refined hash:   sha256:ef42…
+  likely cause: stage 2 advertisement decay removed patterns, or another candidate was promoted, between candidate generation and now.
+  fix: rerun `psa atlas decay` to regenerate the candidate against current refined state.
+```
+
+Operator re-runs `psa atlas decay`, the new candidate is generated against `S'`, promotion succeeds.
+
+**Why this lives in stage 1 code.** `psa atlas decay` and `psa atlas promote-refinement` are stage 1 surfaces. Stage 2 must not intrude on their internals beyond this minimum. The hash-check is one field in meta + one comparison at promotion. Small, bounded, reviewable.
+
+**Note on first-run:** on a system that has never had a refined file, the first `psa atlas decay` records `refined_existed_at_generation=false`, and promotion only refuses if a refined file now exists (meaning stage 2 created one in the interim). The check is symmetric.
+
+### §10.2 — Other coexistence rules
+
+1. **No runtime locking.** Stage 1 is operator-invoked, stage 2 is nightly lifecycle. Concurrent execution is not prevented at the filesystem level, but in practice they don't overlap. The hash-check in §10.1 handles the cross-run hazard, which is the real risk.
+2. **Stage 1 removes via candidate promotion.** Operator runs `psa atlas decay` → writes `anchor_cards_candidate.json` → reviews → `psa atlas promote-refinement` (now hash-gated).
+3. **Stage 2 removes directly.** When `removal_enabled=true`, stage 2's removal mutates `anchor_cards_refined.json` in place, creating it from base cards if absent (§9.1).
+4. **Stage 2 respects stage 1 protections.** P1 shield and P3 pin both apply to stage 2 candidate selection (imported from `psa/advertisement/decay.py`; no reimplementation).
 5. **Stage 1 R1 reinforcement is unaffected by stage 2's ledger.** Stage 1 continues to derive last-reinforced-at from trace; it does not read the ledger.
-6. **Stage 2 ignores patterns already removed.** If a pattern was dropped by stage 1 operator promotion, it's no longer in `generated_query_patterns`, so the ledger row for it becomes orphaned and gets archived on the next atlas rebuild.
+6. **Stage 2 ignores patterns already removed.** If a pattern was dropped by stage 1 promotion, it's no longer in `generated_query_patterns`, so the ledger row for it becomes orphaned and gets archived on the next atlas rebuild.
 
 **Operator override:** if a stage-2-removed pattern shouldn't have been dropped, the operator can:
-- Re-add it via manual edit of `anchor_cards.json` (it becomes `source="manual"` next time metadata is inspected).
+- Re-add it via manual edit of `anchor_cards_refined.json` (it remains there until next atlas rebuild; stage 2 sees it back in the pattern list and resumes normal ledger tracking).
 - Pin it via `pattern_metadata.json` (stage 1's P3 flag) so stage 2 never removes it again.
 
 ## §11 — Configuration
@@ -461,6 +542,10 @@ Extends `MempalaceConfig` with a new `advertisement_decay` section:
 ```
 
 **Defaults:** `tracking_enabled=false`, `removal_enabled=false`. First deployment is a no-op until operator flips `tracking_enabled=true`. Flip `removal_enabled=true` only after one full calibration window with shadow data.
+
+**Validation: `tracking_enabled` requires `trace_queries`.** At pipeline startup, the config loader checks: if `advertisement_decay.tracking_enabled=true` and `trace_queries=false`, raise `AdvertisementDecayConfigError` with a clear message (see §6). Rationale: trace is the source of truth for ledger events; without trace writes, `rebuild-ledger` cannot be canonical and the "materialised view" framing collapses. Failing fast at startup is safer than silently accumulating a ledger nobody can validate.
+
+Same check applies to the env-var path: if `PSA_AD_DECAY_TRACKING_ENABLED=1` and `PSA_TRACE=0`, startup fails. The check runs once at config load, not per query — runtime toggling of `PSA_TRACE` mid-session causes ledger writes to become no-ops (trace write fails or is skipped, so the ledger gate in §6 doesn't fire), but does not crash the process.
 
 **Env overrides** (additive to existing pattern):
 
@@ -564,24 +649,35 @@ Hard-deletes archived rows past retention. Runs automatically weekly from lifecy
 | `tests/test_ledger_rebuild_reset.py` | Atlas rebuild archives all active rows, inserts fresh rows for new atlas patterns. |
 | `tests/test_ledger_coexistence.py` | Stage 1 P1/P3 protections apply to stage 2; patterns removed by `psa atlas decay` then promoted don't resurface in stage 2 evaluation. |
 | `tests/test_cli_advertisement.py` | `status`, `diff`, `rebuild-ledger`, `purge` output shapes; dry-run behaviour. |
+| `tests/test_ledger_trace_ordering.py` | Trace-first-ledger-second semantics: ledger skipped when trace disabled; ledger writes only after trace returns success. |
+| `tests/test_ledger_reload_marker.py` | Marker file is written atomically after stage 2 removal; `PSAPipeline.reload_atlas()` picks it up. |
+| `tests/test_promote_refinement_hash_gate.py` | Promotion refuses on refined-hash mismatch; succeeds when hashes match; handles first-run (`refined_existed_at_generation=false`). |
 
-### Modified
+### Modified (stage 2 code)
 
 | File | Change |
 |---|---|
-| `psa/pipeline.py` | After selector returns and before `trace.write_trace`, call `ledger.record_query_signals(...)` with retrieved/selected anchor ids + BM25 top-K shortlist. |
-| `psa/anchor_retriever.py` | Expose BM25-side top-K shortlist on the `RetrievalResult` so `pipeline.py` can pass it to `record_query_signals`. One additive field. |
-| `psa/lifecycle.py` | New `advertisement_decay_pass(...)` step in fast path, between "mine new sessions" and "prune memories". |
+| `psa/pipeline.py` | After selector returns, compute attribution once, populate `trace_record.retrieval_attribution`, write trace first, then conditionally call `ledger.record_query_signals(...)` only if trace write succeeded. Adds `reload_atlas()` method that re-reads refined cards and rebuilds BM25 index; checks marker file between queries for long-lived consumers. |
+| `psa/anchor_retriever.py` | Expose BM25-side top-K shortlist on the `RetrievalResult` so `pipeline.py` can pass it to attribution. One additive field. `AnchorRetriever.reindex_from_cards(cards)` callable from `reload_atlas`. |
+| `psa/lifecycle.py` | New `advertisement_decay_pass(...)` step in fast path, between "mine new sessions" and "prune memories". Writes the reload marker file after any successful removal. |
 | `psa/atlas.py` | `AtlasManager.rebuild()` calls `ledger.reset_ledger_on_rebuild(...)` after the existing metadata-inheritance pass. |
-| `psa/trace.py` | `new_trace_record(...)` adds optional `retrieval_attribution: []` field (not populated by default; populated by pipeline when ledger is enabled). |
-| `psa/config.py` | Parse the new `advertisement_decay` config block; env overrides. |
+| `psa/trace.py` | `write_trace(...)` returns `bool` (True on success, False on failure or when tracing is disabled). `new_trace_record(...)` adds optional `retrieval_attribution: []` field. |
+| `psa/config.py` | Parse the new `advertisement_decay` config block; env overrides; validate `tracking_enabled → trace_queries` invariant at load time. |
 | `psa/cli.py` | Wire `advertisement` subparser dispatching to `psa/advertisement/cli.py`. |
+| `psa/mcp_server.py` | Long-lived consumer of the pipeline — checks reload marker file between queries and calls `pipeline.reload_atlas()` when the marker is newer than the last reload timestamp. |
+
+### Modified (stage 1 code — §10.1 prerequisite)
+
+| File | Change |
+|---|---|
+| `psa/advertisement/writer.py` | At candidate write time, compute SHA-256 of `anchor_cards_refined.json` (or record null if the file does not exist). Store in `anchor_cards_candidate.meta.json` as `refined_hash_at_generation`, `refined_path_at_generation`, `refined_existed_at_generation`. Atomic JSON writer is lifted into a shared utility for both stage 1 and stage 2 to use. |
+| `psa/cli.py` | `psa atlas promote-refinement` loads the candidate's meta, recomputes the current refined hash, and refuses promotion on mismatch with a clear error message directing the operator to rerun `psa atlas decay`. |
 
 ### Not touched
 
-- `psa/advertisement/metadata.py`, `reinforcement.py`, `decay.py`, `writer.py` — stage 1 internals are unchanged.
+- `psa/advertisement/metadata.py`, `reinforcement.py`, `decay.py` — stage 1 decay internals unchanged (decay rule, reinforcement derivation, metadata store).
 - `psa/forgetting.py` — memory forgetting is unrelated.
-- Stage 1's `psa atlas decay` CLI path — unchanged.
+- Stage 1's `psa atlas decay` CLI *behaviour* is unchanged — only the meta it emits now carries three additional fields.
 
 ---
 
@@ -589,15 +685,16 @@ Hard-deletes archived rows past retention. Runs automatically weekly from lifecy
 
 - `pattern_ledger` table created at first tenant startup after upgrade; no migration of existing tenants fails.
 - With `tracking_enabled=false`, the query hot path has zero new writes and zero new SELECTs. Ledger code is a no-op.
-- With `tracking_enabled=true, removal_enabled=false`: ledger rows are populated inline; nightly lifecycle logs summary counts; no `anchor_cards.json` mutation; `psa advertisement status` / `diff` report live data.
-- With `tracking_enabled=true, removal_enabled=true`: nightly pass removes eligible patterns; `anchor_cards.json` is updated; ledger rows are soft-archived; lazy BM25 reindex picks up changes on next query.
-- Stage 1's `psa atlas decay` continues to run unchanged, producing the same candidate output as before. A pattern removed by stage 1 promotion does not re-appear in stage 2's active ledger view.
+- With `tracking_enabled=true, trace_queries=false`: pipeline startup fails with `AdvertisementDecayConfigError` before any query runs.
+- With `tracking_enabled=true, removal_enabled=false`: attribution is computed inline, trace is written first, ledger rows are populated only when trace write succeeded; nightly lifecycle logs summary counts; no mutation of `anchor_cards_refined.json`; `psa advertisement status` / `diff` report live data.
+- With `tracking_enabled=true, removal_enabled=true`: nightly pass removes eligible patterns; `anchor_cards_refined.json` is updated atomically (created from base cards if absent); ledger rows are soft-archived; reload marker file is written; stage 2 removals become visible on next pipeline instantiation (or after `reload_atlas()` for long-lived processes like the MCP server).
+- Stage 1's `psa atlas decay` produces candidate output that now carries `refined_hash_at_generation`. `psa atlas promote-refinement` refuses promotion when the current refined hash differs from the recorded value, preventing stale candidates from overwriting stage 2 removals. A pattern removed by stage 1 promotion does not re-appear in stage 2's active ledger view.
 - P1 (low-activation shield) and P3 (pinned exemption) protect stage 2 removals, via direct reuse of stage 1's logic.
-- `psa advertisement rebuild-ledger` reconstructs the ledger from trace with matching final values (within floating-point tolerance) when `retrieval_attribution` augmentation is present.
+- `psa advertisement rebuild-ledger` reconstructs the ledger from trace with matching final values (within floating-point tolerance) when `retrieval_attribution` augmentation is present, AND the trace-first-ledger-second ordering is enforced at write time so every ledger event has a trace counterpart.
 - Atlas rebuild archives all active ledger rows with `removal_reason="atlas_rebuild_reset"` and inserts fresh rows for every pattern in the new atlas's cards.
 - `psa advertisement purge --older-than 90d` hard-deletes archived rows past retention, matching memory forgetting cadence.
 - Full test suite green. Ruff clean.
-- No breaking changes to existing CLI surfaces or config.
+- No breaking changes to existing CLI surfaces. The one behaviour change in `psa atlas promote-refinement` (hash-mismatch refusal) is a new failure mode, not a regression — operators who have never run stage 2 will never hit it.
 
 ## Follow-ups (explicit deferrals)
 
