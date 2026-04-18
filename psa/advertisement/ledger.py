@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from psa.advertisement.attribution import attribute_bm25_argmax
 from psa.advertisement.metadata import normalize_pattern
 
 
@@ -103,3 +105,95 @@ def upsert_ledger(
         ),
     )
     db.commit()
+
+
+@dataclass
+class AnchorAttribution:
+    """Per-retrieved-anchor attribution record.
+
+    credited is [argmax] + eps_tied when BM25 floor passes and argmax exists;
+    empty otherwise. Each credited pattern shares the per-query weight.
+    """
+
+    anchor_id: int
+    argmax_pattern: str | None
+    eps_tied_patterns: list[str] = field(default_factory=list)
+    credited: list[str] = field(default_factory=list)
+    bm25_floor_passed: bool = True
+
+
+def compute_attribution(
+    *,
+    query: str,
+    retrieved_anchor_ids: list[int],
+    atlas,
+    bm25_topk_anchor_ids,
+    epsilon: float,
+) -> list[AnchorAttribution]:
+    """Run BM25 argmax per retrieved anchor, gate on BM25 top-K membership."""
+    bm25_set = set(bm25_topk_anchor_ids)
+    out: list[AnchorAttribution] = []
+    for aid in retrieved_anchor_ids:
+        if aid not in bm25_set:
+            out.append(
+                AnchorAttribution(
+                    anchor_id=aid,
+                    argmax_pattern=None,
+                    bm25_floor_passed=False,
+                )
+            )
+            continue
+        anchor = atlas.get_anchor(aid)
+        argmax, tied = attribute_bm25_argmax(
+            query, anchor.generated_query_patterns, epsilon=epsilon
+        )
+        credited = [argmax] + list(tied) if argmax is not None else []
+        out.append(
+            AnchorAttribution(
+                anchor_id=aid,
+                argmax_pattern=argmax,
+                eps_tied_patterns=list(tied),
+                credited=credited,
+                bm25_floor_passed=True,
+            )
+        )
+    return out
+
+
+def record_query_signals(
+    *,
+    db,
+    attribution: list[AnchorAttribution],
+    selected_anchor_ids,
+    config,
+) -> None:
+    """Apply retrieval/pick/decline credit to every credited template."""
+    if not config.tracking_enabled:
+        return
+
+    selected = set(selected_anchor_ids)
+    for attr in attribution:
+        if not attr.credited:
+            continue
+        n = len(attr.credited)
+        per = 1.0 / n
+
+        base = config.retrieval_credit
+        shadow = config.retrieval_credit
+        if attr.anchor_id in selected:
+            base += config.selector_pick_credit
+            shadow += config.selector_pick_credit
+        else:
+            base -= config.selector_decline_penalty
+            shadow -= config.shadow.selector_decline_penalty
+
+        for pat in attr.credited:
+            upsert_ledger(
+                db=db,
+                pattern_id=pattern_id_for(attr.anchor_id, pat),
+                anchor_id=attr.anchor_id,
+                pattern_text=pat,
+                ledger_delta=base * per,
+                shadow_delta=shadow * per,
+                grace_days=config.grace_days,
+            )
