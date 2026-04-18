@@ -151,6 +151,129 @@ def cmd_diff(args) -> int:
     return 0
 
 
+def cmd_rebuild_ledger(args) -> int:
+    import math
+
+    from datetime import timedelta
+
+    tenant_id = getattr(args, "tenant", None) or "default"
+    dry_run = getattr(args, "dry_run", False)
+    as_json = getattr(args, "json", False)
+
+    trace_path = os.path.expanduser(
+        f"~/.psa/tenants/{tenant_id}/query_trace.jsonl"
+    )
+    if not os.path.exists(trace_path):
+        print(f"No trace at {trace_path}")
+        return 1
+
+    from psa.advertisement.config import AdvertisementDecayConfig
+    from psa.advertisement.ledger import pattern_id_for
+    from psa.config import MempalaceConfig
+
+    ad = AdvertisementDecayConfig.from_mempalace(MempalaceConfig())
+
+    records = 0
+    derived: dict[str, dict] = {}
+
+    with open(trace_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            records += 1
+            attrs = rec.get("retrieval_attribution") or []
+            selected = set(rec.get("selected_anchor_ids") or [])
+            ts_str = rec.get("timestamp")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str)
+            except ValueError:
+                continue
+            age_days = max(0, (datetime.now(timezone.utc) - ts).days)
+            decay = math.exp(-age_days / ad.tau_days)
+            for a in attrs:
+                if not a.get("bm25_floor_passed"):
+                    continue
+                argmax = a.get("bm25_argmax_pattern")
+                tied = a.get("bm25_epsilon_tied") or []
+                credited = [argmax] + list(tied) if argmax else []
+                if not credited:
+                    continue
+                per = 1.0 / len(credited)
+                base = ad.retrieval_credit
+                if a["anchor_id"] in selected:
+                    base += ad.selector_pick_credit
+                else:
+                    base -= ad.selector_decline_penalty
+                for pat in credited:
+                    key = pattern_id_for(a["anchor_id"], pat)
+                    slot = derived.setdefault(
+                        key,
+                        {"anchor_id": a["anchor_id"], "pattern_text": pat, "ledger": 0.0},
+                    )
+                    slot["ledger"] += base * per * decay
+
+    data = {
+        "tenant_id": tenant_id,
+        "records_processed": records,
+        "derived_patterns": len(derived),
+    }
+    if dry_run:
+        if as_json:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"dry-run: processed {records} records, "
+                f"derived {len(derived)} patterns"
+            )
+        return 0
+
+    # Non-dry: write derived values into the table.
+    from psa.advertisement.ledger import create_schema
+    db_path = _db_path(tenant_id)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    grace_iso = (datetime.now(timezone.utc) + timedelta(days=ad.grace_days)).isoformat()
+    with sqlite3.connect(db_path) as db:
+        create_schema(db)
+        for pid, slot in derived.items():
+            db.execute(
+                """
+                INSERT INTO pattern_ledger
+                    (pattern_id, anchor_id, pattern_text,
+                     ledger, shadow_ledger,
+                     grace_expires_at, created_at, last_updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pattern_id) DO UPDATE SET
+                    ledger = excluded.ledger,
+                    last_updated_at = excluded.last_updated_at
+                """,
+                (
+                    pid,
+                    slot["anchor_id"],
+                    slot["pattern_text"],
+                    slot["ledger"],
+                    slot["ledger"],
+                    grace_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+        db.commit()
+
+    if as_json:
+        print(json.dumps(data, indent=2))
+    else:
+        print(f"Rebuilt ledger: {len(derived)} patterns from {records} records")
+    return 0
+
+
 def build_parser(subparsers):
     """Register the `advertisement` subparser. Returns the parser for chaining."""
     p = subparsers.add_parser("advertisement", help="Advertisement decay CLIs")
@@ -165,6 +288,12 @@ def build_parser(subparsers):
     p_diff.add_argument("--tenant")
     p_diff.add_argument("--json", action="store_true")
     p_diff.set_defaults(func=cmd_diff)
+
+    p_rebuild = sub.add_parser("rebuild-ledger", help="Recompute ledger from trace")
+    p_rebuild.add_argument("--tenant")
+    p_rebuild.add_argument("--dry-run", action="store_true")
+    p_rebuild.add_argument("--json", action="store_true")
+    p_rebuild.set_defaults(func=cmd_rebuild_ledger)
 
     return p
 
