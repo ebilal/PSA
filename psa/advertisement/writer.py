@@ -80,7 +80,7 @@ def write_decay_candidate(atlas_dir: str, report: Any) -> bool:
     return True
 
 
-def stamp_refined_hash(meta: dict, atlas_dir) -> None:
+def stamp_refined_hash(meta: dict[str, Any], atlas_dir: str | Path) -> None:
     """Stamp meta with refined-file hash + path + existence.
 
     Every candidate producer (decay, refine, curate) calls this before

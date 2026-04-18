@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 
 def _make_report(tmp_path, n_removed=1):
@@ -151,3 +152,4 @@ def test_stamp_refined_hash_without_existing_file(tmp_path):
     assert meta["refined_existed_at_generation"] is False
     assert meta["refined_hash_at_generation"] is None
     assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")
+    assert not Path(meta["refined_path_at_generation"]).exists()
