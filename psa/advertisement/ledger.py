@@ -13,6 +13,7 @@ pattern text changes (regeneration at atlas rebuild).
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -197,3 +198,35 @@ def record_query_signals(
                 shadow_delta=shadow * per,
                 grace_days=config.grace_days,
             )
+
+
+def apply_decay(db: sqlite3.Connection, tau_days: int, removal_threshold: float = 0.0) -> None:
+    """Apply exponential decay to active rows + update consecutive counters.
+
+    ledger ← ledger · exp(−1/tau)   (shadow_ledger likewise)
+    consecutive_negative_cycles ← (ledger<threshold) ? prev+1 : 0
+    shadow_consecutive ← (shadow_ledger<threshold) ? prev+1 : 0
+
+    Operates on unarchived rows only.
+    """
+    factor = math.exp(-1.0 / tau_days)
+    db.execute(
+        """
+        UPDATE pattern_ledger
+        SET
+            ledger = ledger * ?,
+            shadow_ledger = shadow_ledger * ?,
+            consecutive_negative_cycles = CASE
+                WHEN ledger * ? < ? THEN consecutive_negative_cycles + 1
+                ELSE 0
+            END,
+            shadow_consecutive = CASE
+                WHEN shadow_ledger * ? < ? THEN shadow_consecutive + 1
+                ELSE 0
+            END,
+            last_updated_at = ?
+        WHERE removed_at IS NULL
+        """,
+        (factor, factor, factor, removal_threshold, factor, removal_threshold, _now_iso()),
+    )
+    db.commit()
