@@ -114,3 +114,38 @@ def test_compose_populates_retrieval_attribution_field(tmp_path, monkeypatch):
     assert second["anchor_id"] == 9
     assert second["bm25_argmax_pattern"] is None
     assert second["bm25_floor_passed"] is False
+
+
+def test_compose_and_record_writes_ledger_when_attribution_present(tmp_path, monkeypatch):
+    """Regression for the Level 1 bug: when attribution is non-empty AND
+    tracking_enabled is True AND trace succeeds, the ledger writer must fire
+    with the attribution payload (not skip it)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    from psa.pipeline import compose_and_record
+    from psa.advertisement.ledger import AnchorAttribution
+
+    captured = {}
+
+    def fake_record(**kw):
+        captured["attribution"] = kw["attribution"]
+        captured["selected_anchor_ids"] = kw["selected_anchor_ids"]
+
+    attribution = [
+        AnchorAttribution(
+            anchor_id=1,
+            argmax_pattern="some pattern",
+            credited=["some pattern"],
+            bm25_floor_passed=True,
+        )
+    ]
+    compose_and_record(
+        tenant_id="default",
+        trace_record={"run_id": "r", "timestamp": "t", "query": "q"},
+        attribution=attribution,
+        selected_anchor_ids={1},
+        config=MagicMock(tracking_enabled=True),
+        record_signals_fn=fake_record,
+    )
+    assert captured.get("attribution") == attribution
+    assert captured.get("selected_anchor_ids") == {1}

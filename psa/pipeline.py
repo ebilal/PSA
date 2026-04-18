@@ -278,6 +278,7 @@ class PSAPipeline:
         timing = QueryTiming()
         result: Optional[PSAResult] = None
         _bm25_topk_anchor_ids: Optional[List[int]] = None
+        _level1_retrieved_anchor_ids: list = []
 
         try:
             # Step 1: Embed query
@@ -334,6 +335,32 @@ class PSAPipeline:
                     _trace["empty_selection"] = True
                     # top_anchor_scores stays []
                 else:
+                    # Stage 2: when tracking is on, additionally compute the BM25
+                    # top-K shortlist + a retrieved-anchor-ids snapshot from the
+                    # full-atlas scores. Level 2 does this inline with retrieve();
+                    # Level 1 has no retriever step, so we compute it here.
+                    try:
+                        _tracking = self.ad_config.tracking_enabled
+                    except Exception:
+                        _tracking = False
+                    if _tracking:
+                        _retrieval = self._retriever.retrieve_with_bm25_topk(
+                            query=query,
+                            embedding_model=self.embedding_model,
+                            top_k=24,
+                            bm25_topk_floor=self.ad_config.bm25_topk_floor,
+                            query_vec=query_vec,
+                        )
+                        _bm25_topk_anchor_ids = _retrieval.bm25_topk_anchor_ids
+                        # In Level 1 the "retrieved" set for attribution purposes
+                        # is the top-K of full_atlas_scorer's CE scores. Use the
+                        # same K as the retriever shortlist (24) for consistency
+                        # with Level 2.
+                        _level1_retrieved_anchor_ids = [
+                            s.anchor_id for s in anchor_scores[:24]
+                        ]
+                    else:
+                        _level1_retrieved_anchor_ids = []
                     t0 = time.perf_counter()
                     if self.coactivation_selector is not None:
                         # Level 1a: co-activation model selection
@@ -694,7 +721,15 @@ class PSAPipeline:
                 ]
             # Stage 2: trace-first, ledger-second. When tracking is disabled,
             # compose_and_record writes trace and skips the ledger entirely.
-            _retrieved_anchor_ids = [c.anchor_id for c in candidates] if "candidates" in locals() else []
+            # Derive retrieved-anchor ids from whichever path produced them:
+            # Level 2 puts them in `candidates`; Level 1 stashes them in
+            # `_level1_retrieved_anchor_ids` (top-K by CE score).
+            if _level1_retrieved_anchor_ids:
+                _retrieved_anchor_ids = _level1_retrieved_anchor_ids
+            elif "candidates" in locals():
+                _retrieved_anchor_ids = [c.anchor_id for c in candidates]
+            else:
+                _retrieved_anchor_ids = []
             _selected_ids = set(_trace.get("selected_anchor_ids", []))
             if _bm25_topk_anchor_ids is not None:
                 from .advertisement.ledger import compute_attribution

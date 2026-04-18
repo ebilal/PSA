@@ -129,6 +129,10 @@ class Atlas:
             self._card_map = {c.anchor_id: c for c in self.cards}
         return self._card_map
 
+    def get_anchor(self, anchor_id: int):
+        """Return the AnchorCard for *anchor_id*, or None if not found."""
+        return self._get_card_map().get(anchor_id)
+
     def _get_novelty_centroids(self):
         """Lazy (ids, centroids_matrix) for novelty anchors."""
         if not hasattr(self, "_novelty_cache"):

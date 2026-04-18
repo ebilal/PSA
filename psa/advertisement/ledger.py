@@ -149,8 +149,9 @@ def compute_attribution(
             )
             continue
         anchor = atlas.get_anchor(aid)
+        patterns = anchor.generated_query_patterns if anchor is not None else []
         argmax, tied = attribute_bm25_argmax(
-            query, anchor.generated_query_patterns, epsilon=epsilon
+            query, patterns, epsilon=epsilon
         )
         credited = [argmax] + list(tied) if argmax is not None else []
         out.append(
