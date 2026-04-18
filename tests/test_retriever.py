@@ -227,3 +227,69 @@ def test_retriever_default_top_k_is_32():
 
     sig = inspect.signature(AnchorRetriever.retrieve)
     assert sig.parameters["top_k"].default == 32
+
+
+# ── RetrievalResult + retrieve_with_bm25_topk ────────────────────────────────
+
+
+def test_retrieval_result_dataclass_fields():
+    from psa.retriever import RetrievalResult
+
+    r = RetrievalResult(
+        anchor_ids=[1, 2, 3],
+        scores=[0.9, 0.8, 0.7],
+        bm25_topk_anchor_ids=[2, 3, 7, 8],
+    )
+    assert r.anchor_ids == [1, 2, 3]
+    assert r.scores == [0.9, 0.8, 0.7]
+    assert r.bm25_topk_anchor_ids == [2, 3, 7, 8]
+
+
+def test_retrieval_result_default_bm25_topk_empty():
+    """bm25_topk_anchor_ids defaults to [] for backward compatibility."""
+    from psa.retriever import RetrievalResult
+
+    r = RetrievalResult(anchor_ids=[1], scores=[0.5])
+    assert r.bm25_topk_anchor_ids == []
+
+
+def test_retrieve_with_bm25_topk_populates_shortlist():
+    """retrieve_with_bm25_topk returns a RetrievalResult with BM25 top-K."""
+    from psa.retriever import (
+        AnchorRetriever,
+        RetrievalResult,
+    )
+    from psa.anchor import AnchorCard
+
+    # Build a tiny atlas mock with 3 anchors.
+    cards = []
+    for aid, patterns in [(1, ["alpha"]), (2, ["beta"]), (3, ["gamma"])]:
+        card = MagicMock(spec=AnchorCard)
+        card.anchor_id = aid
+        card.generated_query_patterns = patterns
+        card.to_card_text = MagicMock(return_value=" ".join(patterns))
+        cards.append(card)
+
+    atlas = MagicMock()
+    atlas.cards = cards
+    atlas.anchor_index.search = MagicMock(return_value=[(1, 0.9), (2, 0.8), (3, 0.7)])
+
+    retriever = AnchorRetriever(atlas=atlas)
+
+    embedding_model = MagicMock()
+    embedding_model.embed = MagicMock(return_value=[0.1] * 768)
+
+    result = retriever.retrieve_with_bm25_topk(
+        query="alpha",
+        embedding_model=embedding_model,
+        top_k=3,
+        bm25_topk_floor=48,
+    )
+    assert isinstance(result, RetrievalResult)
+    # Every anchor with positive BM25 score should make it into bm25_topk_anchor_ids
+    # (since 48 > 3, all 3 anchors qualify).
+    assert set(result.bm25_topk_anchor_ids).issubset({1, 2, 3})
+    # anchor 1 ("alpha") must appear since the query matches its pattern text.
+    assert 1 in result.bm25_topk_anchor_ids
+    # The anchor_ids field holds the regular retrieve-result order.
+    assert set(result.anchor_ids).issubset({1, 2, 3})

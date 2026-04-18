@@ -14,7 +14,7 @@ import logging
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .anchor import AnchorCard
@@ -56,6 +56,21 @@ class AnchorCandidate:
     rrf_score: float = 0.0
     dense_rank: int = 0
     bm25_rank: int = 0
+
+
+@dataclass
+class RetrievalResult:
+    """Retrieval output wrapper that also carries the BM25-side shortlist.
+
+    Used by pipeline-level callers (e.g., stage 2 ledger attribution) that
+    need to know which anchors were in the BM25 top-K before RRF fusion.
+    Separate from `AnchorCandidate` so the existing retrieve() API stays
+    backward-compatible.
+    """
+
+    anchor_ids: List[int]
+    scores: List[float]
+    bm25_topk_anchor_ids: List[int] = field(default_factory=list)
 
 
 # ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -239,6 +254,47 @@ class AnchorRetriever:
 
         candidates.sort(key=lambda c: c.rrf_score, reverse=True)
         return candidates[:k]
+
+    def retrieve_with_bm25_topk(
+        self,
+        query: str,
+        embedding_model,
+        top_k: int = 32,
+        bm25_topk_floor: int = 48,
+        query_vec=None,
+    ) -> "RetrievalResult":
+        """Retrieve candidates AND expose the BM25-side top-K shortlist.
+
+        The main candidate list is produced by the normal retrieve() path
+        (RRF over dense + BM25). In addition, this method returns the
+        top-`bm25_topk_floor` anchor ids by BM25 score alone. Stage 2
+        advertisement attribution uses the shortlist to gate template
+        credit: a retrieved anchor only earns credit for one of its
+        templates if it actually made the BM25 shortlist (i.e., lexical
+        contribution was non-negligible).
+        """
+        candidates = self.retrieve(
+            query=query,
+            embedding_model=embedding_model,
+            top_k=top_k,
+            query_vec=query_vec,
+        )
+        # BM25 top-K by raw score, independent of RRF.
+        bm25_scores = self._get_bm25().score(query)
+        cards = self.atlas.cards
+        indexed = [
+            (cards[i].anchor_id, s)
+            for i, s in enumerate(bm25_scores)
+            if s > 0.0
+        ]
+        indexed.sort(key=lambda p: p[1], reverse=True)
+        bm25_topk_anchor_ids = [aid for aid, _ in indexed[:bm25_topk_floor]]
+
+        return RetrievalResult(
+            anchor_ids=[c.anchor_id for c in candidates],
+            scores=[c.rrf_score for c in candidates],
+            bm25_topk_anchor_ids=bm25_topk_anchor_ids,
+        )
 
     def invalidate_bm25_cache(self):
         """Call after atlas cards change (e.g., after card text refinement)."""
