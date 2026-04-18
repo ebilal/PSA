@@ -274,6 +274,39 @@ def cmd_rebuild_ledger(args) -> int:
     return 0
 
 
+def cmd_purge(args) -> int:
+    from datetime import timedelta
+
+    tenant_id = getattr(args, "tenant", None) or "default"
+    older_than_days = int(getattr(args, "older_than_days", 90))
+    as_json = getattr(args, "json", False)
+
+    db_path = _db_path(tenant_id)
+    if not os.path.exists(db_path):
+        if as_json:
+            print(json.dumps({"tenant_id": tenant_id, "deleted": 0}))
+        else:
+            print(f"No ledger DB at {db_path}")
+        return 0
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    ).isoformat()
+    with sqlite3.connect(db_path) as db:
+        cur = db.execute(
+            "DELETE FROM pattern_ledger WHERE removed_at IS NOT NULL AND removed_at < ?",
+            (cutoff,),
+        )
+        db.commit()
+        deleted = cur.rowcount
+
+    if as_json:
+        print(json.dumps({"tenant_id": tenant_id, "deleted": deleted}, indent=2))
+    else:
+        print(f"Purged {deleted} archived row(s) older than {older_than_days} days.")
+    return 0
+
+
 def build_parser(subparsers):
     """Register the `advertisement` subparser. Returns the parser for chaining."""
     p = subparsers.add_parser("advertisement", help="Advertisement decay CLIs")
@@ -294,6 +327,12 @@ def build_parser(subparsers):
     p_rebuild.add_argument("--dry-run", action="store_true")
     p_rebuild.add_argument("--json", action="store_true")
     p_rebuild.set_defaults(func=cmd_rebuild_ledger)
+
+    p_purge = sub.add_parser("purge", help="Hard-delete archived rows past retention")
+    p_purge.add_argument("--tenant")
+    p_purge.add_argument("--older-than-days", type=int, default=90)
+    p_purge.add_argument("--json", action="store_true")
+    p_purge.set_defaults(func=cmd_purge)
 
     return p
 

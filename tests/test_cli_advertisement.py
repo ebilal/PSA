@@ -104,3 +104,42 @@ def test_rebuild_ledger_recomputes_from_trace(tmp_path, monkeypatch):
     data = json.loads(r.stdout)
     assert data["records_processed"] == 1
     assert data["derived_patterns"] >= 1
+
+
+def test_purge_deletes_archived_rows_past_retention(tmp_path, monkeypatch):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from psa.advertisement.ledger import create_schema
+
+    db_path = tmp_path / ".psa" / "tenants" / "default" / "memory.sqlite3"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as db:
+        create_schema(db)
+        old = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        for pid, removed_at in [("old", old), ("recent", recent), ("active", None)]:
+            db.execute(
+                """
+                INSERT INTO pattern_ledger
+                    (pattern_id, anchor_id, pattern_text, ledger, shadow_ledger,
+                     grace_expires_at, created_at, last_updated_at, removed_at)
+                VALUES (?, ?, ?, 0.0, 0.0, '', '', '', ?)
+                """,
+                (pid, 1, "p", removed_at),
+            )
+        db.commit()
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env = {**os.environ, "HOME": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "psa", "advertisement", "purge", "--older-than-days", "90"],
+        capture_output=True, text=True,
+        env=env,
+    )
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+
+    with sqlite3.connect(db_path) as db:
+        remaining = {row[0] for row in db.execute("SELECT pattern_id FROM pattern_ledger")}
+    assert "old" not in remaining
+    assert "recent" in remaining
+    assert "active" in remaining
