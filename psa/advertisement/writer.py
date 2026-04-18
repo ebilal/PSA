@@ -63,6 +63,7 @@ def write_decay_candidate(atlas_dir: str, report: Any) -> bool:
         "n_patterns_backfilled_this_run": report.n_patterns_backfilled_this_run,
         "pruning_by_reason": report.pruning_by_reason,
     }
+    stamp_refined_hash(meta, atlas_dir)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 

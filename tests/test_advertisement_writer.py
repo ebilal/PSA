@@ -153,3 +153,20 @@ def test_stamp_refined_hash_without_existing_file(tmp_path):
     assert meta["refined_hash_at_generation"] is None
     assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")
     assert not Path(meta["refined_path_at_generation"]).exists()
+
+
+def test_write_decay_candidate_stamps_refined_hash(tmp_path):
+    import json
+    from psa.advertisement.writer import write_decay_candidate
+
+    atlas_dir, report = _make_report(tmp_path)
+    # Create an existing refined file so the hash is non-null
+    refined = atlas_dir / "anchor_cards_refined.json"
+    refined.write_text('{"v":1}')
+
+    assert write_decay_candidate(str(atlas_dir), report) is True
+    meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
+    meta = json.loads(meta_path.read_text())
+    assert meta["refined_existed_at_generation"] is True
+    assert meta["refined_hash_at_generation"].startswith("sha256:")
+    assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")
