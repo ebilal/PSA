@@ -463,6 +463,7 @@ def _cmd_atlas_refine(args):
     import os
     from pathlib import Path
 
+    from .advertisement.writer import stamp_refined_hash
     from .tenant import TenantManager
     from .atlas import AtlasManager
 
@@ -549,6 +550,7 @@ def _cmd_atlas_refine(args):
         "n_anchors_touched": n_anchors_touched,
         "n_patterns_added": n_patterns_added,
     }
+    stamp_refined_hash(meta, atlas_dir)
     with open(candidate_meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 

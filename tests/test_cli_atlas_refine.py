@@ -350,3 +350,48 @@ def test_promote_refinement_overwrites_previous_promotion(tmp_path, monkeypatch,
 
     assert second_meta["source"] == "oracle"
     assert second_meta["promoted_at"] != first_meta["promoted_at"]
+
+
+def test_atlas_refine_stamps_refined_hash(tmp_path, monkeypatch, capsys):
+    """Refine candidate meta must carry refined_hash_at_generation so
+    promote-refinement can gate against stage 2 stale-candidate hazard."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, patterns=["original pattern"])
+
+    # Seed an existing refined file so the stamp records a non-null hash.
+    # Refine does NOT parse anchor_cards_refined.json — it only reads base
+    # cards — so arbitrary JSON content is safe here; the stamp helper just
+    # hashes the bytes.
+    (atlas_dir / "anchor_cards_refined.json").write_text('{"v": 1}')
+
+    miss_log = tmp_path / "misses.jsonl"
+    miss_log.write_text(
+        json.dumps(
+            {
+                "question_id": "q1",
+                "query": "how does the authentication token refresh flow work",
+                "gold_anchor_ids": [1],
+                "miss_reason": "scoring_rank",
+            }
+        )
+        + "\n"
+    )
+
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch("sys.argv", ["psa", "atlas", "refine", "--miss-log", str(miss_log)]):
+        main()
+
+    meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["refined_existed_at_generation"] is True
+    assert meta["refined_hash_at_generation"].startswith("sha256:")
+    assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")
