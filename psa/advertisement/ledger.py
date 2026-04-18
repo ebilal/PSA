@@ -230,3 +230,118 @@ def apply_decay(db: sqlite3.Connection, tau_days: int, removal_threshold: float 
         (factor, factor, factor, removal_threshold, factor, removal_threshold, _now_iso()),
     )
     db.commit()
+
+
+@dataclass
+class RemovalCandidate:
+    pattern_id: str
+    anchor_id: int
+    pattern_text: str
+    ledger: float
+    consecutive_negative_cycles: int
+    shadow_ledger: float
+    shadow_consecutive: int
+
+
+@dataclass
+class EvaluationResult:
+    removal_candidates: list[RemovalCandidate] = field(default_factory=list)
+    shadow_candidates: list[RemovalCandidate] = field(default_factory=list)
+    n_active: int = 0
+    n_in_grace: int = 0
+    n_at_risk: int = 0
+
+
+def evaluate_removal(
+    *,
+    db,
+    atlas,
+    tenant_id: str,
+    config,
+    shielded_anchor_fn,
+    pinned_fn,
+) -> EvaluationResult:
+    """Evaluate active rows against the removal rule.
+
+    `shielded_anchor_fn(tenant_id, anchor_ids) -> set[int]` re-uses stage 1 P1.
+    `pinned_fn(anchor_id, pattern_text) -> bool` re-uses stage 1 P3.
+
+    Does not mutate the DB. Callers decide whether to apply removals.
+    """
+    now_iso = _now_iso()
+    rows = db.execute(
+        """
+        SELECT pattern_id, anchor_id, pattern_text, ledger,
+               consecutive_negative_cycles, shadow_ledger, shadow_consecutive,
+               grace_expires_at
+        FROM pattern_ledger
+        WHERE removed_at IS NULL
+        """
+    ).fetchall()
+
+    n_active = len(rows)
+    n_in_grace = 0
+    n_at_risk = 0
+    anchor_ids = {r[1] for r in rows}
+    shielded = shielded_anchor_fn(tenant_id, anchor_ids) or set()
+
+    # Count per-anchor active patterns AFTER potential removal
+    # (we need this to enforce min_patterns_floor).
+    per_anchor_counts = {aid: 0 for aid in anchor_ids}
+    for aid in anchor_ids:
+        anchor = atlas.get_anchor(aid)
+        per_anchor_counts[aid] = len(anchor.generated_query_patterns)
+
+    removal: list[RemovalCandidate] = []
+    shadow: list[RemovalCandidate] = []
+
+    for (
+        pid,
+        aid,
+        text,
+        lgr,
+        cnc,
+        shadow_lgr,
+        shadow_cnc,
+        grace_expires_at,
+    ) in rows:
+        in_grace = grace_expires_at > now_iso
+        if in_grace:
+            n_in_grace += 1
+            continue
+
+        if cnc >= max(1, config.sustained_cycles // 2):
+            n_at_risk += 1
+
+        candidate = RemovalCandidate(
+            pattern_id=pid,
+            anchor_id=aid,
+            pattern_text=text,
+            ledger=lgr,
+            consecutive_negative_cycles=cnc,
+            shadow_ledger=shadow_lgr,
+            shadow_consecutive=shadow_cnc,
+        )
+
+        # Shared protections
+        if aid in shielded:
+            continue
+        if pinned_fn(aid, text):
+            continue
+        if per_anchor_counts.get(aid, 0) - 1 < config.min_patterns_floor:
+            continue
+
+        if cnc >= config.sustained_cycles:
+            removal.append(candidate)
+            per_anchor_counts[aid] -= 1
+
+        if shadow_cnc >= config.shadow.sustained_cycles:
+            shadow.append(candidate)
+
+    return EvaluationResult(
+        removal_candidates=removal,
+        shadow_candidates=shadow,
+        n_active=n_active,
+        n_in_grace=n_in_grace,
+        n_at_risk=n_at_risk,
+    )
