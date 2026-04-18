@@ -290,6 +290,67 @@ def _call_qwen_proxy_batch(
 # ── LLM task-success judge ───────────────────────────────────────────────────
 
 
+def _qwen_task_success_batch(
+    query: str,
+    packed_contexts: List[str],
+    timeout: int = 120,
+) -> List[float]:
+    """Score N packed contexts in ONE LLM call.
+
+    Same batching pattern as `_call_qwen_proxy_batch` above: one structured
+    prompt returning a JSON array of scores, mapped back to inputs by index.
+
+    For `psa label --n-queries 300`, this cuts task-success API calls from
+    300×3=900 sequential to 300 batched — same total judgments, 3x fewer
+    round-trips, proportional cost reduction on input token overhead.
+
+    Returns a list of scores in [0.0, 1.0], one per input context.
+    Failed parses fall back to 0.0 (conservative: a 0 score is never a
+    false positive for the expensive stage).
+    """
+    from psa.llm import call_llm
+
+    n = len(packed_contexts)
+    if n == 0:
+        return []
+
+    contexts_block = "\n\n".join(
+        f"=== CONTEXT {i + 1} ===\n{ctx[:3000]}" for i, ctx in enumerate(packed_contexts)
+    )
+    prompt = (
+        "You are evaluating whether each retrieved context is useful for answering a query.\n\n"
+        f"QUERY: {query}\n\n"
+        f"{contexts_block}\n\n"
+        f"Score each of the {n} contexts independently from 0.0 to 1.0 on how well it helps "
+        "answer the query. For each context:\n"
+        "- 0.0 = completely irrelevant\n"
+        "- 0.5 = partially relevant but incomplete\n"
+        "- 1.0 = fully answers the query\n\n"
+        f'Return JSON: {{"scores": [s1, s2, ..., s{n}]}}\n'
+        f"Return exactly {n} numbers in the scores array, in order."
+    )
+
+    try:
+        content = call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=32 * n + 64,
+            timeout=timeout,
+        )
+        result = json.loads(content)
+        scores = result.get("scores", [])
+        out: List[float] = []
+        for i in range(n):
+            try:
+                out.append(max(0.0, min(1.0, float(scores[i]))))
+            except (IndexError, TypeError, ValueError):
+                out.append(0.0)
+        return out
+    except Exception as e:
+        logger.warning("Task-success batch judge failed: %s", e)
+        return [0.0] * n
+
+
 def _qwen_task_success(
     query: str,
     packed_context: str,
@@ -298,8 +359,10 @@ def _qwen_task_success(
     timeout: int = 120,
 ) -> float:
     """
-    Use LLM as a judge: given a query and packed context, how well does
-    the context support answering the query?
+    Single-context task-success judge. Thin wrapper around the batched variant
+    so existing callers (including tests that patch this function by name)
+    keep working. New loops should call `_qwen_task_success_batch` directly
+    to take advantage of batching.
 
     Returns a score in [0.0, 1.0].
     """
@@ -528,19 +591,32 @@ class OracleLabeler:
         top_sets = all_sets[:EXPENSIVE_TOP_N]
 
         if self.task_success_fn is not None and not gold_anchor_ids:
-            for cs in top_sets:
-                # Pack context for this anchor set and measure task success
+            # Pack contexts for the top-N sets up front; batch the judge call.
+            packed_texts: List[str] = []
+            packed_counts: List[int] = []
+            packable: List[int] = []  # indices into top_sets that packed successfully
+            for i, cs in enumerate(top_sets):
                 try:
                     packed = self.pipeline.packed_context_for_anchors(
                         query=query, anchor_ids=cs.anchor_ids
                     )
-                    cs.task_success = self.task_success_fn(query, packed.text)
-                    cs.packed_tokens = packed.token_count
+                    packed_texts.append(packed.text)
+                    packed_counts.append(packed.token_count)
+                    packable.append(i)
                 except Exception as e:
-                    logger.warning("TaskSuccess scoring failed: %s", e)
+                    logger.warning("Packing context failed: %s", e)
                     cs.task_success = 0.0
 
-                # Recompute oracle score with task_success
+            # One batched judge call for all successfully-packed contexts.
+            if packed_texts:
+                scores = _qwen_task_success_batch(query, packed_texts)
+                for local_idx, top_idx in enumerate(packable):
+                    cs = top_sets[top_idx]
+                    cs.task_success = scores[local_idx] if local_idx < len(scores) else 0.0
+                    cs.packed_tokens = packed_counts[local_idx]
+
+            # Recompute oracle score with task_success for every top-set entry.
+            for cs in top_sets:
                 cs.oracle_score = oracle_score(
                     support_coverage=cs.support_coverage,
                     task_success=cs.task_success or 0.0,

@@ -38,8 +38,62 @@ def _token_f1(text_a, text_b) -> float:
     return 2.0 * precision * recall / denom
 
 
+def _llm_relevance_batch(query: str, memory_bodies: list[str]) -> list[int]:
+    """Judge relevance for N memories in ONE LLM call.
+
+    Same batching pattern as `_call_qwen_proxy_batch` in oracle_labeler:
+    one structured prompt returning a JSON array of 0/1 labels mapped back
+    by index. For a memory-scorer training run over hundreds of memories
+    per query this converts O(N_memories) API calls into O(1) per query.
+
+    Returns a list[int] of 0/1 per input memory. Failed parses → 0
+    (conservative: treat as not-relevant rather than fabricate positives).
+    """
+    from psa.llm import call_llm
+
+    n = len(memory_bodies)
+    if n == 0:
+        return []
+
+    mem_block = "\n\n".join(
+        f"=== MEMORY {i + 1} ===\n{body[:1500]}" for i, body in enumerate(memory_bodies)
+    )
+    prompt = (
+        f"Query: {query}\n\n"
+        f"{mem_block}\n\n"
+        f"For each of the {n} memories above, decide whether it is relevant to the query.\n"
+        f'Return JSON: {{"labels": [0_or_1, 0_or_1, ..., 0_or_1]}}\n'
+        f"Return exactly {n} values in the labels array, in order."
+    )
+    try:
+        content = call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=16 * n + 64,
+        ).strip()
+        if content.startswith("```"):
+            content = content.strip("`").split("\n", 1)[-1]
+        result = json.loads(content)
+        raw = result.get("labels", [])
+        out: list[int] = []
+        for i in range(n):
+            try:
+                v = int(raw[i])
+                out.append(1 if v else 0)
+            except (IndexError, TypeError, ValueError):
+                out.append(0)
+        return out
+    except Exception as e:
+        logger.warning("LLM relevance batch failed: %s; defaulting to 0s", e)
+        return [0] * n
+
+
 def _llm_relevance(query: str, memory_body: str) -> int:
-    """Call LLM to determine if memory is relevant to the query. Returns 0 or 1."""
+    """Call LLM to determine if memory is relevant to the query. Returns 0 or 1.
+
+    Single-memory wrapper retained for backward compatibility and tests.
+    New loops should call `_llm_relevance_batch` to avoid O(N) round-trips.
+    """
     from psa.llm import call_llm
 
     prompt = (
@@ -48,7 +102,12 @@ def _llm_relevance(query: str, memory_body: str) -> int:
         "Is this memory relevant to the query? Respond with only 1 (yes) or 0 (no)."
     )
     try:
-        response = call_llm(prompt).strip()
+        response = call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=8,
+            json_mode=False,
+        ).strip()
         return 1 if response.startswith("1") else 0
     except Exception:
         logger.warning("LLM relevance call failed; defaulting to 0")
@@ -158,6 +217,14 @@ def generate_memory_scorer_data(
                 except Exception:
                     logger.warning("Cross-encoder batch predict failed for query %s", query_id)
 
+            # When mode is LLM, batch all memories into one judge call per query.
+            # Benchmark mode uses deterministic F1 overlap — no LLM calls needed.
+            labels_by_memory_id: dict[str, int] = {}
+            if mode != "benchmark" and memories:
+                batch_labels = _llm_relevance_batch(query, [m.body for m in memories])
+                for m, lab in zip(memories, batch_labels):
+                    labels_by_memory_id[m.memory_object_id] = lab
+
             for memory in memories:
                 ce_score = ce_scores_map.get(memory.memory_object_id, 0.0)
 
@@ -166,7 +233,7 @@ def generate_memory_scorer_data(
                     f1 = _token_f1(memory.body, answer_gold)
                     label = 1 if f1 > 0.3 else 0
                 else:
-                    label = _llm_relevance(query, memory.body)
+                    label = labels_by_memory_id.get(memory.memory_object_id, 0)
 
                 # Features
                 type_vec = _type_onehot(memory.memory_type)
