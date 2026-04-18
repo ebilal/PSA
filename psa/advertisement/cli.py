@@ -48,6 +48,8 @@ def cmd_status(args) -> int:
             print(f"No ledger DB at {db_path}")
         return 0
     with sqlite3.connect(db_path) as db:
+        from psa.advertisement.ledger import create_schema as _create_schema
+        _create_schema(db)
         rows = db.execute(
             """
             SELECT pattern_id, anchor_id, pattern_text, ledger,
@@ -96,6 +98,8 @@ def cmd_diff(args) -> int:
             print(f"No ledger DB at {db_path}")
         return 0
     with sqlite3.connect(db_path) as db:
+        from psa.advertisement.ledger import create_schema as _create_schema
+        _create_schema(db)
         rows = db.execute(
             """
             SELECT pattern_id, anchor_id, pattern_text, ledger,
@@ -293,6 +297,8 @@ def cmd_purge(args) -> int:
         datetime.now(timezone.utc) - timedelta(days=older_than_days)
     ).isoformat()
     with sqlite3.connect(db_path) as db:
+        from psa.advertisement.ledger import create_schema as _create_schema
+        _create_schema(db)
         cur = db.execute(
             "DELETE FROM pattern_ledger WHERE removed_at IS NOT NULL AND removed_at < ?",
             (cutoff,),

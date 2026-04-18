@@ -143,3 +143,53 @@ def test_purge_deletes_archived_rows_past_retention(tmp_path, monkeypatch):
     assert "old" not in remaining
     assert "recent" in remaining
     assert "active" in remaining
+
+
+def test_status_handles_missing_pattern_ledger_table(tmp_path, monkeypatch):
+    """User has memory.sqlite3 but no pattern_ledger table → no crash."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    db_path = tmp_path / ".psa" / "tenants" / "default" / "memory.sqlite3"
+    db_path.parent.mkdir(parents=True)
+    # Create an empty SQLite file with no pattern_ledger table.
+    sqlite3.connect(db_path).close()
+
+    env = {**os.environ, "HOME": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "psa", "advertisement", "status", "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+    data = json.loads(r.stdout)
+    assert data["n_active"] == 0
+
+
+def test_diff_handles_missing_pattern_ledger_table(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    db_path = tmp_path / ".psa" / "tenants" / "default" / "memory.sqlite3"
+    db_path.parent.mkdir(parents=True)
+    sqlite3.connect(db_path).close()
+
+    env = {**os.environ, "HOME": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "psa", "advertisement", "diff", "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0
+    data = json.loads(r.stdout)
+    assert data["disagreements"] == []
+
+
+def test_purge_handles_missing_pattern_ledger_table(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    db_path = tmp_path / ".psa" / "tenants" / "default" / "memory.sqlite3"
+    db_path.parent.mkdir(parents=True)
+    sqlite3.connect(db_path).close()
+
+    env = {**os.environ, "HOME": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "psa", "advertisement", "purge", "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0
+    data = json.loads(r.stdout)
+    assert data["deleted"] == 0
