@@ -308,6 +308,37 @@ def tool_delete_drawer(drawer_id: str):
         return {"success": False, "error": str(e)}
 
 
+# ── Stage 2 reload hook ───────────────────────────────────────────────────────
+#
+# Long-lived consumers (future MCP server pipeline cache, embedded apps that
+# hold a PSAPipeline reference) call maybe_reload_pipeline() between queries
+# to pick up stage 2 advertisement-decay removals.
+#
+# The current MCP server tool handlers construct a fresh pipeline per call
+# via _get_psa_pipeline(), so they already see latest atlas state. This hook
+# is wired into the public API for future use — it is not called from the
+# existing handlers because there is no persistent pipeline to reload.
+
+_reload_state: dict = {}
+
+
+def maybe_reload_pipeline(*, pipeline, state: dict, tenant_id: str) -> None:
+    """Trigger pipeline.reload_atlas() if the advertisement reload marker has
+    advanced since the last reload tracked in `state`."""
+    from .advertisement.reload import marker_mtime, should_reload
+
+    last = state.get("last_reload_mtime", 0.0)
+    if should_reload(tenant_id=tenant_id, last_reload_mtime=last):
+        pipeline.reload_atlas()
+        state["last_reload_mtime"] = marker_mtime(tenant_id=tenant_id)
+
+
+def _ensure_fresh_pipeline(pipeline, tenant_id: str) -> None:
+    """Convenience wrapper that uses the module-level _reload_state."""
+    st = _reload_state.setdefault(tenant_id, {"last_reload_mtime": 0.0})
+    maybe_reload_pipeline(pipeline=pipeline, state=st, tenant_id=tenant_id)
+
+
 # ── PSA Atlas tool helpers ────────────────────────────────────────────────────
 
 
