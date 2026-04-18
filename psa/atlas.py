@@ -805,6 +805,30 @@ class AtlasBuilder:
                 new_cards=[card.to_dict() for card in atlas.cards],
             )
 
+        # Stage 2: wholesale-archive old ledger + fresh-insert new patterns.
+        # This is gated by a try/except so a ledger-side failure cannot abort
+        # an otherwise-successful atlas rebuild — the worst case is the next
+        # decay run sees orphaned rows.
+        try:
+            import sqlite3 as _sqlite3
+            from psa.advertisement.config import AdvertisementDecayConfig
+            from psa.advertisement.ledger import (
+                create_schema as _create_schema,
+                reset_ledger_on_rebuild as _reset_ledger,
+            )
+            from psa.config import MempalaceConfig
+
+            _ad = AdvertisementDecayConfig.from_mempalace(MempalaceConfig())
+            _db_path = os.path.expanduser(
+                f"~/.psa/tenants/{self.tenant_id}/memory.sqlite3"
+            )
+            os.makedirs(os.path.dirname(_db_path), exist_ok=True)
+            with _sqlite3.connect(_db_path) as _db:
+                _create_schema(_db)
+                _reset_ledger(db=_db, new_atlas=atlas, grace_days=_ad.grace_days)
+        except Exception as e:
+            logger.warning("Ledger reset on rebuild failed (non-fatal): %s", e)
+
         logger.info(
             "Atlas v%d built: %d learned + %d novelty anchors, stability=%.3f",
             version,

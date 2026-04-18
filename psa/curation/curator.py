@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..advertisement.writer import stamp_refined_hash
 from .extractor_heuristic import HeuristicExtractor
 from .extractor_llm import LLMExtractor
 from .pool import build_pool
@@ -154,6 +155,7 @@ def curate(tenant_id: str = "default", extractor_name: str = "heuristic") -> dic
         "extractor": extractor_name,
         "support_semantics": SUPPORT_SEMANTICS,
     }
+    stamp_refined_hash(meta, atlas_dir)
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 

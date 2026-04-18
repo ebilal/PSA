@@ -138,3 +138,44 @@ def test_cli_atlas_curate_empty_run_skips_write(tmp_path, monkeypatch, capsys):
     ]
     out = capsys.readouterr().out
     assert "skip" in out.lower() or "no oracle" in out.lower()
+
+
+def test_cli_atlas_curate_stamps_refined_hash(tmp_path, monkeypatch, capsys):
+    """Curate candidate meta must carry refined_hash_at_generation so
+    promote-refinement can gate against stage 2 stale-candidate hazard."""
+    from psa.cli import main
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    tenant_dir = home / ".psa" / "tenants" / "default"
+    atlas_dir = tenant_dir / "atlas_v1"
+    _write_atlas(atlas_dir, [1], patterns={1: []})
+
+    # Seed an existing refined file so the stamp records a non-null hash.
+    # Must be a valid cards array (AnchorIndex.load prefers refined over raw).
+    (atlas_dir / "anchor_cards_refined.json").write_text(
+        (atlas_dir / "anchor_cards.json").read_text()
+    )
+
+    labels = tenant_dir / "training" / "oracle_labels.jsonl"
+    labels.parent.mkdir(parents=True, exist_ok=True)
+    labels.write_text(
+        json.dumps(
+            {"query": "how does the auth token refresh flow work", "winning_oracle_set": [1]}
+        )
+        + "\n"
+    )
+    with open(atlas_dir / "fingerprints.json", "w") as f:
+        json.dump({"1": ["how does the auth token refresh flow work"]}, f)
+
+    with patch("sys.argv", ["psa", "atlas", "curate"]):
+        main()
+
+    meta_path = atlas_dir / "anchor_cards_candidate.meta.json"
+    assert meta_path.exists()
+    meta_obj = json.loads(meta_path.read_text())
+    assert meta_obj["refined_existed_at_generation"] is True
+    assert meta_obj["refined_hash_at_generation"].startswith("sha256:")
+    assert meta_obj["refined_path_at_generation"].endswith("anchor_cards_refined.json")

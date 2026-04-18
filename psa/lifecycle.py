@@ -113,6 +113,22 @@ class LifecyclePipeline:
         atlas = atlas_mgr.get_atlas()
 
         if atlas is not None:
+            # 3.5. Advertisement decay — apply decay + evaluate removal.
+            try:
+                from .advertisement.config import AdvertisementDecayConfig
+
+                ad_cfg = AdvertisementDecayConfig.from_mempalace(cfg)
+                if ad_cfg.tracking_enabled:
+                    print(f"  [3/5] Advertisement decay (tracking={ad_cfg.tracking_enabled}, removal={ad_cfg.removal_enabled})...")
+                    decay_summary = advertisement_decay_pass(
+                        tenant_id=tenant_id,
+                        config=ad_cfg,
+                        atlas_or_loader=atlas,
+                    )
+                    summary["advertisement_decay"] = decay_summary
+            except Exception as e:
+                logger.warning("Advertisement decay pass failed (non-fatal): %s", e)
+
             # 4. Per-anchor pruning
             print(f"  [3/5] Pruning overloaded anchors ({len(atlas.cards)} anchors)...")
             total_pruned = 0
@@ -578,3 +594,95 @@ class LifecyclePipeline:
         except Exception as e:
             logger.error("Selector training failed: %s", e)
             return False
+
+
+def advertisement_decay_pass(
+    *,
+    tenant_id: str,
+    config,
+    atlas_or_loader,
+    shielded_anchor_fn=None,
+    pinned_fn=None,
+) -> dict:
+    """Nightly fast-path decay + removal evaluation + optional apply.
+
+    Returns a summary dict (also logged as structured JSON via logger).
+    """
+    import os
+    import sqlite3
+
+    if not config.tracking_enabled:
+        logger.info("advertisement_decay skipped (tracking_enabled=false)")
+        return {"stage": "advertisement_decay", "skipped": True}
+
+    if shielded_anchor_fn is None:
+        # Default shielded_fn is the stage 1 P1 helper. The stage 1 module
+        # exposes this via decay.shielded_anchors when available; otherwise
+        # default to no shielding.
+        def shielded_anchor_fn(tenant_id, anchor_ids):
+            try:
+                from psa.advertisement.decay import shielded_anchors as _sh
+
+                return _sh(tenant_id, anchor_ids)
+            except (ImportError, AttributeError, TypeError):
+                return set()
+
+    if pinned_fn is None:
+        # Default pinned_fn reads from stage 1's pattern_metadata.json.
+        def pinned_fn(anchor_id, pattern_text):
+            try:
+                from psa.advertisement.metadata import load_metadata, metadata_key
+
+                meta = load_metadata(atlas_or_loader.anchor_dir)
+                entry = meta.get(metadata_key(anchor_id, pattern_text), {})
+                return bool(entry.get("pinned", False))
+            except Exception:
+                return False
+
+    from psa.advertisement.ledger import (
+        apply_decay,
+        apply_removals,
+        create_schema,
+        evaluate_removal,
+    )
+
+    db_path = os.path.expanduser(
+        f"~/.psa/tenants/{tenant_id}/memory.sqlite3"
+    )
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+    with sqlite3.connect(db_path) as db:
+        create_schema(db)
+        apply_decay(db, tau_days=config.tau_days, removal_threshold=config.removal_threshold)
+        result = evaluate_removal(
+            db=db,
+            atlas=atlas_or_loader,
+            tenant_id=tenant_id,
+            config=config,
+            shielded_anchor_fn=shielded_anchor_fn,
+            pinned_fn=pinned_fn,
+        )
+        n_removed_B = 0
+        if config.removal_enabled and result.removal_candidates:
+            atlas_dir = getattr(atlas_or_loader, "anchor_dir", None) or os.path.dirname(
+                db_path
+            )
+            n_removed_B = apply_removals(
+                db=db,
+                tenant_id=tenant_id,
+                atlas_dir=atlas_dir,
+                candidates=result.removal_candidates,
+            )
+
+    summary = {
+        "stage": "advertisement_decay",
+        "tenant_id": tenant_id,
+        "n_active": result.n_active,
+        "n_in_grace": result.n_in_grace,
+        "n_at_risk": result.n_at_risk,
+        "n_would_remove_under_A": len(result.shadow_candidates),
+        "n_would_remove_under_B": len(result.removal_candidates),
+        "n_actually_removed_under_B": n_removed_B,
+    }
+    logger.info("advertisement_decay summary: %s", summary)
+    return summary
