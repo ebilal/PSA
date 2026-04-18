@@ -119,3 +119,35 @@ def test_origins_serialized_sorted(tmp_path):
 
     meta = json.loads((atlas_dir / "anchor_cards_candidate.meta.json").read_text())
     assert meta["origins"] == ["benchmark", "interactive"]
+
+
+def test_stamp_refined_hash_with_existing_file(tmp_path):
+    from psa.advertisement.writer import stamp_refined_hash
+
+    atlas_dir = tmp_path / "atlas_v1"
+    atlas_dir.mkdir()
+    refined = atlas_dir / "anchor_cards_refined.json"
+    refined.write_text('{"cards": []}')
+
+    meta = {"source": "decay"}
+    stamp_refined_hash(meta, atlas_dir)
+
+    assert meta["refined_existed_at_generation"] is True
+    assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")
+    assert meta["refined_hash_at_generation"].startswith("sha256:")
+    # SHA-256 of '{"cards": []}' is deterministic
+    assert len(meta["refined_hash_at_generation"]) == len("sha256:") + 64
+
+
+def test_stamp_refined_hash_without_existing_file(tmp_path):
+    from psa.advertisement.writer import stamp_refined_hash
+
+    atlas_dir = tmp_path / "atlas_v1"
+    atlas_dir.mkdir()
+
+    meta = {"source": "decay"}
+    stamp_refined_hash(meta, atlas_dir)
+
+    assert meta["refined_existed_at_generation"] is False
+    assert meta["refined_hash_at_generation"] is None
+    assert meta["refined_path_at_generation"].endswith("anchor_cards_refined.json")

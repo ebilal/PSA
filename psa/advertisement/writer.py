@@ -12,10 +12,12 @@ Empty-run guard: when n_patterns_removed == 0, nothing is written
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("psa.advertisement.writer")
@@ -76,3 +78,26 @@ def write_decay_candidate(atlas_dir: str, report: Any) -> bool:
         json.dump(detail, f, indent=2)
 
     return True
+
+
+def stamp_refined_hash(meta: dict, atlas_dir) -> None:
+    """Stamp meta with refined-file hash + path + existence.
+
+    Every candidate producer (decay, refine, curate) calls this before
+    persisting its meta file. promote-refinement refuses promotion if
+    the current refined hash differs from the recorded value, blocking
+    stale candidates from overwriting stage 2 advertisement removals.
+
+    Mutates `meta` in place.
+    """
+    atlas_dir = Path(atlas_dir)
+    refined_path = atlas_dir / "anchor_cards_refined.json"
+    meta["refined_path_at_generation"] = str(refined_path)
+    if refined_path.exists():
+        raw = refined_path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        meta["refined_hash_at_generation"] = f"sha256:{digest}"
+        meta["refined_existed_at_generation"] = True
+    else:
+        meta["refined_hash_at_generation"] = None
+        meta["refined_existed_at_generation"] = False
