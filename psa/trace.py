@@ -49,22 +49,20 @@ def _trace_disabled() -> bool:
     return not _config_trace_enabled()
 
 
-def write_trace(record: dict[str, Any], *, tenant_id: str) -> None:
-    """Append one JSONL record to the tenant's query_trace.jsonl.
-
-    No-op when tracing is disabled via env or config. Failures are
-    logged, not raised — tracing must never break a live query.
-    """
+def write_trace(record: dict[str, Any], *, tenant_id: str) -> bool:
+    """Append one JSONL record. Returns True on success, False on failure or when tracing is disabled."""
     if _trace_disabled():
-        return
+        return False
     home = os.path.expanduser("~")
     path = os.path.join(home, ".psa", "tenants", tenant_id, "query_trace.jsonl")
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
+        return True
     except OSError as e:
         logger.warning("Could not write trace to %s: %s", path, e)
+        return False
 
 
 def new_trace_record(
@@ -99,4 +97,5 @@ def new_trace_record(
         "tokens_used": 0,
         "token_budget": 0,
         "timing_ms": {},
+        "retrieval_attribution": [],
     }
