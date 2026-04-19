@@ -613,6 +613,42 @@ class MemoryStore:
             return memories[:limit]
         return memories
 
+    def query_by_secondary_anchor(
+        self,
+        tenant_id: str,
+        anchor_id: int,
+        limit: int = 50,
+        query_vec: Optional[List[float]] = None,
+        prefetch_limit: int = 200,
+    ) -> List[MemoryObject]:
+        """Return memories where anchor_id appears in secondary_anchor_ids_json.
+
+        When query_vec is provided, prefetches up to prefetch_limit by quality then
+        re-ranks by cosine similarity before applying limit (same as query_by_anchor).
+        """
+        fetch_n = prefetch_limit if query_vec is not None else limit
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT mo.* FROM memory_objects mo, json_each(mo.secondary_anchor_ids_json) je
+                WHERE mo.tenant_id = ? AND je.value = ?
+                  AND mo.is_duplicate = 0 AND mo.is_archived = 0
+                ORDER BY mo.quality_score DESC, mo.created_at DESC
+                LIMIT ?
+                """,
+                (tenant_id, anchor_id, fetch_n),
+            ).fetchall()
+        memories = [self._row_to_memory_object(r) for r in rows]
+        if query_vec is not None and memories:
+            qv = np.array(query_vec, dtype=np.float32)
+            memories.sort(
+                key=lambda m: float(np.dot(qv, np.array(m.embedding, dtype=np.float32)))
+                if m.embedding else 0.0,
+                reverse=True,
+            )
+            return memories[:limit]
+        return memories
+
     def get_all_with_embeddings(self, tenant_id: str) -> List[MemoryObject]:
         """Return all non-duplicate memories that have embeddings (for atlas building)."""
         with self._connect() as conn:

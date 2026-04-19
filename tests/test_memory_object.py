@@ -535,3 +535,36 @@ def test_query_by_anchor_relevance_ordering(tmp_dir):
     results = store.query_by_anchor("t", anchor_id=1, limit=2, query_vec=query_vec)
     assert results[0].title == "high relevance"
     assert results[1].title == "low relevance"
+
+
+def test_query_by_secondary_anchor(tmp_dir):
+    """Memories should be retrievable via their secondary anchor."""
+    import os
+    from psa.memory_object import MemoryStore, MemoryObject, MemoryType
+
+    store = MemoryStore(db_path=os.path.join(tmp_dir, "mem.db"))
+
+    mo = MemoryObject.create(
+        tenant_id="t", memory_type=MemoryType.SEMANTIC,
+        title="cross-topic", body="b", summary="s",
+        source_ids=[], classification_reason="", quality_score=0.8,
+    )
+    store.add(mo)
+    # primary = 1, secondary = 2
+    store.update_anchor_assignment(
+        mo.memory_object_id,
+        primary_anchor_id=1,
+        secondary_anchor_ids=[2],
+        confidence=0.85,
+    )
+
+    # Primary query returns it
+    primary_results = store.query_by_anchor("t", anchor_id=1)
+    assert any(m.memory_object_id == mo.memory_object_id for m in primary_results)
+
+    # Secondary query also returns it
+    secondary_results = store.query_by_secondary_anchor("t", anchor_id=2)
+    assert any(m.memory_object_id == mo.memory_object_id for m in secondary_results)
+
+    # Query for anchor 3 returns nothing
+    assert store.query_by_secondary_anchor("t", anchor_id=3) == []

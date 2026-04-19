@@ -554,6 +554,19 @@ class PSAPipeline:
                                 seen_ids.add(mo.memory_object_id)
                                 memories.append(mo)
 
+                    # Also surface cross-topic memories via secondary anchor assignments
+                    for sa in selected:
+                        for mo in self.store.query_by_secondary_anchor(
+                            tenant_id=self.tenant_id,
+                            anchor_id=sa.anchor_id,
+                            limit=25,
+                            query_vec=query_vec,
+                        ):
+                            if mo.memory_object_id not in seen_ids:
+                                seen_ids.add(mo.memory_object_id)
+                                _memory_to_source_anchor[mo.memory_object_id] = sa.anchor_id
+                                memories.append(mo)
+
                     # Record usage telemetry: these memories were fetched for selected anchors
                     if memories:
                         try:
