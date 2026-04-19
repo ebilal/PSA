@@ -308,18 +308,15 @@ def tool_delete_drawer(drawer_id: str):
         return {"success": False, "error": str(e)}
 
 
-# ── Stage 2 reload hook ───────────────────────────────────────────────────────
+# ── Stage 2 reload hook + persistent pipeline cache ──────────────────────────
 #
-# Long-lived consumers (future MCP server pipeline cache, embedded apps that
-# hold a PSAPipeline reference) call maybe_reload_pipeline() between queries
-# to pick up stage 2 advertisement-decay removals.
-#
-# The current MCP server tool handlers construct a fresh pipeline per call
-# via _get_psa_pipeline(), so they already see latest atlas state. This hook
-# is wired into the public API for future use — it is not called from the
-# existing handlers because there is no persistent pipeline to reload.
+# _pipeline_cache holds one PSAPipeline per tenant_id for the lifetime of the
+# MCP server process. Queries call _ensure_fresh_pipeline() before use so that
+# advertisement-decay atlas removals (reload marker) are picked up without
+# rebuilding the whole pipeline.
 
 _reload_state: dict = {}
+_pipeline_cache: dict = {}
 
 
 def maybe_reload_pipeline(*, pipeline, state: dict, tenant_id: str) -> None:
@@ -343,11 +340,17 @@ def _ensure_fresh_pipeline(pipeline, tenant_id: str) -> None:
 
 
 def _get_psa_pipeline(tenant_id: str = "default"):
-    """Build a PSAPipeline for the given tenant. Returns None if atlas not built."""
+    """Return a cached PSAPipeline, building it on first call. Returns None if atlas not built."""
+    if tenant_id in _pipeline_cache:
+        pipeline = _pipeline_cache[tenant_id]
+        _ensure_fresh_pipeline(pipeline, tenant_id)
+        return pipeline
     try:
         from .pipeline import PSAPipeline
 
-        return PSAPipeline.from_tenant(tenant_id=tenant_id)
+        pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
+        _pipeline_cache[tenant_id] = pipeline
+        return pipeline
     except FileNotFoundError:
         return None
     except Exception as e:
