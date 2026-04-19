@@ -506,7 +506,26 @@ class OracleLabeler:
             query, top_k_candidates=top_k_candidates, query_origin="labeling"
         )
         candidates = result.candidates
-        candidate_ids = [c.anchor_id for c in candidates]
+        selected_anchors = result.selected_anchors
+
+        if candidates:
+            candidate_ids = [c.anchor_id for c in candidates]
+            anchor_cards_text = {c.anchor_id: c.card.to_card_text() for c in candidates}
+        elif selected_anchors:
+            candidate_ids = [a.anchor_id for a in selected_anchors]
+            anchor_cards_text = {}
+            for selected in selected_anchors:
+                card = selected.candidate.card if selected.candidate is not None else None
+                if card is None:
+                    card = self.pipeline.atlas._card_map.get(selected.anchor_id)
+                if card is not None:
+                    anchor_cards_text[selected.anchor_id] = card.to_card_text()
+        else:
+            candidate_ids = []
+            anchor_cards_text = {}
+
+        if not candidate_ids:
+            raise ValueError("No anchor candidates or selected anchors found for labeling query")
 
         # Step 2: Generate candidate sets to evaluate
         specs = CANDIDATE_SET_SPECS.copy()
@@ -556,7 +575,6 @@ class OracleLabeler:
             # gold anchors are available.
             # Batching reduces ~23 HTTP round-trips/query to 1, cutting labeling
             # time from ~16h to ~1h for 500 queries on an M4 Mac.
-            anchor_cards_text = {c.anchor_id: c.card.to_card_text() for c in candidates}
             proxy_scores = _call_qwen_proxy_batch(
                 query=query,
                 candidate_sets=all_combos,

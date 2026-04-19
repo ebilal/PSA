@@ -1,9 +1,13 @@
 """test_oracle_labeler.py — Tests for oracle labeling utilities."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
+from psa.anchor import AnchorCard
 from psa.memory_object import MemoryObject
-from psa.training.oracle_labeler import backtrack_gold_anchors
+from psa.pipeline import PSAResult, PackedContext, QueryTiming
+from psa.selector import SelectedAnchor
+from psa.training.oracle_labeler import OracleLabeler, backtrack_gold_anchors
 
 
 def _make_memory(anchor_id):
@@ -74,3 +78,61 @@ def test_backtrack_gold_anchors_empty_sessions():
         tenant_id="test",
     )
     assert result == []
+
+
+def test_label_uses_selected_anchors_when_candidates_empty(tmp_path, monkeypatch):
+    pipeline = MagicMock()
+    pipeline.atlas.version = 19
+    card = AnchorCard(
+        anchor_id=11,
+        name="Procedures",
+        meaning="How to carry out repeatable tasks.",
+        memory_types=["procedural"],
+        include_terms=["workflow"],
+        exclude_terms=[],
+        prototype_examples=[],
+        near_but_different=[],
+        centroid=[0.1, 0.2],
+    )
+    pipeline.atlas._card_map = {11: card}
+    pipeline.packed_context_for_anchors.return_value = MagicMock(text="ctx", token_count=42)
+    pipeline.query.return_value = PSAResult(
+        query="How do I deploy?",
+        packed_context=PackedContext(
+            query="How do I deploy?",
+            text="",
+            token_count=0,
+            memory_ids=[],
+            sections=[],
+            untyped_count=0,
+        ),
+        selected_anchors=[
+            SelectedAnchor(anchor_id=11, selector_score=0.9, mode="full_atlas", candidate=None)
+        ],
+        candidates=[],
+        timing=QueryTiming(),
+        tenant_id="default",
+        psa_mode="primary",
+        selection_mode="full_atlas",
+    )
+
+    monkeypatch.setattr(
+        "psa.training.oracle_labeler._call_qwen_proxy_batch",
+        lambda **kwargs: [
+            {
+                "support_coverage": 0.8,
+                "procedural_utility": 0.7,
+                "noise_penalty": 0.1,
+                "token_cost": 0.2,
+            }
+        ],
+    )
+    monkeypatch.setattr("psa.training.oracle_labeler._qwen_task_success_batch", lambda *_: [0.9])
+
+    out = Path(tmp_path) / "labels.jsonl"
+    labeler = OracleLabeler(pipeline=pipeline, output_path=str(out))
+    label = labeler.label(query_id="q1", query="How do I deploy?")
+
+    assert label.candidate_anchor_ids == [11]
+    assert label.winning_oracle_set == [11]
+    assert out.exists()
