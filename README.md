@@ -18,7 +18,7 @@ Works with Claude Code, Codex, and any client that speaks MCP or provides sessio
 
 **Forgetting is a feature.** Memories that stop being useful get pruned. Advertisement patterns on anchor cards that stop earning attention get marked stale. The system self-curates so it doesn't grow unboundedly.
 
-**Laptop-first.** Everything runs locally. 525 memories + 125 anchors → query latency ~300–500ms on Apple Silicon with the default local embedding model.
+**Laptop-first.** Everything runs locally. Via the MCP server (persistent process), query latency is ~200–500ms on Apple Silicon after the one-time ~10s warmup. The CLI (`psa search`) pays the full load cost on every invocation (~9–13s).
 
 ---
 
@@ -54,7 +54,7 @@ Supported conversation formats: Claude Code JSONL, Claude AI JSON, ChatGPT expor
 
 ### Atlas and anchors
 
-Once you have ~500+ memories, `psa atlas build` runs spherical k-means (k=224 learned + 32 novelty, 3 seeds, stability-checked). The result is an `Atlas` with up to 256 `AnchorCard` objects.
+Once you have ~200+ memories, `psa atlas build` runs spherical k-means (k=224 learned + 32 novelty, 3 seeds, stability-checked). The result is an `Atlas` with up to 256 `AnchorCard` objects.
 
 **What an anchor card is.** Each card is an LLM-generated semantic description of one cluster, written at atlas build time by analyzing the memories that fall inside it. It is the anchor's identity — used by the retriever to match incoming queries, by the selector to decide which anchors to open, and by the advertisement-decay system to track which query patterns are still earning attention.
 
@@ -100,7 +100,7 @@ Embed (BAAI/bge-base-en-v1.5)
 │   retriever.py                                                  │
 │     BM25 + dense RRF over anchor cards, top-24 shortlist        │
 │   selector.py                                                   │
-│     Cosine or trained cross-encoder selects 1–4 anchors         │
+│     Cosine or trained cross-encoder selects 1–6 anchors         │
 ╰─────────────────────────────────────────────────────────────────╯
             │
             ▼
@@ -234,7 +234,7 @@ psa mine ~/.claude/projects/ --mode convos
 # 2. Check what you have.
 psa status
 
-# 3. Build the atlas (needs ~500 memories; raises AtlasCorpusTooSmall otherwise).
+# 3. Build the atlas (needs ~200 memories; raises AtlasCorpusTooSmall otherwise).
 psa atlas build
 
 # 4. Verify the atlas is healthy.
@@ -402,7 +402,7 @@ psa advertisement purge --older-than-days 90  # hard-delete archived rows past r
 
 | Command | Purpose |
 |---|---|
-| `psa atlas build` | Build or rebuild atlas (requires ~500 memories) |
+| `psa atlas build` | Build or rebuild atlas (requires ~200 memories) |
 | `psa atlas status` | Version, anchor count, memory count |
 | `psa atlas health` | Novelty rate, skew, rebuild recommendation |
 | `psa atlas rebuild` | Force rebuild (preserves anchor identity) |
@@ -575,7 +575,7 @@ See env var overrides: `PSA_MODE`, `PSA_TENANT_ID`, `PSA_AD_DECAY_TRACKING_ENABL
 As of 2026-04-18:
 
 - **Stage 2 advertisement-forgetting is merged on `main`** (merge `5776cfb`, Level 1 integration fix `c82f2a8`).
-- **Tracking is ON** in the `default` tenant's `~/.psa/config.json`. Every `psa search` writes ledger signals inline.
+- **Tracking is ON** in the `default` tenant's `~/.psa/config.json` (operator-set; the code default is `false`). Every `psa search` writes ledger signals inline.
 - **Removal is OFF** and stays off until calibration completes. Re-enabling requires explicit sign-off plus evidence: shadow agreement rate, count of removal-eligible patterns, and 5–10 manually inspected would-be removals.
 - **LongMemEval regression path is blocked** by a pre-existing model-dimensionality mismatch in the selector artifact (`linear(): input and weight.T shapes cannot be multiplied (65x11 and 16x32)`). Same error fires with stage 2 disabled, so it's unrelated to stage 2. Treated as separate follow-up work; not the gate for stage 2 rollout.
 
