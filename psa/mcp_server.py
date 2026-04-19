@@ -33,7 +33,7 @@ import logging
 import hashlib
 from datetime import datetime
 
-from .config import MempalaceConfig
+from .config import MempalaceConfig, DEFAULT_TENANT_ID
 from .version import __version__
 from .searcher import search_memories
 
@@ -310,13 +310,11 @@ def tool_delete_drawer(drawer_id: str):
 
 # ── Stage 2 reload hook + persistent pipeline cache ──────────────────────────
 #
-# _pipeline_cache holds one PSAPipeline per tenant_id for the lifetime of the
-# MCP server process. Queries call _ensure_fresh_pipeline() before use so that
-# advertisement-decay atlas removals (reload marker) are picked up without
-# rebuilding the whole pipeline.
+# _tenant_pipelines holds one PSAPipeline per tenant_id for the server lifetime.
+# Each entry also tracks last_reload_mtime so advertisement-decay atlas removals
+# are picked up between queries without rebuilding the whole pipeline.
 
-_reload_state: dict = {}
-_pipeline_cache: dict = {}
+_tenant_pipelines: dict = {}  # {tenant_id: {"pipeline": PSAPipeline, "last_reload_mtime": float}}
 
 
 def maybe_reload_pipeline(*, pipeline, state: dict, tenant_id: str) -> None:
@@ -331,34 +329,35 @@ def maybe_reload_pipeline(*, pipeline, state: dict, tenant_id: str) -> None:
 
 
 def _ensure_fresh_pipeline(pipeline, tenant_id: str) -> None:
-    """Convenience wrapper that uses the module-level _reload_state."""
-    st = _reload_state.setdefault(tenant_id, {"last_reload_mtime": 0.0})
-    maybe_reload_pipeline(pipeline=pipeline, state=st, tenant_id=tenant_id)
+    state = _tenant_pipelines.setdefault(tenant_id, {"pipeline": None, "last_reload_mtime": 0.0})
+    maybe_reload_pipeline(pipeline=pipeline, state=state, tenant_id=tenant_id)
 
 
 # ── PSA Atlas tool helpers ────────────────────────────────────────────────────
 
 
-def _get_psa_pipeline(tenant_id: str = "default"):
+def _get_psa_pipeline(tenant_id: str = DEFAULT_TENANT_ID):
     """Return a cached PSAPipeline, building it on first call. Returns None if atlas not built."""
-    if tenant_id in _pipeline_cache:
-        pipeline = _pipeline_cache[tenant_id]
+    entry = _tenant_pipelines.get(tenant_id)
+    if entry and entry.get("pipeline"):
+        pipeline = entry["pipeline"]
         _ensure_fresh_pipeline(pipeline, tenant_id)
         return pipeline
     try:
         from .pipeline import PSAPipeline
 
         pipeline = PSAPipeline.from_tenant(tenant_id=tenant_id)
-        _pipeline_cache[tenant_id] = pipeline
+        _tenant_pipelines[tenant_id] = {"pipeline": pipeline, "last_reload_mtime": 0.0}
         return pipeline
     except FileNotFoundError:
+        _tenant_pipelines.pop(tenant_id, None)
         return None
     except Exception as e:
         logger.warning("PSAPipeline init failed: %s", e)
         return None
 
 
-def _get_psa_store(tenant_id: str = "default"):
+def _get_psa_store(tenant_id: str = DEFAULT_TENANT_ID):
     """Return (TenantManager, MemoryStore) for the given tenant."""
     from .tenant import TenantManager
     from .memory_object import MemoryStore
@@ -369,7 +368,7 @@ def _get_psa_store(tenant_id: str = "default"):
     return tenant, store
 
 
-def _get_psa_atlas(tenant_id: str = "default"):
+def _get_psa_atlas(tenant_id: str = DEFAULT_TENANT_ID):
     """Return (Atlas, AtlasManager) or (None, mgr) if no atlas exists."""
     from .tenant import TenantManager
     from .atlas import AtlasManager
@@ -384,7 +383,7 @@ def _get_psa_atlas(tenant_id: str = "default"):
 # ── PSA Atlas MCP tool functions ──────────────────────────────────────────────
 
 
-def tool_psa_atlas_search(query: str, tenant_id: str = "default", token_budget: int = 6000):
+def tool_psa_atlas_search(query: str, tenant_id: str = DEFAULT_TENANT_ID, token_budget: int = 6000):
     """Run the full PSA pipeline query (retriever + selector + packer)."""
     pipeline = _get_psa_pipeline(tenant_id)
     if pipeline is None:
@@ -400,7 +399,7 @@ def tool_psa_store_memory(
     title: str,
     body: str,
     memory_type: str = "SEMANTIC",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     quality_score: float = 0.7,
 ):
     """Store a typed memory object in the PSA MemoryStore."""
@@ -438,7 +437,7 @@ def tool_psa_store_memory(
     }
 
 
-def tool_psa_atlas_status(tenant_id: str = "default"):
+def tool_psa_atlas_status(tenant_id: str = DEFAULT_TENANT_ID):
     """Atlas overview: version, anchor count, memory count, PSA mode."""
     atlas, _ = _get_psa_atlas(tenant_id)
     _, store = _get_psa_store(tenant_id)
@@ -465,7 +464,7 @@ def tool_psa_atlas_status(tenant_id: str = "default"):
     }
 
 
-def tool_psa_list_anchors(tenant_id: str = "default"):
+def tool_psa_list_anchors(tenant_id: str = DEFAULT_TENANT_ID):
     """List all anchors with their names and memory counts."""
     atlas, _ = _get_psa_atlas(tenant_id)
     _, store = _get_psa_store(tenant_id)
@@ -492,7 +491,7 @@ def tool_psa_list_anchors(tenant_id: str = "default"):
     return {"tenant_id": tenant_id, "atlas_version": atlas.version, "anchors": anchors}
 
 
-def tool_psa_atlas_health(tenant_id: str = "default"):
+def tool_psa_atlas_health(tenant_id: str = DEFAULT_TENANT_ID):
     """Atlas health report: novelty rate, utilization skew, rebuild recommendation."""
     atlas, _ = _get_psa_atlas(tenant_id)
     _, store = _get_psa_store(tenant_id)
@@ -510,7 +509,7 @@ def tool_psa_atlas_health(tenant_id: str = "default"):
 _rebuild_lock_path = None  # unused, kept for clarity
 
 
-def tool_psa_rebuild_atlas(tenant_id: str = "default"):
+def tool_psa_rebuild_atlas(tenant_id: str = DEFAULT_TENANT_ID):
     """Trigger atlas rebuild for the tenant (may take several minutes)."""
     import fcntl
     from .tenant import TenantManager
