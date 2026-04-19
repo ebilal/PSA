@@ -244,14 +244,15 @@ The miner dedups against `raw_sources` so re-running on the same directory is sa
 psa search "why did we switch to GraphQL"
 
 # See everything the pipeline did — all 24 candidates, selector scores, timing
+# Also writes to query_log.jsonl for psa log to read
 psa inspect "why did we switch to GraphQL" --verbose
 
-# Browse the per-query trace log
+# Browse the psa inspect log (populated by psa inspect, not psa search)
 psa log list
 psa log show <run_id>
 psa log diff <baseline_run_id> <newer_run_id>
 
-# Diagnostic rollups over the trace log
+# Diagnostic rollups over the query_trace.jsonl (populated by psa search)
 psa diag activation       # anchor activation + carry rates
 psa diag advertisement    # memory-count vs activation gap per anchor
 psa diag misses           # below-threshold queries + near-miss anchors
