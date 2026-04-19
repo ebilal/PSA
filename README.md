@@ -30,9 +30,9 @@ Most memory systems are "embedding search over chunks." PSA is trying to do some
 
 If you only need one sentence: PSA is a persistent memory layer for AI agents, with typed memories and atlas-based retrieval.
 
-## Quickstart
+## Installation Guide
 
-This is the shortest path from clone to first successful query.
+This is the full setup path for an interactive, continuously maintained PSA install. If you only want the minimum path to a first query, you can stop after Step 5.
 
 ### 1. Install dependencies
 
@@ -121,6 +121,33 @@ For a deeper debug view of what happened during retrieval:
 uv run psa inspect "how does the atlas work" --verbose
 ```
 
+### 6. Label queries and train the selector
+
+For full Level 1 behavior, you should generate oracle labels and train the selector models.
+
+```bash
+uv run psa label --n-queries 300
+uv run psa train --force
+uv run psa train --force --coactivation
+```
+
+If you are still developing locally and do not have enough labels yet, you can defer this step. PSA will continue to work in the baseline retrieval mode.
+
+### 7. Install the lifecycle job
+
+PSA is designed to keep itself healthy over time. Install the nightly lifecycle job once the initial atlas is working.
+
+```bash
+uv run psa lifecycle install
+uv run psa lifecycle status
+```
+
+You can also run the lifecycle manually:
+
+```bash
+uv run psa lifecycle run
+```
+
 ## First Week Checklist
 
 If this is your first time using PSA, this is the practical path:
@@ -130,7 +157,48 @@ If this is your first time using PSA, this is the practical path:
 3. Build the atlas once you have enough data.
 4. Use `uv run psa search "..."` for normal lookups.
 5. Use `uv run psa inspect "..." --verbose` when a retrieval looks wrong.
-6. Add the MCP server once the basic CLI flow makes sense.
+6. Generate labels and train the selector once you have enough real queries.
+7. Install the lifecycle job so pruning, rebuilds, and retraining can run automatically.
+8. Add the MCP server once the CLI flow makes sense and you want low-latency interactive use.
+
+## Using With Claude
+
+If you want PSA available inside Claude Code, the MCP server is the main integration path.
+
+### 1. Add the MCP server
+
+```bash
+claude mcp add psa -- uv run --project /path/to/memnexus python -m psa.mcp_server
+```
+
+Replace `/path/to/memnexus` with your local checkout path.
+
+### 2. Verify the server is available
+
+In Claude Code, confirm the PSA tools are present. The important ones are:
+
+- `psa_atlas_search` for full memory retrieval
+- `psa_store_memory` for writing typed memories
+- `psa_atlas_status` and `psa_atlas_health` for checking system state
+
+### 3. Use PSA in normal agent workflows
+
+Typical flow in Claude Code:
+
+1. Start a session in a project where PSA has already ingested data.
+2. Ask Claude a question that depends on prior context.
+3. Claude can call `psa_atlas_search` to retrieve packed memory context.
+4. When useful new durable information appears, Claude can call `psa_store_memory`.
+
+### 4. Optional: use hooks as well
+
+If you want PSA to participate in session-start or harness-driven workflows, the CLI also exposes hook integration:
+
+```bash
+uv run psa hook run --hook session-start --harness claude-code
+```
+
+The MCP server is still the primary interactive path. Hooks are additive.
 
 ## Core design philosophy
 
@@ -148,7 +216,7 @@ If this is your first time using PSA, this is the practical path:
 
 ## How the system works
 
-If you want the mental model before reading the command reference, read this section. If you only want to get running, the quickstart above is enough.
+If you want the mental model before reading the command reference, read this section. If you only want to get running, the installation guide above is enough.
 
 ### Ingestion
 
