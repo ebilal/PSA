@@ -50,6 +50,8 @@ memory_object.py + SQLite
 
 Supported conversation formats: Claude Code JSONL, Claude AI JSON, ChatGPT exports, Codex JSONL, Slack JSON, plain text.
 
+**Three-level chunking.** Each source is chunked at three granularities before LLM extraction: fine (80–180 tokens), mid (220–450 tokens), and section (500–1500 tokens). Chunks nest: each section contains mid chunks, each mid contains fine chunks. The LLM extracts memory objects from each fine chunk independently. This means a single document can yield many memories from different regions without losing the surrounding context that mid and section chunks provide. `quality_score` (aliased from the LLM's `retention_score`) is set once at extraction time and never updated — it reflects the LLM's confidence at the moment of ingestion, not subsequent usage.
+
 ### Atlas and anchors
 
 Once you have ~500+ memories, `psa atlas build` runs spherical k-means (k=224 learned + 32 novelty, 3 seeds, stability-checked). The result is an `Atlas` with up to 256 `AnchorCard` objects.
@@ -111,6 +113,10 @@ synthesizer.py + packer.py
 PackedContext (6000 tokens by default, failure-first ordering)
 ```
 
+**Coactivation adaptive threshold.** When a trained co-activation model exists, the anchor count is not capped by a fixed `max_k`. Instead, the model outputs a per-query sigmoid threshold learned from oracle-labeled co-occurrence patterns. Queries that are narrow and specific activate few anchors; broad compositional queries activate many. The threshold is data-dependent, not a hyperparameter. `max_k` (default 6) only applies on the cosine-selector path (Level 2 without co-activation).
+
+**Packer section atomicity.** The packer fills the token budget by processing memory types in priority order (`FAILURE → PROCEDURAL → TOOL_USE → EPISODIC → SEMANTIC → WORKING_DERIVATIVE`). Each type's memories are collected into a section. If a full section fits within the remaining budget it is included; if it doesn't fit entirely, individual memories within it are trimmed until they fit. This means the priority order is a guarantee about what gets in first, not a guarantee that lower-priority types are excluded — they appear if budget remains.
+
 **Memory types, in packing priority:**
 
 | Type | What it captures | Priority |
@@ -142,13 +148,17 @@ Slow path (triggered by novelty > 8% or skew > 3x or forced):
 
 ### Memory forgetting
 
-`psa/forgetting.py` scores memories for disposability:
-- **Recency** — days since last used in a packed context
-- **Anchor crowding** — too many memories under one anchor
-- **Usage** — frequently packed memories are protected
-- **Quality** — high `retention_score` is protected
+`psa/forgetting.py` scores each memory for disposability using a 4-term formula:
 
-Low-scoring memories are archived (soft delete) and hard-deleted after 90 days. Newly mined memories get a 24-hour grace period.
+```
+forgetting_score =
+  + min(idle_days / 90, 1.0)          # idle pressure — caps at 90 days without use
+  + min(overflow / budget, 1.0)        # crowding pressure — anchor over its 100-memory budget
+  - min(log(1 + pack_count) / 3.0, 1.0)  # usage protection — 20 packs ≈ full protection
+  - quality_score                      # quality protection — set once at extraction, never updated
+```
+
+Range is roughly −1 to 2. Score > 0 is a candidate for pruning. Newly ingested memories get a 24-hour absolute grace period (score forced to −10). Low-scoring memories are archived (soft delete) and hard-deleted after 90 days in archive. The global cap is 50k memories; the per-anchor budget is 100.
 
 ### Advertisement decay
 
@@ -159,6 +169,10 @@ Anchor cards accumulate `generated_query_patterns` over time. Those patterns are
 **Stage 1 (shipped, operator-driven).** `psa atlas decay` runs an R1 substring reinforcement check against the trace log, produces a candidate file, operator reviews, then promotes via `psa atlas promote-refinement`. Protections: P1 low-activation shield, P3 pinned-pattern exemption. Nothing mutates live state until promotion.
 
 **Stage 2 (shipped, default-off).** A persistent `pattern_ledger` SQLite table with exponential decay, inline per-query attribution via BM25 argmax, and a shadow-policy counterfactual. When `advertisement_decay.tracking_enabled=true`, every `psa search` writes ledger signals trace-first (trace → ledger; ledger skipped if trace fails). When `removal_enabled=true`, `psa lifecycle run` mutates `anchor_cards_refined.json` directly — but **never** without explicit operator sign-off after calibration.
+
+The **shadow-policy counterfactual** means two decay policies run in parallel for every pattern: policy B (primary, τ=45d) that may remove patterns when `removal_enabled=true`, and policy A (shadow, stricter) that only logs what it would do. `psa advertisement diff` shows the disagreement — patterns the shadow would remove that the primary wouldn't, and vice versa. This disagreement rate is the calibration signal: if B and A largely agree, removal can be enabled with confidence.
+
+`tracking_enabled` and `trace_queries` are coupled: the ledger write only fires when trace succeeds (trace → ledger ordering). Setting `tracking_enabled=true` without `trace_queries=true` is a no-op — the config loader enforces this at load time.
 
 Stage 1 and stage 2 coexist via a refined-hash gate: candidate meta records the refined file's SHA-256 at generation time, and `psa atlas promote-refinement` refuses stale candidates whose recorded hash no longer matches.
 
@@ -292,10 +306,16 @@ The nightly lifecycle is idempotent. First run is slow (model loads, possibly re
 
 **Oracle labeling.** Before training, each query needs a ground-truth label: which subset of the 24 retrieved anchor candidates actually helped answer it? PSA generates these labels automatically using a two-stage LLM process (`psa label`):
 
-1. **Cheap stage** — For each candidate anchor set, the LLM scores `SupportCoverage`: does the anchor's memories contain the information needed to answer the query? This runs in a single batched call per query (~1 API call vs ~23).
-2. **Expensive stage** — For the top-3 surviving sets only, the LLM runs `TaskSuccess`: given this packed context, does an agent actually produce the right answer? This is the authoritative signal but expensive, so only the strongest candidates reach it.
+1. **Cheap stage** — For each candidate anchor set, the LLM scores four terms in a single batched call (~1 API call per query vs ~23 individual calls): `SupportCoverage`, `ProceduralUtility`, `NoisePenalty`, `TokenCost`.
+2. **Expensive stage** — For the top-3 surviving sets only, the LLM runs `TaskSuccess`: given this packed context, does an agent actually produce the right answer? Expensive because it requires a full generation, so only the strongest candidates reach it.
 
-Final oracle score: `0.45 × SupportCoverage + 0.20 × TaskSuccess`. Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl`.
+Final oracle score:
+```
+OracleScore = 0.45×SupportCoverage + 0.20×TaskSuccess
+            + 0.15×ProceduralUtility − 0.10×NoisePenalty − 0.10×TokenCost
+```
+
+Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl`.
 
 **Selector training.** Once enough labels exist, the cross-encoder selector trains on a three-phase curriculum: warm start (random negatives) → hard negatives (anchors that score well but aren't correct) → adversarial rewrites (paraphrased queries). Co-activation training fits a small transformer over oracle-labeled anchor co-occurrence patterns.
 
