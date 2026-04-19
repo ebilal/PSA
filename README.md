@@ -1,28 +1,154 @@
 # PSA — Persistent Semantic Atlas
 
-A persistent memory system for AI coding agents. PSA ingests your conversation history and project files, extracts typed memory objects, clusters them into a learned semantic atlas, and retrieves them via a two-level learned activation model — not a flat embedding search.
+PSA gives an AI agent a memory that survives beyond a single chat session.
 
-Every conversation you have with an AI disappears when the session ends. PSA keeps that context around. It runs entirely on your laptop: local SQLite, local embeddings, optional local LLM. No data leaves your machine unless you configure a cloud LLM for extraction.
+It ingests conversation history and project files, extracts structured memory objects, organizes them into a semantic atlas, and retrieves the most relevant context when the agent needs it again. The system is laptop-first: SQLite for storage, local embeddings, and an optional local LLM. Nothing has to leave your machine unless you explicitly configure a cloud model.
 
-Works with Claude Code, Codex, and any client that speaks MCP or provides session hooks.
+PSA works with Claude Code, Codex, and any client that can talk to an MCP server or run session hooks.
 
 ---
 
+## What PSA is for
+
+Use PSA when you want an agent to remember things like:
+
+- why a design decision was made
+- how a deployment or debugging workflow works
+- what failed before and should not be repeated
+- tool quirks, API gotchas, and project-specific conventions
+
+Instead of searching a pile of raw transcripts, PSA stores typed memories such as failures, procedures, tool-use notes, episodes, and semantic facts. That makes retrieval more useful at answer time and lets the packer prioritize high-value context first.
+
+## How to think about it
+
+Most memory systems are "embedding search over chunks." PSA is trying to do something closer to recollection:
+
+- it stores structured memory objects instead of raw chunks
+- it groups related memories into semantic regions called anchors
+- it activates relevant anchors first, then scores memories inside them
+- it forgets low-value memories and stale query patterns over time
+
+If you only need one sentence: PSA is a persistent memory layer for AI agents, with typed memories and atlas-based retrieval.
+
+## Quickstart
+
+This is the shortest path from clone to first successful query.
+
+### 1. Install dependencies
+
+Requirements:
+
+- Python 3.9 or newer
+- [uv](https://docs.astral.sh/uv/)
+- [Ollama](https://ollama.com/) with `qwen2.5:7b` if you want local extraction
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install Ollama and pull the default local model
+brew install ollama
+ollama pull qwen2.5:7b
+
+# Clone the repo and install dependencies
+git clone https://github.com/ebilal/PSA.git memnexus
+cd memnexus
+uv sync
+```
+
+If you plan to train selector models, also install the training extras:
+
+```bash
+uv sync --extra training
+```
+
+### 2. Choose an LLM backend
+
+By default, PSA expects a local model through Ollama for memory extraction and oracle labeling.
+
+If you want to use a cloud model instead, create or edit `~/.psa/llm.json`:
+
+```json
+{
+  "provider": "cloud",
+  "cloud_model": "gpt-4o-mini",
+  "cloud_api_key": "sk-...",
+  "cloud_api_base": "https://api.openai.com/v1",
+  "local_endpoint": "http://localhost:11434/v1/chat/completions",
+  "local_model": "qwen2.5:7b",
+  "local_fallback": true
+}
+```
+
+Set `"provider": "local"` if you want PSA to stay fully local.
+
+### 3. Ingest some data
+
+You need memories before PSA can answer anything useful.
+
+```bash
+# Mine conversations
+uv run psa mine ~/.claude/projects/ --mode convos
+
+# Or mine project files
+uv run psa mine ~/projects/my_app
+```
+
+Re-running `mine` is safe. PSA deduplicates against `raw_sources`.
+
+### 4. Build the atlas
+
+Once you have roughly 200 memories, build the atlas:
+
+```bash
+uv run psa status
+uv run psa atlas build
+uv run psa atlas status
+uv run psa atlas health
+```
+
+If the corpus is too small, `psa atlas build` will fail with `AtlasCorpusTooSmall`. Mine more data, then rerun it.
+
+### 5. Run your first query
+
+```bash
+uv run psa search "how does the atlas work"
+```
+
+For a deeper debug view of what happened during retrieval:
+
+```bash
+uv run psa inspect "how does the atlas work" --verbose
+```
+
+## First Week Checklist
+
+If this is your first time using PSA, this is the practical path:
+
+1. Mine conversations or project files.
+2. Confirm memories exist with `uv run psa status`.
+3. Build the atlas once you have enough data.
+4. Use `uv run psa search "..."` for normal lookups.
+5. Use `uv run psa inspect "..." --verbose` when a retrieval looks wrong.
+6. Add the MCP server once the basic CLI flow makes sense.
+
 ## Core design philosophy
 
-**Memory is not data retrieval.** You don't look up what you know — you just know it. PSA is built around this. Instead of a flat vector search, PSA learns a two-level activation model that identifies which regions of memory space are relevant to a query, then scores individual memories within those regions.
+**Memory is not just retrieval.** PSA does not treat memory as a flat list of chunks. It first decides which regions of memory space matter, then scores the memories inside those regions.
 
-**Typed, structured memories.** The unit of storage is a `MemoryObject` with an explicit type (failure, procedural, tool-use, episodic, semantic, working-derivative), not a raw text chunk. Types drive packing priority: failures get surfaced first because they prevent repeating mistakes.
+**Typed, structured memories.** The unit of storage is a `MemoryObject` with an explicit type: failure, procedural, tool-use, episodic, semantic, or working-derivative. Types affect packing priority, so the system can surface failures before it repeats them.
 
-**The atlas is learned.** A one-time spherical k-means clustering identifies 256 semantic regions (up to 224 learned + 32 novelty). Each anchor gets an LLM-generated card describing what it holds and what queries it answers. The cards are what the retriever, selector, and advertisement-decay ledger all operate on.
+**The atlas is learned.** A one-time spherical k-means clustering identifies 256 semantic regions (up to 224 learned + 32 novelty). Each region gets an LLM-generated anchor card describing what it contains and what kinds of queries it can answer.
 
-**Forgetting is a feature.** Memories that stop being useful get pruned. Advertisement patterns on anchor cards that stop earning attention get marked stale. The system self-curates so it doesn't grow unboundedly.
+**Forgetting is a feature.** PSA prunes memories that stop being useful and decays stale query patterns on anchor cards so the system can stay relevant instead of growing forever.
 
-**Laptop-first.** Everything runs locally. Via the MCP server (persistent process), query latency is ~200–500ms on Apple Silicon after the one-time ~10s warmup. The CLI (`psa search`) pays the full load cost on every invocation (~9–13s).
+**Laptop-first operation.** Via the MCP server, query latency is typically ~200–500ms on Apple Silicon after the one-time warmup. The CLI pays the full model-load cost on each invocation, so it is better for scripting and debugging than for interactive use.
 
 ---
 
 ## How the system works
+
+If you want the mental model before reading the command reference, read this section. If you only want to get running, the quickstart above is enough.
 
 ### Ingestion
 
@@ -180,76 +306,9 @@ Current rollout: tracking is **on** in the default tenant's config, removal is *
 
 ---
 
-## Install
-
-### Prerequisites
-
-- Python 3.13 (repository is pinned via `.python-version`; CI also tests 3.9 and 3.11)
-- [uv](https://docs.astral.sh/uv/) package manager
-- [Ollama](https://ollama.com/) running locally with `qwen2.5:7b` (unless you're using a cloud LLM)
-
-### Setup
-
-```bash
-# 1. Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install Ollama and pull the default local model
-brew install ollama
-ollama pull qwen2.5:7b
-
-# 3. Clone and install PSA
-git clone https://github.com/ebilal/memnexus.git
-cd memnexus
-uv sync                       # core + dev dependencies
-uv sync --extra training      # also installs PyTorch (needed for training)
-```
-
-### LLM configuration
-
-PSA uses an LLM for memory extraction (consolidation) and oracle labeling. By default, local Ollama. To use a cloud API (faster, higher quality), edit `~/.psa/llm.json`:
-
-```json
-{
-  "provider": "cloud",
-  "cloud_model": "gpt-4o-mini",
-  "cloud_api_key": "sk-...",
-  "cloud_api_base": "https://api.openai.com/v1",
-  "local_endpoint": "http://localhost:11434/v1/chat/completions",
-  "local_model": "qwen2.5:7b",
-  "local_fallback": true
-}
-```
-
-Set `"provider": "local"` to disable cloud entirely. Environment overrides: `PSA_LLM_MODEL`, `PSA_LLM_API_KEY`, `PSA_LLM_API_BASE`, `QWEN_ENDPOINT`.
-
-### First atlas build
-
-Minimum viable sequence on a fresh install:
-
-```bash
-# 1. Mine some source — conversations or project files.
-psa mine ~/.claude/projects/ --mode convos
-
-# 2. Check what you have.
-psa status
-
-# 3. Build the atlas (needs ~200 memories; raises AtlasCorpusTooSmall otherwise).
-psa atlas build
-
-# 4. Verify the atlas is healthy.
-psa atlas status
-psa atlas health
-
-# 5. First real query.
-psa search "how does the atlas work"
-```
-
-`psa atlas build` runs k-means and calls the LLM once per cluster to generate cards. Expect a few minutes depending on memory count and LLM latency.
-
----
-
 ## Day-to-day usage
+
+All commands below use `psa ...` for readability. If you are running directly from the repository without installing the CLI into your shell, prefix them with `uv run`, for example `uv run psa status`.
 
 ### Ingesting data
 
