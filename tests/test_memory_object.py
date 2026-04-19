@@ -487,3 +487,51 @@ def test_store_isolation(tmp_dir):
 
     assert store_a.count("t") == 1
     assert store_b.count("t") == 0
+
+
+def test_query_by_anchor_relevance_ordering(tmp_dir):
+    """With query_vec, memories are re-ordered by cosine sim, not quality_score."""
+    import numpy as np
+    from psa.memory_object import MemoryStore, MemoryObject, MemoryType
+
+    store = MemoryStore(db_path=os.path.join(tmp_dir, "mem.db"))
+
+    def _unit(v):
+        a = np.array(v, dtype=np.float32)
+        return list(a / np.linalg.norm(a))
+
+    query_vec = _unit([1.0, 0.0, 0.0, 0.0])
+
+    # high quality, low relevance
+    lo_rel = MemoryObject.create(
+        tenant_id="t",
+        memory_type=MemoryType.SEMANTIC,
+        title="low relevance",
+        body="b",
+        summary="s",
+        source_ids=[],
+        classification_reason="",
+        quality_score=0.9,
+    )
+    lo_rel.embedding = _unit([0.0, 1.0, 0.0, 0.0])  # orthogonal to query
+
+    # low quality, high relevance
+    hi_rel = MemoryObject.create(
+        tenant_id="t",
+        memory_type=MemoryType.SEMANTIC,
+        title="high relevance",
+        body="b",
+        summary="s",
+        source_ids=[],
+        classification_reason="",
+        quality_score=0.1,
+    )
+    hi_rel.embedding = _unit([1.0, 0.0, 0.0, 0.0])  # aligned with query
+
+    for mo in [lo_rel, hi_rel]:
+        store.add(mo)
+        store.update_anchor_assignment(mo.memory_object_id, primary_anchor_id=1)
+
+    results = store.query_by_anchor("t", anchor_id=1, limit=2, query_vec=query_vec)
+    assert results[0].title == "high relevance"
+    assert results[1].title == "low relevance"

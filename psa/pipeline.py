@@ -356,9 +356,7 @@ class PSAPipeline:
                         # is the top-K of full_atlas_scorer's CE scores. Use the
                         # same K as the retriever shortlist (24) for consistency
                         # with Level 2.
-                        _level1_retrieved_anchor_ids = [
-                            s.anchor_id for s in anchor_scores[:24]
-                        ]
+                        _level1_retrieved_anchor_ids = [s.anchor_id for s in anchor_scores[:24]]
                     else:
                         _level1_retrieved_anchor_ids = []
                     t0 = time.perf_counter()
@@ -546,6 +544,7 @@ class PSAPipeline:
                             tenant_id=self.tenant_id,
                             anchor_id=sa.anchor_id,
                             limit=50,
+                            query_vec=query_vec,
                         )
                         for mo in anchor_memories:
                             if mo.memory_object_id in _memory_to_source_anchor:
@@ -562,8 +561,21 @@ class PSAPipeline:
                         except Exception:
                             logger.debug("Failed to record selected telemetry", exc_info=True)
 
-                    # Re-sort globally by quality_score desc
-                    memories.sort(key=lambda m: m.quality_score, reverse=True)
+                    # Re-sort globally: by cosine relevance when query_vec available, else quality_score
+                    if query_vec is not None:
+                        import numpy as np
+
+                        _qv = np.array(query_vec, dtype=np.float32)
+                        memories.sort(
+                            key=lambda m: (
+                                float(np.dot(_qv, np.array(m.embedding, dtype=np.float32)))
+                                if m.embedding
+                                else 0.0
+                            ),
+                            reverse=True,
+                        )
+                    else:
+                        memories.sort(key=lambda m: m.quality_score, reverse=True)
                     timing.fetch_ms = (time.perf_counter() - t0) * 1000
 
                     logger.debug("Fetched %d memories in %.1fms", len(memories), timing.fetch_ms)

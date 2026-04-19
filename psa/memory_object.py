@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
+import numpy as np
+
 
 class MemoryType(str, Enum):
     """The six memory types in the Persistent Semantic Atlas."""
@@ -583,7 +585,10 @@ class MemoryStore:
         tenant_id: str,
         anchor_id: int,
         limit: int = 50,
+        query_vec: Optional[List[float]] = None,
+        prefetch_limit: int = 200,
     ) -> List[MemoryObject]:
+        fetch_n = prefetch_limit if query_vec is not None else limit
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -592,9 +597,21 @@ class MemoryStore:
                 ORDER BY quality_score DESC, created_at DESC
                 LIMIT ?
                 """,
-                (tenant_id, anchor_id, limit),
+                (tenant_id, anchor_id, fetch_n),
             ).fetchall()
-        return [self._row_to_memory_object(r) for r in rows]
+        memories = [self._row_to_memory_object(r) for r in rows]
+        if query_vec is not None and memories:
+            qv = np.array(query_vec, dtype=np.float32)
+            memories.sort(
+                key=lambda m: (
+                    float(np.dot(qv, np.array(m.embedding, dtype=np.float32)))
+                    if m.embedding
+                    else 0.0
+                ),
+                reverse=True,
+            )
+            return memories[:limit]
+        return memories
 
     def get_all_with_embeddings(self, tenant_id: str) -> List[MemoryObject]:
         """Return all non-duplicate memories that have embeddings (for atlas building)."""
