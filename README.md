@@ -52,14 +52,27 @@ Supported conversation formats: Claude Code JSONL, Claude AI JSON, ChatGPT expor
 
 ### Atlas and anchors
 
-Once you have ~500+ memories, `psa atlas build` runs spherical k-means (k=224 learned + 32 novelty, 3 seeds, stability-checked). The result is an `Atlas` with up to 256 `AnchorCard` objects. Each anchor holds:
+Once you have ~500+ memories, `psa atlas build` runs spherical k-means (k=224 learned + 32 novelty, 3 seeds, stability-checked). The result is an `Atlas` with up to 256 `AnchorCard` objects.
 
-- A centroid (768-dim embedding, cluster center)
-- A card (`name`, `meaning`, `include_terms`, `exclude_terms`, `generated_query_patterns`, `prototype_examples`, `near_but_different`)
-- Type distribution (what memory types populate this anchor)
-- Quality + count metadata
+**What an anchor card is.** Each card is an LLM-generated semantic description of one cluster, written at atlas build time by analyzing the memories that fall inside it. It is the anchor's identity — used by the retriever to match incoming queries, by the selector to decide which anchors to open, and by the advertisement-decay system to track which query patterns are still earning attention.
 
-Anchor identity is durable across rebuilds. When `AtlasBuilder.rebuild` runs, new clusters are matched to existing anchors by centroid similarity. Only genuinely novel clusters get new IDs. Trained models stay valid across rebuilds.
+A card contains:
+
+| Field | Purpose |
+|---|---|
+| `name` | Short human-readable label (e.g. "atlas-rebuild-triggers") |
+| `meaning` | 1–3 sentences describing what belongs in this cluster |
+| `include_terms` | Up to 8 keywords that signal membership |
+| `exclude_terms` | Up to 4 keywords that signal non-membership |
+| `prototype_examples` | Representative memory titles from this cluster |
+| `near_but_different` | Memory titles that are close but belong elsewhere |
+| `generated_query_patterns` | 10–15 specific questions this anchor can answer |
+
+The `generated_query_patterns` are the anchor's **advertisements** — the queries it claims to serve. They are the unit that the advertisement-decay system tracks and prunes (see [Advertisement decay](#advertisement-decay) below).
+
+**Anchor identity is durable across rebuilds.** When `psa atlas build` runs again, new clusters are matched to existing anchor IDs by centroid similarity. Only genuinely novel clusters get new IDs. This means trained selector models and ledger history stay valid across rebuilds.
+
+**The refined card surface.** Once the atlas is built, operators (or the decay system) can improve cards without a full rebuild. `anchor_cards_refined.json` is the live surface that the retriever and ledger read from. Stage 1 decay produces a candidate file for operator review; `psa atlas promote-refinement` swaps it in after a SHA-256 hash-gate check. Stage 2 decay can mutate it directly (when `removal_enabled=true`).
 
 ### Query pipeline
 
@@ -138,6 +151,8 @@ Slow path (triggered by novelty > 8% or skew > 3x or forced):
 Low-scoring memories are archived (soft delete) and hard-deleted after 90 days. Newly mined memories get a 24-hour grace period.
 
 ### Advertisement decay
+
+An anchor card is not the same as an advertisement. The **card** is the anchor's full semantic identity. The **advertisements** are the `generated_query_patterns` field on that card — the specific questions the anchor claims to answer. Each pattern is independently tracked: when a pattern attracts queries that lead to that anchor being selected, it earns attention; when it stops, it decays. The card itself survives; only its stale pattern strings are pruned.
 
 Anchor cards accumulate `generated_query_patterns` over time. Those patterns are the "ads" a card uses to attract queries. Stale or misleading ads should fade.
 
@@ -275,7 +290,14 @@ The nightly lifecycle is idempotent. First run is slow (model loads, possibly re
 
 ### Training
 
-Selector training is a three-phase curriculum (warm start → hard negatives → adversarial rewrites). Co-activation training fits a small transformer over oracle-labeled anchor co-occurrence patterns.
+**Oracle labeling.** Before training, each query needs a ground-truth label: which subset of the 24 retrieved anchor candidates actually helped answer it? PSA generates these labels automatically using a two-stage LLM process (`psa label`):
+
+1. **Cheap stage** — For each candidate anchor set, the LLM scores `SupportCoverage`: does the anchor's memories contain the information needed to answer the query? This runs in a single batched call per query (~1 API call vs ~23).
+2. **Expensive stage** — For the top-3 surviving sets only, the LLM runs `TaskSuccess`: given this packed context, does an agent actually produce the right answer? This is the authoritative signal but expensive, so only the strongest candidates reach it.
+
+Final oracle score: `0.45 × SupportCoverage + 0.20 × TaskSuccess`. Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl`.
+
+**Selector training.** Once enough labels exist, the cross-encoder selector trains on a three-phase curriculum: warm start (random negatives) → hard negatives (anchors that score well but aren't correct) → adversarial rewrites (paraphrased queries). Co-activation training fits a small transformer over oracle-labeled anchor co-occurrence patterns.
 
 ```bash
 # 1. Label queries — LLM judges which anchor sets help answer each query
