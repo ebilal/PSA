@@ -255,3 +255,36 @@ class TestWriteTools:
             threshold=0.99,
         )
         assert result["is_duplicate"] is False
+
+
+def test_store_memory_assigns_anchor(tmp_path, monkeypatch):
+    """Memories stored via MCP should have a primary_anchor_id after store."""
+    import numpy as np
+    from unittest.mock import MagicMock, patch
+    from psa import mcp_server
+    from psa.memory_object import MemoryStore
+
+    # Fake atlas that assigns anchor 7
+    fake_atlas = MagicMock()
+    fake_atlas.assign_memory.return_value = (7, None, 0.9)
+
+    # Fake embedding
+    fake_vec = list(np.random.rand(768).astype(np.float32))
+
+    store = MemoryStore(db_path=str(tmp_path / "mem.db"))
+
+    monkeypatch.setattr(mcp_server, "_get_psa_store", lambda tid: (None, store))
+    monkeypatch.setattr(mcp_server, "_get_psa_atlas", lambda tid: (fake_atlas, None))
+
+    with patch("psa.embeddings.EmbeddingModel") as MockEM:
+        MockEM.return_value.embed.return_value = fake_vec
+        result = mcp_server.tool_psa_store_memory(
+            title="Test title",
+            body="Test body",
+            tenant_id="test",
+        )
+
+    assert result.get("stored") is True
+    mo = store.get(result["memory_object_id"])
+    assert mo is not None
+    assert mo.primary_anchor_id == 7

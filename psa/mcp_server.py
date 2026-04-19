@@ -428,12 +428,31 @@ def tool_psa_store_memory(
     )
     mo.embedding = embedding
     store.add(mo)
+
+    # Hot assignment: assign to nearest anchor immediately (mirrors consolidation.py hot path)
+    _anchor_assigned = False
+    atlas, _ = _get_psa_atlas(tenant_id)
+    if atlas is not None and mo.embedding is not None and not mo.is_duplicate:
+        try:
+            primary_id, secondary_id, confidence = atlas.assign_memory(mo)
+            if primary_id >= 0:
+                store.update_anchor_assignment(
+                    memory_object_id=mo.memory_object_id,
+                    primary_anchor_id=primary_id,
+                    secondary_anchor_ids=[secondary_id] if secondary_id is not None else [],
+                    confidence=confidence,
+                )
+                _anchor_assigned = True
+        except Exception as e:
+            logger.debug("Hot assignment failed for MCP memory %s: %s", mo.memory_object_id, e)
+
     return {
         "memory_object_id": mo.memory_object_id,
         "memory_type": mtype.value,
         "title": title,
         "tenant_id": tenant_id,
         "stored": True,
+        "anchor_assigned": _anchor_assigned,
     }
 
 
