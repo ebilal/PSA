@@ -126,10 +126,25 @@ uv run psa inspect "how does the atlas work" --verbose
 For full Level 1 behavior, you should generate oracle labels and train the selector models.
 
 ```bash
-uv run psa label --n-queries 300
+uv run psa label --n-queries 0
 uv run psa train --force
 uv run psa train --force --coactivation
 ```
+
+What these commands mean:
+
+- `uv run psa label --n-queries 0` labels all currently available unlabeled queries for the tenant.
+- `uv run psa label --n-queries 300` labels a batch of 300 queries instead of all of them.
+- `uv run psa label --reset --n-queries 0` deletes existing labels and rebuilds the label set from scratch.
+- `uv run psa train --force` trains the selector model only.
+- `uv run psa train --force --coactivation` trains the selector model and then trains the co-activation model.
+
+Normal usage is to run one or the other:
+
+- run `uv run psa train --force` if you only want selector training
+- run `uv run psa train --force --coactivation` if you want selector training plus co-activation training
+
+You do not usually need to run both commands back to back. The `--coactivation` form already includes selector training first.
 
 If you are still developing locally and do not have enough labels yet, you can defer this step. PSA will continue to work in the baseline retrieval mode.
 
@@ -447,15 +462,19 @@ Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl
 **Selector training.** Once enough labels exist, the cross-encoder selector trains on a three-phase curriculum: warm start (random negatives) → hard negatives (anchors that score well but aren't correct) → adversarial rewrites (paraphrased queries). Co-activation training fits a small transformer over oracle-labeled anchor co-occurrence patterns.
 
 ```bash
-# 1. Label queries — LLM judges which anchor sets help answer each query
-psa label --n-queries 300
+# 1. Label all available unlabeled queries
+psa label --n-queries 0
 
 # 2. Train the selector (cross-encoder)
 psa train --force
 
-# 3. Also train the co-activation model (once selector is trained)
+# 3. Also train the co-activation model (separate step, after selector training)
 psa train --force --coactivation
 ```
+
+Use `psa label --n-queries N` when you want a fixed-size batch instead of all available queries. Use `psa label --reset --n-queries 0` to discard existing labels and rebuild from scratch.
+
+`psa train --force --coactivation` is not an extra step after `psa train --force`; it already trains the selector first and then trains co-activation.
 
 Gates: selector trains once ≥300 oracle labels, ≥200 held-out queries, and R@24 ≥ 0.95 on the retriever. Use `--force` to override the gates during development.
 
@@ -554,11 +573,13 @@ All atlas commands take `--tenant <name>` (default: `default`).
 
 | Command | Purpose |
 |---|---|
-| `psa label --n-queries N` | Oracle-label N queries for selector training |
-| `psa label --reset` | Delete all labels and start fresh |
-| `psa train` | Train cross-encoder selector |
-| `psa train --force` | Train even if gates aren't met |
-| `psa train --force --coactivation` | Also train co-activation transformer |
+| `psa label --n-queries N` | Oracle-label `N` queries for selector training |
+| `psa label --n-queries 0` | Label all currently available unlabeled queries |
+| `psa label --sessions-dir PATH --n-queries 0` | Label all available queries from a specific sessions directory |
+| `psa label --reset --n-queries 0` | Delete all labels and rebuild them from scratch |
+| `psa train` | Train cross-encoder selector when training gates are met |
+| `psa train --force` | Train selector even if gates aren't met |
+| `psa train --force --coactivation` | Train selector, then also train the co-activation transformer; this already includes selector training |
 | `psa train --memory-scorer` | Train Level 2 MLP re-ranker (research-only) |
 
 ### Benchmarks
