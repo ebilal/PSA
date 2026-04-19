@@ -430,13 +430,17 @@ Uses the dedicated `longmemeval_bench` tenant.
 | `psa repair` | Rebuild palace vector index after corruption |
 | `psa legacy <subcmd>` | Legacy palace path (set `PSA_MODE=off` for full legacy mode) |
 
-### MCP server (Claude Code integration)
+### MCP server (canonical interactive path)
+
+The MCP server is the recommended way to use PSA interactively. It is a persistent process: the embedding model and atlas load once on first query (~10 s), then every subsequent query runs in ~200–500 ms. The CLI (`psa search`) pays the full load cost on every invocation and is better suited for scripting.
 
 ```bash
 claude mcp add psa -- uv run --project /path/to/memnexus python -m psa.mcp_server
 ```
 
 Exposed tools: `psa_atlas_search`, `psa_store_memory`, `psa_status`, `psa_atlas_status`, `psa_atlas_health`, `psa_list_anchors`, `psa_rebuild_atlas`, `psa_search`, `psa_check_duplicate`.
+
+`psa_atlas_search` is the primary tool — it runs the full Level 1 pipeline (embed → anchor scoring → selector → packer) and returns packed context. Stage 2 advertisement tracking fires inline if `tracking_enabled=true`. Atlas reloads triggered by `psa advertisement` removals are picked up automatically between queries without restarting the server.
 
 ---
 
