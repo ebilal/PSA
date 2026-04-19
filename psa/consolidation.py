@@ -22,7 +22,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .memory_object import EvidenceSpan, MemoryObject, MemoryStore, MemoryType, RawSource
 
@@ -358,10 +358,41 @@ def _passes_retention(raw_memory: dict) -> bool:
     return True
 
 
+def _build_evidence_spans(
+    source: RawSource,
+    evidence_chunk_ids: List[str],
+    chunk_map: Optional[Dict[str, "Chunk"]],
+) -> List[EvidenceSpan]:
+    """Build EvidenceSpan list from chunk offsets when available, fall back to full source."""
+    if chunk_map and evidence_chunk_ids:
+        spans = []
+        for cid in evidence_chunk_ids:
+            chunk = chunk_map.get(cid)
+            if chunk is not None:
+                spans.append(
+                    EvidenceSpan(
+                        source_id=source.source_id,
+                        start_offset=chunk.start_offset,
+                        end_offset=chunk.end_offset,
+                    )
+                )
+        if spans:
+            return spans
+    # Fallback: full source (legacy behaviour when chunk_map absent)
+    return [
+        EvidenceSpan(
+            source_id=source.source_id,
+            start_offset=0,
+            end_offset=len(source.full_text),
+        )
+    ]
+
+
 def _raw_to_memory_object(
     raw: dict,
     source: RawSource,
     tenant_id: str,
+    chunk_map: Optional[Dict[str, "Chunk"]] = None,
 ) -> Optional[MemoryObject]:
     """Convert a raw memory dict from Qwen into a MemoryObject."""
     try:
@@ -404,13 +435,7 @@ def _raw_to_memory_object(
         source_ids=[source.source_id],
         classification_reason=str(raw.get("classification_reason", "")),
         evidence_chunk_ids=evidence_chunk_ids,
-        evidence_spans=[
-            EvidenceSpan(
-                source_id=source.source_id,
-                start_offset=0,
-                end_offset=len(source.full_text),
-            )
-        ],
+        evidence_spans=_build_evidence_spans(source, evidence_chunk_ids, chunk_map),
         quality_score=float(raw.get("retention_score", 0)),
     )
     # If the LLM did not populate facet fields, fall back to heuristic extraction
@@ -574,8 +599,9 @@ class ConsolidationPipeline:
         embedding_model = self._get_embedding_model()
         persisted: List[MemoryObject] = []
 
+        chunk_map = {c.chunk_id: c for c in chunks}
         for raw in retained:
-            mo = _raw_to_memory_object(raw, source, self.tenant_id)
+            mo = _raw_to_memory_object(raw, source, self.tenant_id, chunk_map=chunk_map)
             if mo is None:
                 continue
 

@@ -361,3 +361,48 @@ def test_source_id_preserved_in_memory_object(store):
     assert src.source_id in mo.source_ids
     assert len(mo.evidence_spans) == 1
     assert mo.evidence_spans[0].source_id == src.source_id
+
+
+def test_evidence_spans_use_chunk_offsets():
+    """EvidenceSpan offsets should match actual chunk positions, not full-source bounds."""
+    from psa.consolidation import Chunk, _raw_to_memory_object
+    from psa.memory_object import RawSource
+
+    source = RawSource(
+        source_id="src1",
+        tenant_id="t",
+        source_type="prose",
+        source_path="test.txt",
+        title="test source",
+        full_text="AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC",  # 31 chars
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    chunk_map = {
+        "src1_fine_0000": Chunk(
+            chunk_id="src1_fine_0000",
+            source_id="src1",
+            level="fine",
+            text="BBBBBBBBBB",
+            start_offset=11,
+            end_offset=21,
+        )
+    }
+
+    raw = {
+        "type": "semantic",
+        "title": "B chunk",
+        "body": "something about B",
+        "summary": "B",
+        "retention_score": 0.9,
+        "evidence_chunk_ids": ["src1_fine_0000"],
+    }
+
+    mo = _raw_to_memory_object(raw, source, tenant_id="t", chunk_map=chunk_map)
+    assert mo is not None
+    assert len(mo.evidence_spans) == 1
+    span = mo.evidence_spans[0]
+    assert span.start_offset == 11
+    assert span.end_offset == 21
+    # Verify span actually points to the right text
+    assert source.full_text[span.start_offset:span.end_offset] == "BBBBBBBBBB"
