@@ -85,6 +85,13 @@ class PackedContext:
     sections: List[PackedSection]
     untyped_count: int  # number of raw (untyped) results included
 
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "memory_ids": self.memory_ids,
+            "token_count": self.token_count,
+        }
+
 
 # ── Deduplication helpers ─────────────────────────────────────────────────────
 

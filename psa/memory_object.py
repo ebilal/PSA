@@ -662,6 +662,37 @@ class MemoryStore:
             ).fetchall()
         return [self._row_to_memory_object(r) for r in rows]
 
+    def search_by_embedding(
+        self,
+        tenant_id: str,
+        query_vec: List[float],
+        limit: int = 20,
+    ) -> List[MemoryObject]:
+        """Return top-k memories by cosine similarity (dot product; embeddings are L2-normalized)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM memory_objects
+                WHERE tenant_id = ? AND embedding_blob IS NOT NULL
+                  AND is_duplicate = 0 AND is_archived = 0
+                """,
+                (tenant_id,),
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        qv = np.array(query_vec, dtype=np.float32)
+        scored: List[tuple] = []
+        for row in rows:
+            mo = self._row_to_memory_object(row)
+            if mo.embedding:
+                score = float(np.dot(qv, np.array(mo.embedding, dtype=np.float32)))
+                scored.append((score, mo))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [mo for _, mo in scored[:limit]]
+
     def get_by_source_id(
         self, source_id: str, tenant_id: Optional[str] = None
     ) -> Optional[MemoryObject]:

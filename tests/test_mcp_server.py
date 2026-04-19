@@ -288,3 +288,38 @@ def test_store_memory_assigns_anchor(tmp_path, monkeypatch):
     mo = store.get(result["memory_object_id"])
     assert mo is not None
     assert mo.primary_anchor_id == 7
+
+
+def test_atlas_search_cold_start_fallback(tmp_path, monkeypatch):
+    """When no atlas exists, tool_psa_atlas_search returns embedding-based results, not an error."""
+    import numpy as np
+    from unittest.mock import MagicMock, patch
+    from psa import mcp_server
+    from psa.memory_object import MemoryStore, MemoryObject, MemoryType
+
+    store = MemoryStore(db_path=str(tmp_path / "mem.db"))
+    fake_vec = list(np.ones(768, dtype=np.float32) / np.sqrt(768))
+
+    mo = MemoryObject.create(
+        tenant_id="default", memory_type=MemoryType.SEMANTIC,
+        title="cold fact", body="cold body", summary="cold summary",
+        source_ids=[], classification_reason="", quality_score=0.7,
+    )
+    mo.embedding = fake_vec
+    store.add(mo)
+
+    # No atlas
+    monkeypatch.setattr(mcp_server, "_get_psa_pipeline", lambda tid: None)
+    monkeypatch.setattr(mcp_server, "_get_psa_store", lambda tid: (None, store))
+
+    with patch("psa.embeddings.EmbeddingModel") as MockEM:
+        # Properly mock both instance and static method
+        mock_em = MagicMock()
+        mock_em.embed.return_value = fake_vec
+        MockEM.return_value = mock_em
+        MockEM.cosine_similarity = lambda a, b: 0.9
+        result = mcp_server.tool_psa_atlas_search("cold fact query", tenant_id="default")
+
+    assert "error" not in result
+    assert result.get("cold_start") is True
+    assert "text" in result

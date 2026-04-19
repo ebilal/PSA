@@ -383,13 +383,38 @@ def _get_psa_atlas(tenant_id: str = DEFAULT_TENANT_ID):
 # ── PSA Atlas MCP tool functions ──────────────────────────────────────────────
 
 
+def _psa_embedding_fallback(
+    query: str,
+    tenant_id: str,
+    token_budget: int,
+) -> dict:
+    """Full-text embedding search when no atlas is available (cold-start path)."""
+    from .embeddings import EmbeddingModel
+    from .packer import EvidencePacker
+
+    _, store = _get_psa_store(tenant_id)
+    em = EmbeddingModel()
+    query_vec = em.embed(query)
+    memories = store.search_by_embedding(tenant_id, query_vec, limit=20)
+
+    packer = EvidencePacker()
+    packed = packer.pack_memories_direct(
+        query=query,
+        memories=memories,
+        token_budget=token_budget,
+        query_vec=query_vec,
+        store=store,
+    )
+    result = packed.to_dict()
+    result["cold_start"] = True
+    return result
+
+
 def tool_psa_atlas_search(query: str, tenant_id: str = DEFAULT_TENANT_ID, token_budget: int = 6000):
     """Run the full PSA pipeline query (retriever + selector + packer)."""
     pipeline = _get_psa_pipeline(tenant_id)
     if pipeline is None:
-        return {
-            "error": f"No PSA atlas built for tenant '{tenant_id}'. Run 'psa atlas build' first."
-        }
+        return _psa_embedding_fallback(query, tenant_id, token_budget)
     pipeline.token_budget = token_budget
     result = pipeline.query(query)
     return result.to_dict()
