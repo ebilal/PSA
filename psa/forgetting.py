@@ -191,6 +191,14 @@ def prune_anchor(
 
     scored = sorted(memories, key=score, reverse=True)
     to_archive = scored[: len(memories) - budget]
+    for m in to_archive:
+        logger.info(
+            "forgetting.shadow anchor=%d mo=%s archived=1 pressure=%.3f score=%.3f",
+            anchor_id,
+            m.memory_object_id,
+            pressure_by_id[m.memory_object_id],
+            score(m),
+        )
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)
 
@@ -264,6 +272,15 @@ def enforce_global_cap(
 
     scored = sorted(all_memories, key=score, reverse=True)
     to_archive = scored[:excess]
+    for m in to_archive:
+        logger.info(
+            "forgetting.shadow global mo=%s anchor=%d anchor_p=%.3f tenant_p=%.3f score=%.3f",
+            m.memory_object_id,
+            m.primary_anchor_id,
+            anchor_pressure[m.memory_object_id],
+            tenant_pressure[m.memory_object_id],
+            score(m),
+        )
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)
     result["archived"] = len(archive_ids)
