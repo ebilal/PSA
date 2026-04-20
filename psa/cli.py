@@ -1071,6 +1071,13 @@ def cmd_train(args):
         print(f"  Training failed: {e}")
 
 
+def cmd_train_sweep(args):
+    """Run the bounded local hyperparameter sweep for training defaults."""
+    from .training.hparam_sweep import run_default_sweep
+
+    run_default_sweep(tenant_id=getattr(args, "tenant", "default"))
+
+
 def cmd_lifecycle(args):
     """Handle 'psa lifecycle <subcommand>'."""
     action = getattr(args, "lifecycle_action", None)
@@ -2221,6 +2228,11 @@ def main():
             "Revisit in Branch 3 once a production-signal path exists."
         ),
     )
+    p_train_sweep = sub.add_parser(
+        "train-sweep",
+        help="Run bounded local training hyperparameter sweep",
+    )
+    p_train_sweep.add_argument("--tenant", default="default", help="Tenant identifier")
 
     # inspect
     p_inspect = sub.add_parser("inspect", help="Inspect what context PSA injects for a query")
@@ -2421,6 +2433,10 @@ def main():
 
     if args.command == "train":
         cmd_train(args)
+        return
+
+    if args.command == "train-sweep":
+        cmd_train_sweep(args)
         return
 
     if args.command == "lifecycle":

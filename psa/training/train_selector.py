@@ -5,7 +5,7 @@ Base model: cross-encoder/ms-marco-MiniLM-L-6-v2
 Training format: pairwise (query, anchor_card) → binary label
 Loss: L_BCE + 0.2 * L_margin
 Hyperparameters (plan defaults):
-  lr=2e-5, batch=32, epochs=3, max_seq=320, warmup=0.1
+  lr=3e-5, batch=32, epochs=3, max_seq=320, warmup=0.1
 
 Training phases:
   1. Supervised warm start on oracle labels
@@ -51,7 +51,7 @@ def _select_training_device() -> str:
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 
 BASE_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-LEARNING_RATE = 2e-5
+LEARNING_RATE = 3e-5
 BATCH_SIZE = 32
 EPOCHS = 3
 MAX_SEQ_LEN = 320
@@ -78,7 +78,7 @@ class SelectorVersion:
     trained_at: str
     model_path: str
     query_family_mix: Dict[str, int]
-    learning_rate: float = field(default=2e-5)
+    learning_rate: float = field(default=3e-5)
     batch_size: int = field(default=32)
     epochs: int = field(default=3)
     warmup_ratio: float = field(default=0.1)

@@ -34,9 +34,10 @@ class EmbeddingModel:
     MODEL_NAME = "BAAI/bge-base-en-v1.5"
     DIM = 768
 
-    def __init__(self, model_name: Optional[str] = None):
+    def __init__(self, model_name: Optional[str] = None, device: Optional[str] = None):
         _require_sentence_transformers()
         self._model_name = model_name or self.MODEL_NAME
+        self._device = device
         self._model = None
 
     def _load(self):
@@ -54,7 +55,7 @@ class EmbeddingModel:
             try:
                 from sentence_transformers import SentenceTransformer
 
-                self._model = SentenceTransformer(self._model_name)
+                self._model = SentenceTransformer(self._model_name, device=self._device)
             finally:
                 sys.stderr = old_stderr
 

@@ -146,6 +146,8 @@ Normal usage is to run one or the other:
 
 You do not usually need to run both commands back to back. The `--coactivation` form already includes selector training first.
 
+The current training defaults were selected from a bounded local sweep on real tenant data and are intended for laptop-scale retraining. The selector default learning rate is `3e-5`; the co-activation defaults remain `1e-4` / `0.01` / `16`, with the epoch default reduced to `8`.
+
 If you are still developing locally and do not have enough labels yet, you can defer this step. PSA will continue to work in the baseline retrieval mode.
 
 ### 7. Install the lifecycle job

@@ -51,7 +51,7 @@ class CoActivationTrainer:
         data_dir: str,
         n_anchors: int = 256,
         centroid_dim: int = 768,
-        epochs: int = 10,
+        epochs: int = 8,
         batch_size: int = 16,
         val_split: float = 0.15,
         return_losses: bool = False,
@@ -69,7 +69,7 @@ class CoActivationTrainer:
         centroid_dim:
             Centroid dimension (default 768).
         epochs:
-            Number of training epochs.
+            Number of training epochs. Default: 8.
         batch_size:
             Mini-batch size.
         val_split:
