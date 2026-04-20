@@ -401,17 +401,23 @@ Slow path (triggered by novelty > 8% or skew > 3x or forced):
 
 ### Memory forgetting
 
-`psa/forgetting.py` scores each memory for disposability using a 4-term formula:
+`psa/forgetting.py` scores each memory for disposability. **Time alone is not a disposal signal.** A memory that has gone a year without being packed is not more disposable than one packed yesterday — what matters is how it compares to its peers under pressure.
+
+Per-anchor pruning uses:
 
 ```
 forgetting_score =
-  + min(idle_days / 90, 1.0)          # idle pressure — caps at 90 days without use
-  + min(overflow / budget, 1.0)        # crowding pressure — anchor over its 100-memory budget
+  + low_usage_pressure_within_anchor    # bottom of anchor's usage distribution → 1.0; top → 0.0
+  + min(overflow / budget, 1.0)          # crowding pressure — anchor over its 100-memory budget
   - min(log(1 + pack_count) / 3.0, 1.0)  # usage protection — 20 packs ≈ full protection
-  - quality_score                      # quality protection — set once at extraction, never updated
+  - quality_score                        # quality protection — set once at extraction
 ```
 
-Range is roughly −1 to 2. Score > 0 is a candidate for pruning. Newly ingested memories get a 24-hour absolute grace period (score forced to −10). Low-scoring memories are archived (soft delete) and hard-deleted after 90 days in archive. The global cap is 50k memories; the per-anchor budget is 100.
+Global-cap enforcement uses the same formula but substitutes a hybrid pressure: `0.7 * anchor_local + 0.3 * tenant_wide`, so scores remain comparable across anchors.
+
+Range is roughly −2 to 2. Score > 0 is a candidate for pruning. Newly ingested memories get a 24-hour absolute grace period (score forced to −10). Low-scoring memories are archived (soft delete) and hard-deleted after 90 days in archive. The global cap is 50k memories; the per-anchor budget is 100.
+
+Small-anchor stability rule: anchors with fewer than 5 active memories get `low_usage_pressure = 0`, so pruning there is driven entirely by crowding and quality (percentiles on tiny samples are too noisy to trust).
 
 ### Advertisement decay
 
