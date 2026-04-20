@@ -5,7 +5,7 @@ from typing import Optional
 
 import pytest
 
-from psa.forgetting import forgetting_score, low_usage_pressure, prune_anchor
+from psa.forgetting import enforce_global_cap, forgetting_score, low_usage_pressure, prune_anchor
 from psa.memory_object import MemoryObject, MemoryStore, MemoryType
 
 
@@ -163,3 +163,24 @@ def test_prune_anchor_archives_local_worst(tmp_path, monkeypatch):
     surviving = {m.memory_object_id for m in store.query_by_anchor_for_pruning(tenant, 42)}
     assert ids[0] not in surviving
     assert ids[1] not in surviving
+
+
+def test_global_cap_uses_hybrid_cross_anchor_score(tmp_path, monkeypatch):
+    """Two anchors. Anchor A is busy (high pack_counts); anchor B is quiet.
+    Cap forces 2 archives. The two least-used memories overall must be
+    archived (both from the quiet anchor), not two from the busy anchor."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    store = MemoryStore(str(tmp_path / "memory.sqlite3"))
+    tenant = "t"
+
+    a_ids = _seed_anchor(store, tenant, 1, pack_counts=[50, 60, 70, 80, 90, 100])
+    b_ids = _seed_anchor(store, tenant, 2, pack_counts=[0, 1, 2, 3, 4, 5])
+
+    result = enforce_global_cap(store, tenant, max_memories=10)
+
+    assert result["archived"] == 2
+    surviving_a = {m.memory_object_id for m in store.query_by_anchor_for_pruning(tenant, 1)}
+    surviving_b = {m.memory_object_id for m in store.query_by_anchor_for_pruning(tenant, 2)}
+    assert a_ids[0] in surviving_a
+    assert b_ids[0] not in surviving_b
+    assert b_ids[1] not in surviving_b

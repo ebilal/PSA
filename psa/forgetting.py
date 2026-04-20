@@ -22,6 +22,8 @@ logger = logging.getLogger("psa.forgetting")
 
 ANCHOR_MEMORY_BUDGET = 100
 MAX_MEMORIES = 50_000
+GLOBAL_CAP_ANCHOR_WEIGHT = 0.7
+GLOBAL_CAP_TENANT_WEIGHT = 0.3
 
 
 # ── Forgetting score ─────────────────────────────────────────────────────────
@@ -198,19 +200,18 @@ def enforce_global_cap(
     Enforce a global memory cap for a tenant.
 
     Phase 1: hard-delete memories archived > archived_ttl_days ago.
-    Phase 2: if still over cap, archive the lowest-scoring active memories.
+    Phase 2: if still over cap, archive the lowest-scoring active memories
+             using a hybrid (anchor-relative + tenant-wide) pressure score.
 
     Returns a dict with counts of actions taken.
     """
     result = {"hard_deleted": 0, "archived": 0}
 
-    # Phase 1: hard-delete old archived memories
     deleted = store.delete_old_archived(tenant_id, older_than_days=archived_ttl_days)
     result["hard_deleted"] = deleted
     if deleted:
         logger.info("Global cap: hard-deleted %d old archived memories", deleted)
 
-    # Phase 2: check if still over cap
     active_count = store.count(tenant_id)
     if active_count <= max_memories:
         return result
@@ -218,16 +219,36 @@ def enforce_global_cap(
     excess = active_count - max_memories
     now = datetime.now(timezone.utc)
 
-    # Get all active memories with embeddings, score them, archive the worst
     all_memories = store.get_all_with_embeddings(tenant_id)
     if not all_memories:
         return result
 
-    scored = sorted(
-        all_memories,
-        key=lambda m: forgetting_score(m, len(all_memories), max_memories // 256, now),
-        reverse=True,
-    )
+    by_anchor: dict = {}
+    for m in all_memories:
+        by_anchor.setdefault(m.primary_anchor_id, []).append(m)
+
+    anchor_pressure = {
+        m.memory_object_id: low_usage_pressure(m, by_anchor[m.primary_anchor_id])
+        for m in all_memories
+    }
+    tenant_pressure = {
+        m.memory_object_id: low_usage_pressure(m, all_memories) for m in all_memories
+    }
+
+    def score(m: MemoryObject) -> float:
+        hybrid = (
+            GLOBAL_CAP_ANCHOR_WEIGHT * anchor_pressure[m.memory_object_id]
+            + GLOBAL_CAP_TENANT_WEIGHT * tenant_pressure[m.memory_object_id]
+        )
+        return forgetting_score(
+            m,
+            active_count,
+            ANCHOR_MEMORY_BUDGET,
+            now,
+            usage_pressure=hybrid,
+        )
+
+    scored = sorted(all_memories, key=score, reverse=True)
     to_archive = scored[:excess]
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)
