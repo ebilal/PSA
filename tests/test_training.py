@@ -384,7 +384,29 @@ def test_split_by_example_type_default():
 # ── SelectorVersion serialization ─────────────────────────────────────────────
 
 
-def test_selector_version_round_trip():
+def test_selector_version_from_dict_defaults_old_metadata():
+    legacy = {
+        "version": 1,
+        "atlas_version": 2,
+        "embedding_model": "BAAI/bge-base-en-v1.5",
+        "runtime_model_id": "claude-haiku-4-5-20251001",
+        "base_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "training_examples": 12000,
+        "val_task_success": 0.87,
+        "threshold_tau": 0.35,
+        "trained_at": "2026-01-01T00:00:00+00:00",
+        "model_path": "/tmp/selector_v1",
+        "query_family_mix": {"single_anchor": 3000, "bridge": 2000},
+    }
+    restored = SelectorVersion.from_dict(legacy)
+
+    assert restored.learning_rate == pytest.approx(2e-5)
+    assert restored.batch_size == 32
+    assert restored.epochs == 3
+    assert restored.warmup_ratio == pytest.approx(0.1)
+
+
+def test_selector_version_round_trip_includes_hparams():
     sv = SelectorVersion(
         version=1,
         atlas_version=2,
@@ -397,10 +419,18 @@ def test_selector_version_round_trip():
         trained_at="2026-01-01T00:00:00+00:00",
         model_path="/tmp/selector_v1",
         query_family_mix={"single_anchor": 3000, "bridge": 2000},
+        learning_rate=1e-5,
+        batch_size=48,
+        epochs=5,
+        warmup_ratio=0.2,
     )
     d = sv.to_dict()
     restored = SelectorVersion.from_dict(d)
 
+    assert restored.learning_rate == pytest.approx(1e-5)
+    assert restored.batch_size == 48
+    assert restored.epochs == 5
+    assert restored.warmup_ratio == pytest.approx(0.2)
     assert restored.version == 1
     assert restored.atlas_version == 2
     assert restored.threshold_tau == pytest.approx(0.35)
@@ -409,10 +439,13 @@ def test_selector_version_round_trip():
 
 def test_training_dependencies_importable():
     """All packages required by SelectorTrainer.train() must be importable."""
+    pytest.importorskip("torch")
+    pytest.importorskip("sentence_transformers.cross_encoder")
+    pytest.importorskip("datasets")
+    pytest.importorskip("accelerate")
+
     import torch  # noqa: F401
     from sentence_transformers.cross_encoder import CrossEncoder  # noqa: F401
-    import datasets  # noqa: F401
-    import accelerate  # noqa: F401
 
 
 def test_selector_version_to_dict_keys():
@@ -428,6 +461,10 @@ def test_selector_version_to_dict_keys():
         trained_at="now",
         model_path="/tmp",
         query_family_mix={},
+        learning_rate=2e-5,
+        batch_size=32,
+        epochs=3,
+        warmup_ratio=0.1,
     )
     d = sv.to_dict()
     for key in (
@@ -440,6 +477,10 @@ def test_selector_version_to_dict_keys():
         "trained_at",
         "model_path",
         "query_family_mix",
+        "learning_rate",
+        "batch_size",
+        "epochs",
+        "warmup_ratio",
     ):
         assert key in d
 

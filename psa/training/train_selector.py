@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -78,6 +78,10 @@ class SelectorVersion:
     trained_at: str
     model_path: str
     query_family_mix: Dict[str, int]
+    learning_rate: float = field(default=2e-5)
+    batch_size: int = field(default=32)
+    epochs: int = field(default=3)
+    warmup_ratio: float = field(default=0.1)
 
     def to_dict(self) -> dict:
         return {
@@ -92,11 +96,20 @@ class SelectorVersion:
             "trained_at": self.trained_at,
             "model_path": self.model_path,
             "query_family_mix": self.query_family_mix,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "warmup_ratio": self.warmup_ratio,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "SelectorVersion":
-        return cls(**d)
+        data = dict(d)
+        data.setdefault("learning_rate", 2e-5)
+        data.setdefault("batch_size", 32)
+        data.setdefault("epochs", 3)
+        data.setdefault("warmup_ratio", 0.1)
+        return cls(**data)
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -151,7 +164,6 @@ class SelectorTrainer:
         max_seq_len: int = MAX_SEQ_LEN,
         warmup_ratio: float = WARMUP_RATIO,
     ):
-        self._check_requirements()
         self.output_dir = output_dir
         self.atlas_version = atlas_version
         self.embedding_model_name = embedding_model_name
@@ -179,6 +191,20 @@ class SelectorTrainer:
                 "sentence-transformers is required for selector training. "
                 "Install it with: pip install 'psa[training]'"
             )
+        try:
+            import datasets  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "datasets is required for selector training. "
+                "Install it with: pip install 'psa[training]'"
+            )
+        try:
+            import accelerate  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "accelerate is required for selector training. "
+                "Install it with: pip install 'psa[training]'"
+            )
 
     def train(
         self,
@@ -203,6 +229,7 @@ class SelectorTrainer:
         -------
         SelectorVersion metadata (model saved to output_dir)
         """
+        self._check_requirements()
         from sentence_transformers.cross_encoder import CrossEncoder
         from torch.utils.data import Dataset as TorchDataset
 
@@ -273,7 +300,7 @@ class SelectorTrainer:
             print(
                 f"          Phase 1: warm start        ({len(phase1):4d} ex)...", end="", flush=True
             )
-            last_loss = self._train_phase(model, PairDataset(phase1), epochs=1)
+            last_loss = self._train_phase(model, PairDataset(phase1), epochs=self.epochs)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 1 done: loss=%.3f", last_loss)
 
@@ -286,7 +313,7 @@ class SelectorTrainer:
                 end="",
                 flush=True,
             )
-            last_loss = self._train_phase(model, PairDataset(phase2), epochs=1)
+            last_loss = self._train_phase(model, PairDataset(phase2), epochs=self.epochs)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 2 done: loss=%.3f", last_loss)
 
@@ -301,7 +328,7 @@ class SelectorTrainer:
                 end="",
                 flush=True,
             )
-            last_loss = self._train_phase(model, PairDataset(phase3), epochs=1)
+            last_loss = self._train_phase(model, PairDataset(phase3), epochs=self.epochs)
             print(f"  loss={last_loss:.3f}", flush=True)
             logger.info("Phase 3 done: loss=%.3f", last_loss)
 
@@ -341,6 +368,10 @@ class SelectorTrainer:
             trained_at=datetime.now(timezone.utc).isoformat(),
             model_path=model_out,
             query_family_mix=family_mix,
+            learning_rate=self.learning_rate,
+            batch_size=self.batch_size,
+            epochs=self.epochs,
+            warmup_ratio=self.warmup_ratio,
         )
 
         # Write version metadata
