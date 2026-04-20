@@ -1021,11 +1021,18 @@ def cmd_train(args):
 
             coact_output = os.path.join(tenant.root_dir, "models", "coactivation_latest")
             coact_trainer = CoActivationTrainer(output_dir=coact_output)
+            _progress = lambda message: print(f"  {message}", flush=True)
             coact_trainer.train(
                 data_dir=coact_data_dir,
                 n_anchors=len(atlas.cards),
+                progress_callback=_progress,
             )
-            print(f"  Co-activation model saved to {coact_output}")
+            model_path = os.path.join(coact_output, "coactivation_model.pt")
+            version_path = os.path.join(coact_output, "coactivation_version.json")
+            if not (os.path.exists(model_path) and os.path.exists(version_path)):
+                raise RuntimeError(
+                    f"Co-activation training completed without writing expected artifacts in {coact_output}"
+                )
 
         if getattr(args, "memory_scorer", False):
             print("Training memory scorer...")

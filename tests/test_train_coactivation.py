@@ -96,3 +96,29 @@ def test_train_loss_decreases(tmp_path):
     assert losses[-1] < losses[0], (
         f"Loss did not decrease: first={losses[0]:.4f}, last={losses[-1]:.4f}"
     )
+
+
+def test_train_reports_progress_callback(tmp_path):
+    """Training should emit per-epoch and validation progress through the callback."""
+    pytest.importorskip("torch")
+
+    from psa.training.train_coactivation import CoActivationTrainer
+
+    data_dir = _make_synthetic_npz(tmp_path, n_examples=32, n_anchors=16, seed=2)
+    output_dir = str(tmp_path / "output3")
+    messages = []
+
+    trainer = CoActivationTrainer(output_dir=output_dir, learning_rate=1e-3)
+    trainer.train(
+        data_dir=data_dir,
+        n_anchors=16,
+        centroid_dim=768,
+        epochs=3,
+        batch_size=8,
+        progress_callback=messages.append,
+    )
+
+    epoch_messages = [m for m in messages if m.startswith("Epoch ")]
+    assert len(epoch_messages) == 3
+    assert any(m.startswith("Training on device:") for m in messages)
+    assert any(m.startswith("Validation loss:") for m in messages)

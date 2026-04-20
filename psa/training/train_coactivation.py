@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -53,6 +53,7 @@ class CoActivationTrainer:
         batch_size: int = 16,
         val_split: float = 0.15,
         return_losses: bool = False,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Optional[List[float]]:
         """
         Train the CoActivationModel.
@@ -80,6 +81,11 @@ class CoActivationTrainer:
             List of per-epoch mean training losses if return_losses=True,
             else None.
         """
+        def _report(message: str) -> None:
+            logger.info(message)
+            if progress_callback is not None:
+                progress_callback(message)
+
         try:
             import torch
             import torch.nn as nn
@@ -155,7 +161,7 @@ class CoActivationTrainer:
             device = torch.device("cuda")
         else:
             device = torch.device("cpu")
-        logger.info("Training on device: %s", device)
+        _report(f"Training on device: {device}")
 
         # Model + optimiser
         model = CoActivationModel(
@@ -203,7 +209,7 @@ class CoActivationTrainer:
 
             epoch_mean = float(np.mean(batch_losses))
             epoch_losses.append(epoch_mean)
-            logger.info("Epoch %d/%d  loss=%.4f", epoch, epochs, epoch_mean)
+            _report(f"Epoch {epoch}/{epochs} loss={epoch_mean:.4f}")
 
         # Validation pass
         model.train(False)
@@ -222,7 +228,7 @@ class CoActivationTrainer:
             )
             tt = val_gk.to(device).float() / actual_n_anchors
             val_loss = float((bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item())
-        logger.info("Validation loss: %.4f", val_loss)
+        _report(f"Validation loss: {val_loss:.4f}")
 
         # Save artefacts
         os.makedirs(self.output_dir, exist_ok=True)
@@ -243,6 +249,6 @@ class CoActivationTrainer:
         with open(version_path, "w") as f:
             json.dump(meta, f, indent=2)
 
-        logger.info("CoActivation model saved to %s", self.output_dir)
+        _report(f"Co-activation model saved to {self.output_dir}")
 
         return epoch_losses if return_losses else None
