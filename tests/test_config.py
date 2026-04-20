@@ -29,4 +29,23 @@ def test_init():
     tmpdir = tempfile.mkdtemp()
     cfg = MempalaceConfig(config_dir=tmpdir)
     cfg.init()
-    assert os.path.exists(os.path.join(tmpdir, "config.json"))
+    path = os.path.join(tmpdir, "config.json")
+    assert os.path.exists(path)
+    with open(path) as f:
+        body = json.load(f)
+
+    assert body["tenant_id"] == "default"
+    assert body["psa_mode"] == "primary"
+    assert body["token_budget"] == 6000
+    assert body["max_memories"] == 50000
+    assert body["anchor_memory_budget"] == 100
+    assert body["trace_queries"] is True
+    assert body["nightly_hour"] == 0
+    assert body["advertisement_decay"] == {
+        "tracking_enabled": True,
+        "removal_enabled": True,
+        "tau_days": 45,
+        "grace_days": 30,
+        "sustained_cycles": 21,
+        "min_patterns_floor": 5,
+    }

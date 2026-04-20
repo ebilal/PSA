@@ -223,6 +223,21 @@ class MempalaceConfig:
         self._config_dir.mkdir(parents=True, exist_ok=True)
         if not self._config_file.exists():
             default_config = {
+                "tenant_id": DEFAULT_TENANT_ID,
+                "psa_mode": DEFAULT_PSA_MODE,
+                "token_budget": DEFAULT_TOKEN_BUDGET,
+                "max_memories": DEFAULT_MAX_MEMORIES,
+                "anchor_memory_budget": DEFAULT_ANCHOR_MEMORY_BUDGET,
+                "trace_queries": True,
+                "nightly_hour": DEFAULT_NIGHTLY_HOUR,
+                "advertisement_decay": {
+                    "tracking_enabled": True,
+                    "removal_enabled": True,
+                    "tau_days": 45,
+                    "grace_days": 30,
+                    "sustained_cycles": 21,
+                    "min_patterns_floor": 5,
+                },
                 "palace_path": DEFAULT_PALACE_PATH,
                 "collection_name": DEFAULT_COLLECTION_NAME,
                 "topic_wings": DEFAULT_TOPIC_WINGS,
