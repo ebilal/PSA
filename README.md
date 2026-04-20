@@ -582,7 +582,6 @@ psa advertisement purge --older-than-days 90 # hard-delete archived rows past re
 | `psa atlas rebuild` | Force rebuild (preserves anchor identity) |
 | `psa atlas refine --miss-log PATH` | Stage 1 ngram refinement from miss log |
 | `psa atlas curate` | Stage 1 production-signal curation (oracle + fingerprints) |
-| `psa atlas decay` | Legacy/manual advertisement candidate flow; not part of the normal lifecycle path |
 | `psa atlas promote-refinement` | Promote the current candidate to live refined cards |
 
 All atlas commands take `--tenant <name>` (default: `default`).
@@ -693,12 +692,12 @@ Any of these can run against your live `default` tenant without side effects (be
 | `psa migrate` | Writes memories from ChromaDB palace; source palace untouched |
 | `psa repair` | Rebuilds palace vector index |
 
-### Explicitly configured / opt-in
+### Explicitly configured
 
 | Setting | Default | Impact |
 |---|---|---|
-| `advertisement_decay.tracking_enabled` | `false` in code defaults | The installation guide above recommends setting this to `true` so query traffic updates the advertisement ledger |
-| `advertisement_decay.removal_enabled` | `false` in code defaults | The installation guide above recommends setting this to `true` if you want fully automated lifecycle-based advertisement decay |
+| `advertisement_decay.tracking_enabled` | `true` | Query traffic updates the advertisement ledger during `psa search` |
+| `advertisement_decay.removal_enabled` | `true` | `psa lifecycle run` can prune stale advertisement patterns automatically |
 | Cloud LLM | off (uses local Ollama) | Set `provider: "cloud"` in `~/.psa/llm.json` to enable |
 
 ### Research-only
@@ -724,11 +723,12 @@ These paths exist but are not recommended for day-to-day use:
 | `anchor_memory_budget` | `100` | Per-anchor memory limit |
 | `trace_queries` | `true` | Emit per-query trace to `query_trace.jsonl` |
 | `nightly_hour` | `0` | Hour (0-23) used by the installed lifecycle job |
-| `advertisement_decay.tracking_enabled` | `false` in code defaults | Advertisement ledger writes during `psa search` (requires `trace_queries=true`) |
-| `advertisement_decay.removal_enabled` | `false` in code defaults | Advertisement removals during `psa lifecycle run` |
+| `advertisement_decay.tracking_enabled` | `true` | Advertisement ledger writes during `psa search` (requires `trace_queries=true`) |
+| `advertisement_decay.removal_enabled` | `true` | Advertisement removals during `psa lifecycle run` |
 | `advertisement_decay.tau_days` | `45` | Exponential decay half-life |
-| `advertisement_decay.grace_days` | `21` | Fresh-pattern grace period |
-| `advertisement_decay.sustained_cycles` | `14` | Primary removal threshold |
+| `advertisement_decay.grace_days` | `30` | Fresh-pattern grace period |
+| `advertisement_decay.sustained_cycles` | `21` | Primary removal threshold |
+| `advertisement_decay.min_patterns_floor` | `5` | Minimum number of patterns retained per anchor |
 | `advertisement_decay.shadow.*` | (see spec) | Shadow-policy knobs |
 
 See env var overrides: `PSA_MODE`, `PSA_TENANT_ID`, `PSA_AD_DECAY_TRACKING_ENABLED`, `PSA_AD_DECAY_REMOVAL_ENABLED`, `PSA_AD_DECAY_TAU_DAYS`, etc.

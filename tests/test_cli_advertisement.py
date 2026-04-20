@@ -193,3 +193,16 @@ def test_purge_handles_missing_pattern_ledger_table(tmp_path, monkeypatch):
     assert r.returncode == 0
     data = json.loads(r.stdout)
     assert data["deleted"] == 0
+
+
+def test_atlas_help_does_not_expose_decay_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env = {**os.environ, "HOME": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "psa", "atlas", "--help"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+    assert "decay" not in r.stdout

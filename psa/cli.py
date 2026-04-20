@@ -346,7 +346,7 @@ def cmd_atlas(args):
     """Handle 'psa atlas <subcommand>'."""
     action = getattr(args, "atlas_action", None)
     if not action:
-        print("Usage: psa atlas {build,status,health,refine,promote-refinement,curate,decay}")
+        print("Usage: psa atlas {build,status,health,rebuild,refine,promote-refinement,curate}")
         return
 
     if action in ("build", "rebuild"):
@@ -361,8 +361,6 @@ def cmd_atlas(args):
         _cmd_atlas_refine_promote(args)
     elif action == "curate":
         _cmd_atlas_curate(args)
-    elif action == "decay":
-        _cmd_atlas_decay(args)
 
 
 def _cmd_atlas_build(args):
@@ -703,131 +701,6 @@ def _cmd_atlas_curate(args):
     print(f"  Candidate written to {summary['candidate_path']}")
     print(f"  Extractor: {summary['extractor']}, support_semantics: {summary['support_semantics']}")
     print("  Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
-
-
-def _cmd_atlas_decay(args):
-    """Run an advertisement-forgetting pass for the current atlas."""
-    import json as _json
-    from dataclasses import asdict
-    from pathlib import Path
-
-    from .advertisement.decay import DecayParams, decay_report
-    from .advertisement.writer import write_decay_candidate
-
-    tenant_id = getattr(args, "tenant", "default")
-
-    # Load config defaults from ~/.psa/config.json.decay (if present), then
-    # apply CLI overrides.
-    config_defaults = _load_decay_config()
-
-    def _pick(flag_val, key, default):
-        if flag_val is not None:
-            return flag_val
-        return config_defaults.get(key, default)
-
-    params = DecayParams(
-        grace_days=_pick(args.grace_days, "grace_days", 30),
-        decay_window_days=_pick(args.decay_window_days, "decay_window_days", 60),
-        low_activation_percentile=_pick(
-            args.low_activation_percentile, "low_activation_percentile", 25.0
-        ),
-        min_anchor_activations=_pick(args.min_anchor_activations, "min_anchor_activations", 10),
-    )
-
-    origins = _resolve_origins(args)
-
-    try:
-        report = decay_report(tenant_id, params=params, origins=origins)
-    except FileNotFoundError as e:
-        print(f"  Error: {e}")
-        sys.exit(1)
-
-    # Resolve atlas dir for write.
-    from .atlas import AtlasManager
-    from .tenant import TenantManager
-
-    tm = TenantManager()
-    tenant = tm.get_or_create(tenant_id)
-    mgr = AtlasManager(tenant_dir=tenant.root_dir, tenant_id=tenant_id)
-    atlas = mgr.get_atlas()
-    atlas_dir = Path(atlas.anchor_dir) if atlas is not None else None
-
-    wrote = False
-    if not args.dry_run and atlas_dir is not None:
-        wrote = write_decay_candidate(str(atlas_dir), report)
-
-    if args.json:
-        envelope = {
-            "source": "decay",
-            "tenant_id": tenant_id,
-            "atlas_version": report.atlas_version,
-            "n_patterns_scanned": report.n_patterns_scanned,
-            "n_patterns_removed": report.n_patterns_removed,
-            "n_patterns_by_source_removed": report.n_patterns_by_source_removed,
-            "n_anchors_touched": report.n_anchors_touched,
-            "n_anchors_shielded": report.n_anchors_shielded,
-            "n_patterns_pinned_exempt": report.n_patterns_pinned_exempt,
-            "n_patterns_backfilled_this_run": report.n_patterns_backfilled_this_run,
-            "pruning_by_reason": report.pruning_by_reason,
-            "origins": sorted(report.origins),
-            "dry_run": args.dry_run,
-            "wrote_candidate": wrote,
-            "removed_patterns": [asdict(r) for r in report.removed_patterns],
-            "shielded_anchors": [asdict(s) for s in report.shielded_anchors],
-        }
-        print(_json.dumps(envelope, indent=2))
-        return
-
-    # Tabular output.
-    print(
-        f"tenant: {tenant_id}   atlas v{report.atlas_version}   "
-        f"origins: {', '.join(sorted(origins))}"
-    )
-    print(
-        f"params: grace={params.grace_days}d  "
-        f"decay_window={params.decay_window_days}d  "
-        f"activation_floor: <p{params.low_activation_percentile:g} "
-        f"or <{params.min_anchor_activations} activations"
-    )
-    print()
-    print("Summary:")
-    print(f"  Total patterns scanned: {report.n_patterns_scanned:>6}")
-    print(f"  Decay candidates:       {report.n_patterns_removed:>6}")
-    for src, count in sorted(report.n_patterns_by_source_removed.items()):
-        print(f"    - {src}: {count}")
-    print(f"  Anchors shielded (P1):  {report.n_anchors_shielded:>6}")
-    print(f"    - patterns held:      {report.n_patterns_shielded:>6}")
-    print(f"  Pinned (P3) exempt:     {report.n_patterns_pinned_exempt:>6}")
-    print(f"  Backfilled this run:    {report.n_patterns_backfilled_this_run:>6}")
-
-    if args.verbose and report.removed_patterns:
-        print("\nDecay candidates:")
-        for r in report.removed_patterns[:100]:
-            print(f"  anchor {r.anchor_id:>4}  [{r.source}]  {r.pattern!r}")
-
-    if args.dry_run:
-        print("\n(dry-run — no candidate files written)")
-    elif wrote:
-        print(f"\nCandidate written to {atlas_dir / 'anchor_cards_candidate.json'}")
-        print(f"Detail report at     {atlas_dir / 'anchor_cards_candidate.decay_report.json'}")
-        print("Run 'psa atlas promote-refinement' to make this candidate inference-visible.")
-    else:
-        print("\nNo patterns removed — no candidate written.")
-
-
-def _load_decay_config() -> dict:
-    """Load the `decay` block from ~/.psa/config.json. Missing file → {}."""
-    import json as _json
-    import os as _os
-
-    path = _os.path.expanduser("~/.psa/config.json")
-    if not _os.path.exists(path):
-        return {}
-    try:
-        with open(path) as f:
-            return _json.load(f).get("decay", {})
-    except (OSError, _json.JSONDecodeError):
-        return {}
 
 
 def cmd_label(args):
@@ -2096,33 +1969,6 @@ def main():
             "non-zero with a pointer to psa/curation/extractor_llm.py."
         ),
     )
-
-    p_atlas_decay = atlas_sub.add_parser(
-        "decay",
-        help=(
-            "Propose removal of stale generated_query_patterns based on trace "
-            "reinforcement. Candidate-side only; run `psa atlas "
-            "promote-refinement` to apply."
-        ),
-    )
-    p_atlas_decay.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the report; write no candidate files. "
-        "Metadata backfill is still persisted (non-destructive).",
-    )
-    p_atlas_decay.add_argument("--grace-days", type=int, default=None)
-    p_atlas_decay.add_argument("--decay-window-days", type=int, default=None)
-    p_atlas_decay.add_argument("--low-activation-percentile", type=float, default=None)
-    p_atlas_decay.add_argument("--min-anchor-activations", type=int, default=None)
-    p_atlas_decay.add_argument(
-        "--include-origin",
-        action="append",
-        default=None,
-        help="Repeatable. Default: interactive only.",
-    )
-    p_atlas_decay.add_argument("--verbose", action="store_true")
-    p_atlas_decay.add_argument("--json", action="store_true")
 
     # diag
     p_diag = sub.add_parser("diag", help="Diagnostic rollups over the per-query trace log")
