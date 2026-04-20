@@ -56,6 +56,7 @@ def old(days: int) -> datetime:
 
 def _seed_anchor(store, tenant, anchor_id, *, pack_counts):
     import numpy as np
+
     ids = []
     for pc in pack_counts:
         m = make_memory(

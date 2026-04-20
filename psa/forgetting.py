@@ -90,7 +90,9 @@ def low_usage_pressure(memory: MemoryObject, peers: list) -> float:
 
     ordered = sorted(peers, key=_usage_sort_key)
     try:
-        rank = next(i for i, p in enumerate(ordered) if p.memory_object_id == memory.memory_object_id)
+        rank = next(
+            i for i, p in enumerate(ordered) if p.memory_object_id == memory.memory_object_id
+        )
     except StopIteration:
         return 0.0
     if n == 1:
@@ -146,12 +148,7 @@ def forgetting_score(
     overflow = max(0, anchor_size - target_per_anchor) / max(target_per_anchor, 1)
     usage = log(1 + memory.pack_count) / 3.0
 
-    return (
-        usage_pressure
-        + min(overflow, 1.0)
-        - min(usage, 1.0)
-        - memory.quality_score
-    )
+    return usage_pressure + min(overflow, 1.0) - min(usage, 1.0) - memory.quality_score
 
 
 # ── Per-anchor pruning ───────────────────────────────────────────────────────
