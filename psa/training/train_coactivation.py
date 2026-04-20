@@ -40,9 +40,11 @@ class CoActivationTrainer:
         self,
         output_dir: str,
         learning_rate: float = 1e-4,
+        weight_decay: float = 0.01,
     ):
         self.output_dir = output_dir
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
 
     def train(
         self,
@@ -100,6 +102,11 @@ class CoActivationTrainer:
 
         # Load data
         npz_path = os.path.join(data_dir, "coactivation_train.npz")
+        if not os.path.exists(npz_path):
+            raise FileNotFoundError(
+                f"Missing coactivation training data: {npz_path}. "
+                "Expected coactivation_train.npz in data_dir."
+            )
         data = np.load(npz_path)
 
         query_vecs = data["query_vecs"]  # (N, 768)
@@ -110,6 +117,11 @@ class CoActivationTrainer:
         anchor_features_np = data.get("anchor_features")  # (n_anchors, feat_dim) or None
 
         N = query_vecs.shape[0]
+        if N == 0:
+            raise ValueError(
+                f"coactivation_train.npz in {data_dir} contains zero examples; "
+                "training requires at least one example."
+            )
         actual_n_anchors = ce_scores.shape[1]
         actual_centroid_dim = centroids.shape[1]
         actual_anchor_feature_dim = (
@@ -127,7 +139,10 @@ class CoActivationTrainer:
         # Train / val split (seed=42)
         rng = np.random.default_rng(42)
         idx = rng.permutation(N)
-        n_val = max(1, int(N * val_split))
+        if N <= 1:
+            n_val = 0
+        else:
+            n_val = min(max(1, int(N * val_split)), N - 1)
         val_idx = idx[:n_val]
         train_idx = idx[n_val:]
 
@@ -170,7 +185,11 @@ class CoActivationTrainer:
             anchor_feature_dim=actual_anchor_feature_dim,
         ).to(device)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+        )
         bce_loss = nn.BCELoss()
         mse_loss = nn.MSELoss()
 
@@ -214,21 +233,27 @@ class CoActivationTrainer:
         # Validation pass
         model.train(False)
         with torch.no_grad():
-            val_c_batch = centroids_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
-            val_af_batch = (
-                anchor_features_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
-                if anchor_features_t is not None
-                else None
-            )
-            r, t = model(
-                val_ce.to(device),
-                val_c_batch.to(device),
-                val_qv.to(device),
-                val_af_batch.to(device) if val_af_batch is not None else None,
-            )
-            tt = val_gk.to(device).float() / actual_n_anchors
-            val_loss = float((bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item())
-        _report(f"Validation loss: {val_loss:.4f}")
+            if val_ce.shape[0] > 0:
+                val_c_batch = centroids_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
+                val_af_batch = (
+                    anchor_features_t.unsqueeze(0).expand(val_ce.shape[0], -1, -1)
+                    if anchor_features_t is not None
+                    else None
+                )
+                r, t = model(
+                    val_ce.to(device),
+                    val_c_batch.to(device),
+                    val_qv.to(device),
+                    val_af_batch.to(device) if val_af_batch is not None else None,
+                )
+                tt = val_gk.to(device).float() / actual_n_anchors
+                val_loss = float((bce_loss(r, val_gm.to(device)) + 0.3 * mse_loss(t, tt)).item())
+            else:
+                val_loss = None
+        _report(
+            "Validation loss: "
+            + (f"{val_loss:.4f}" if val_loss is not None else "unavailable (no validation set)")
+        )
 
         # Save artefacts
         os.makedirs(self.output_dir, exist_ok=True)
@@ -240,9 +265,13 @@ class CoActivationTrainer:
             "centroid_dim": actual_centroid_dim,
             "anchor_feature_dim": actual_anchor_feature_dim,
             "query_frame_dim": 0,  # future training with frame features will set 11
-            "training_examples": int(len(train_idx)),
+            "training_examples": int(N),
             "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
             "final_loss": epoch_losses[-1] if epoch_losses else 0.0,
+            "validation_loss": val_loss,
             "trained_at": datetime.now(timezone.utc).isoformat(),
         }
         version_path = os.path.join(self.output_dir, "coactivation_version.json")
