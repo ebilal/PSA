@@ -98,6 +98,25 @@ def low_usage_pressure(memory: MemoryObject, peers: list) -> float:
     return 1.0 - rank / (n - 1)
 
 
+def low_usage_pressure_map(peers: list) -> dict:
+    """
+    Compute low_usage_pressure for every peer in one pass.
+
+    Returns a dict keyed by memory_object_id. Equivalent to calling
+    low_usage_pressure(m, peers) for each m, but O(n log n) instead of O(n² log n).
+    """
+    n = len(peers)
+    if n < SMALL_ANCHOR_THRESHOLD:
+        return {p.memory_object_id: 0.0 for p in peers}
+    if all(p.pack_count == 0 and p.select_count == 0 for p in peers):
+        return {p.memory_object_id: 0.0 for p in peers}
+    if n == 1:
+        return {peers[0].memory_object_id: 0.0}
+
+    ordered = sorted(peers, key=_usage_sort_key)
+    return {p.memory_object_id: 1.0 - i / (n - 1) for i, p in enumerate(ordered)}
+
+
 def forgetting_score(
     memory: MemoryObject,
     anchor_size: int,
@@ -159,9 +178,7 @@ def prune_anchor(
         now = datetime.now(timezone.utc)
 
     anchor_size = len(memories)
-    pressure_by_id = {
-        m.memory_object_id: low_usage_pressure(m, memories) for m in memories
-    }
+    pressure_by_id = low_usage_pressure_map(memories)
 
     def score(m: MemoryObject) -> float:
         return forgetting_score(
@@ -227,13 +244,10 @@ def enforce_global_cap(
     for m in all_memories:
         by_anchor.setdefault(m.primary_anchor_id, []).append(m)
 
-    anchor_pressure = {
-        m.memory_object_id: low_usage_pressure(m, by_anchor[m.primary_anchor_id])
-        for m in all_memories
-    }
-    tenant_pressure = {
-        m.memory_object_id: low_usage_pressure(m, all_memories) for m in all_memories
-    }
+    anchor_pressure: dict = {}
+    for peers in by_anchor.values():
+        anchor_pressure.update(low_usage_pressure_map(peers))
+    tenant_pressure = low_usage_pressure_map(all_memories)
 
     def score(m: MemoryObject) -> float:
         hybrid = (

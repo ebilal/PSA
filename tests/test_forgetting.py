@@ -5,7 +5,13 @@ from typing import Optional
 
 import pytest
 
-from psa.forgetting import enforce_global_cap, forgetting_score, low_usage_pressure, prune_anchor
+from psa.forgetting import (
+    enforce_global_cap,
+    forgetting_score,
+    low_usage_pressure,
+    low_usage_pressure_map,
+    prune_anchor,
+)
 from psa.memory_object import MemoryObject, MemoryStore, MemoryType
 
 
@@ -150,8 +156,7 @@ def test_score_range_bounds():
     assert lower >= -2.0 - 1e-9
 
 
-def test_prune_anchor_archives_local_worst(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_prune_anchor_archives_local_worst(tmp_path):
     store = MemoryStore(str(tmp_path / "memory.sqlite3"))
     tenant = "t"
     pack_counts = [0, 0, 5, 5, 10, 10, 20, 20, 30, 30, 40, 40]
@@ -165,11 +170,10 @@ def test_prune_anchor_archives_local_worst(tmp_path, monkeypatch):
     assert ids[1] not in surviving
 
 
-def test_global_cap_uses_hybrid_cross_anchor_score(tmp_path, monkeypatch):
+def test_global_cap_uses_hybrid_cross_anchor_score(tmp_path):
     """Two anchors. Anchor A is busy (high pack_counts); anchor B is quiet.
     Cap forces 2 archives. The two least-used memories overall must be
     archived (both from the quiet anchor), not two from the busy anchor."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     store = MemoryStore(str(tmp_path / "memory.sqlite3"))
     tenant = "t"
 
@@ -184,3 +188,16 @@ def test_global_cap_uses_hybrid_cross_anchor_score(tmp_path, monkeypatch):
     assert a_ids[0] in surviving_a
     assert b_ids[0] not in surviving_b
     assert b_ids[1] not in surviving_b
+
+
+def test_low_usage_pressure_map_matches_scalar_form():
+    peers = [make_memory(pack_count=i) for i in range(10)]
+    batch = low_usage_pressure_map(peers)
+    for p in peers:
+        assert batch[p.memory_object_id] == pytest.approx(low_usage_pressure(p, peers))
+
+
+def test_low_usage_pressure_map_small_anchor_all_zero():
+    peers = [make_memory(pack_count=i) for i in range(3)]
+    batch = low_usage_pressure_map(peers)
+    assert all(v == 0.0 for v in batch.values())
