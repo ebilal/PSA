@@ -144,7 +144,8 @@ def prune_anchor(
     now: Optional[datetime] = None,
 ) -> int:
     """
-    If an anchor exceeds its memory budget, archive the lowest-value memories.
+    If an anchor exceeds its memory budget, archive the lowest-value memories
+    using anchor-relative low-usage pressure as the primary disposal signal.
 
     Returns the number of memories archived.
     """
@@ -156,11 +157,20 @@ def prune_anchor(
         now = datetime.now(timezone.utc)
 
     anchor_size = len(memories)
-    scored = sorted(
-        memories,
-        key=lambda m: forgetting_score(m, anchor_size, budget, now),
-        reverse=True,
-    )
+    pressure_by_id = {
+        m.memory_object_id: low_usage_pressure(m, memories) for m in memories
+    }
+
+    def score(m: MemoryObject) -> float:
+        return forgetting_score(
+            m,
+            anchor_size,
+            budget,
+            now,
+            usage_pressure=pressure_by_id[m.memory_object_id],
+        )
+
+    scored = sorted(memories, key=score, reverse=True)
     to_archive = scored[: len(memories) - budget]
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)

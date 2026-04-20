@@ -5,8 +5,8 @@ from typing import Optional
 
 import pytest
 
-from psa.forgetting import forgetting_score, low_usage_pressure
-from psa.memory_object import MemoryObject, MemoryType
+from psa.forgetting import forgetting_score, low_usage_pressure, prune_anchor
+from psa.memory_object import MemoryObject, MemoryStore, MemoryType
 
 
 def make_memory(
@@ -46,6 +46,23 @@ def now_utc() -> datetime:
 
 def old(days: int) -> datetime:
     return now_utc() - timedelta(days=days)
+
+
+def _seed_anchor(store, tenant, anchor_id, *, pack_counts):
+    import numpy as np
+    ids = []
+    for pc in pack_counts:
+        m = make_memory(
+            pack_count=pc,
+            quality_score=0.5,
+            created_at=old(10),
+            primary_anchor_id=anchor_id,
+            tenant_id=tenant,
+        )
+        m.embedding = np.zeros(8, dtype="float32").tolist()
+        store.add(m)
+        ids.append(m.memory_object_id)
+    return ids
 
 
 def test_fixture_builds_memory():
@@ -131,3 +148,18 @@ def test_score_range_bounds():
     strong = make_memory(pack_count=500, quality_score=1.0, created_at=old(10))
     lower = forgetting_score(strong, anchor_size=1, now=now_utc(), usage_pressure=0.0)
     assert lower >= -2.0 - 1e-9
+
+
+def test_prune_anchor_archives_local_worst(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    store = MemoryStore(str(tmp_path / "memory.sqlite3"))
+    tenant = "t"
+    pack_counts = [0, 0, 5, 5, 10, 10, 20, 20, 30, 30, 40, 40]
+    ids = _seed_anchor(store, tenant, 42, pack_counts=pack_counts)
+
+    n_archived = prune_anchor(store, tenant, 42, budget=10, now=now_utc())
+
+    assert n_archived == 2
+    surviving = {m.memory_object_id for m in store.query_by_anchor_for_pruning(tenant, 42)}
+    assert ids[0] not in surviving
+    assert ids[1] not in surviving
