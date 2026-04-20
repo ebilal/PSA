@@ -2,7 +2,7 @@
 
 PSA gives an AI agent a memory that survives beyond a single chat session.
 
-It ingests conversation history and project files, extracts structured memory objects, organizes them into a semantic atlas, and retrieves the most relevant context when the agent needs it again. The system is laptop-first: SQLite for storage, local embeddings, and an optional local LLM. Nothing has to leave your machine unless you explicitly configure a cloud model.
+It ingests conversation history and project files, extracts structured memory objects, organizes them into a semantic atlas, and learns which context regions to activate when the agent needs prior knowledge again. The system is laptop-first: SQLite for storage, local embeddings, and an optional local LLM. Nothing has to leave your machine unless you explicitly configure a cloud model.
 
 PSA works with Claude Code, Codex, and any client that can talk to an MCP server or run session hooks.
 
@@ -17,7 +17,7 @@ Use PSA when you want an agent to remember things like:
 - what failed before and should not be repeated
 - tool quirks, API gotchas, and project-specific conventions
 
-Instead of searching a pile of raw transcripts, PSA stores typed memories such as failures, procedures, tool-use notes, episodes, and semantic facts. That makes retrieval more useful at answer time and lets the packer prioritize high-value context first.
+Instead of searching a pile of raw transcripts, PSA stores typed memories such as failures, procedures, tool-use notes, episodes, and semantic facts. That gives the system better units for context switching and lets the packer prioritize high-value context first.
 
 ## How to think about it
 
@@ -28,7 +28,7 @@ Most memory systems are "embedding search over chunks." PSA is trying to do some
 - it activates relevant anchors first, then scores memories inside them
 - it forgets low-value memories and stale query patterns over time
 
-If you only need one sentence: PSA is a persistent memory layer for AI agents, with typed memories and atlas-based retrieval.
+If you only need one sentence: PSA is a persistent memory layer for AI agents, with typed memories and atlas-based context activation.
 
 ## Installation Guide
 
@@ -261,7 +261,7 @@ The MCP server is still the primary interactive path. Hooks are additive.
 
 ## Core design philosophy
 
-**Memory is not just retrieval.** PSA does not treat memory as a flat list of chunks. It first decides which regions of memory space matter, then scores the memories inside those regions.
+**Memory is context switching, not just retrieval.** PSA does not treat memory as a flat list of chunks to search through. It learns which memory regions should become active for the current task, then gathers the most useful memories from within those regions to build the right context.
 
 **Typed, structured memories.** The unit of storage is a `MemoryObject` with an explicit type: failure, procedural, tool-use, episodic, semantic, or working-derivative. Types affect packing priority, so the system can surface failures before it repeats them.
 
@@ -364,6 +364,39 @@ The `generated_query_patterns` are the anchor's **advertisements** — the queri
 
 **The refined card surface.** Once the atlas is built, `anchor_cards_refined.json` becomes the live surface that the retriever and advertisement ledger read from. Lifecycle-based advertisement decay mutates this refined surface directly. Separate refinement workflows such as `psa atlas refine`, `psa atlas curate`, and `psa atlas promote-refinement` still exist for manual card improvement, but they are not the normal advertisement-decay path.
 
+### Labeling and training
+
+Once an atlas exists, PSA can start learning from real queries. The order matters: first label queries, then train the selector, then optionally train co-activation on top of the selector's full-atlas scores.
+
+**Oracle labeling comes first.** `psa label` turns real user queries into training labels. For each query, PSA runs the retrieval pipeline to get candidate anchors, constructs candidate anchor sets from that shortlist, and asks an LLM which set would actually help answer the query best under the packing budget. This is not a semantic-similarity labeler; it is trying to approximate downstream task utility.
+
+The labeler uses a two-stage LLM process:
+
+1. **Cheap proxy pass** — in one batched call, the LLM scores every candidate set on `SupportCoverage`, `ProceduralUtility`, `NoisePenalty`, and `TokenCost`.
+2. **Expensive task-success pass** — only the top few sets survive to a second pass, where PSA actually packs the context for those anchors and asks the LLM whether that packed context would help produce the right answer.
+3. **Winner persistence** — the best-scoring anchor set becomes the query's oracle label and is written to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl`.
+
+That label file is the foundation for both training stages below.
+
+**Selector training uses pairwise query-anchor examples.** PSA does not train the selector directly on whole anchor sets. Instead, it converts oracle labels into many `(query, anchor_card) -> 0/1` examples:
+
+- positive pairs from anchors that appear in the oracle-winning set
+- easy negatives from random non-winning anchors
+- hard negatives from plausible but wrong anchors
+- adversarial rewrites that paraphrase the original query
+
+The selector data generator intentionally mixes these sources so the model learns both relevance and boundary discipline. The current mix is 60% synthetic/internal positives plus easy negatives, 20% hard negatives, and 20% adversarial rewrites. Those examples are split by query into train/validation sets, then `train_selector.py` fine-tunes the cross-encoder on the actual anchor card text.
+
+**Co-activation training comes after selector training.** The co-activation model is not a replacement for the selector; it sits on top of it. PSA first uses the trained full-atlas scorer to score *every* anchor for each labeled query. It then builds a dense training tensor containing:
+
+- the embedded query vector
+- the selector's full-atlas cross-encoder scores for every anchor
+- a gold mask for the oracle-winning anchors
+- the gold anchor count for that query
+- per-anchor static features such as type distribution, average quality, and normalized memory count
+
+`train_coactivation.py` fits a small transformer on that data so runtime selection can model anchor co-occurrence and choose a query-dependent activation threshold instead of relying on a fixed `max_k`.
+
 ### Query pipeline
 
 The default path (Level 1) scores all anchors in one pass; Level 2 is the legacy retrieval-shortlist fallback.
@@ -401,7 +434,7 @@ synthesizer.py + packer.py
 PackedContext (6000 tokens by default, failure-first ordering)
 ```
 
-**Coactivation adaptive threshold.** When a trained co-activation model exists, the anchor count is not capped by a fixed `max_k`. Instead, the model outputs a per-query sigmoid threshold learned from oracle-labeled co-occurrence patterns. Queries that are narrow and specific activate few anchors; broad compositional queries activate many. The threshold is data-dependent, not a hyperparameter. `max_k` (default 6) only applies on the cosine-selector path (Level 2 without co-activation).
+**Coactivation adaptive threshold.** When a trained co-activation model exists, the anchor count is not capped by a fixed `max_k`. Instead, the model reads the selector's all-anchor score pattern and predicts a per-query threshold learned from oracle-labeled co-occurrence structure. Narrow queries usually keep very few anchors; broader compositional queries can activate many. The threshold is learned from labeled data, not hand-tuned. `max_k` (default 6) only applies on the cosine-selector path (Level 2 without co-activation).
 
 **Packer section atomicity.** The packer fills the token budget by processing memory types in priority order (`FAILURE → PROCEDURAL → TOOL_USE → EPISODIC → SEMANTIC → WORKING_DERIVATIVE`). Each type's memories are collected into a section. If a full section fits within the remaining budget it is included; if it doesn't fit entirely, individual memories within it are trimmed until they fit. This means the priority order is a guarantee about what gets in first, not a guarantee that lower-priority types are excluded — they appear if budget remains.
 
@@ -531,7 +564,7 @@ The nightly lifecycle is idempotent. First run is slow (model loads, possibly re
 
 ### Training
 
-**Oracle labeling.** Before training, each query needs a ground-truth label: which subset of the 24 retrieved anchor candidates actually helped answer it? PSA generates these labels automatically using a two-stage LLM process (`psa label`):
+**Oracle labeling.** Before training, each query needs a ground-truth label: which anchor set would actually help answer it? PSA generates these labels automatically with `psa label`, using the two-stage LLM oracle described above:
 
 1. **Cheap stage** — For each candidate anchor set, the LLM scores four terms in a single batched call (~1 API call per query vs ~23 individual calls): `SupportCoverage`, `ProceduralUtility`, `NoisePenalty`, `TokenCost`.
 2. **Expensive stage** — For the top-3 surviving sets only, the LLM runs `TaskSuccess`: given this packed context, does an agent actually produce the right answer? Expensive because it requires a full generation, so only the strongest candidates reach it.
@@ -542,19 +575,24 @@ OracleScore = 0.45×SupportCoverage + 0.20×TaskSuccess
             + 0.15×ProceduralUtility − 0.10×NoisePenalty − 0.10×TokenCost
 ```
 
-Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl`.
+Labels are persisted to `~/.psa/tenants/{tenant_id}/training/oracle_labels.jsonl` and are reused by both selector training and co-activation training.
 
-**Selector training.** Once enough labels exist, the cross-encoder selector trains on a three-phase curriculum: warm start (random negatives) → hard negatives (anchors that score well but aren't correct) → adversarial rewrites (paraphrased queries). Co-activation training fits a small transformer over oracle-labeled anchor co-occurrence patterns.
+**Selector training.** Once enough labels exist, PSA expands those oracle labels into pairwise `(query, anchor_card)` examples with positives, easy negatives, hard negatives, and adversarial rewrites, then fine-tunes the cross-encoder selector on that data.
+
+**Co-activation training.** After selector training, PSA scores all anchors for each labeled query with the full-atlas scorer and trains a small transformer over those score patterns, the query embedding, and the oracle-winning anchor mask. The result is a learned co-occurrence model that decides how many anchors should activate for a given query.
 
 ```bash
 # 1. Label all available unlabeled queries
 psa label --n-queries 0
 
-# 2. Train the selector (cross-encoder)
-psa train --force
-
-# 3. Also train the co-activation model (separate step, after selector training)
+# 2. Train the selector and then co-activation
 psa train --force --coactivation
+```
+
+If you only want selector training, run:
+
+```bash
+psa train --force
 ```
 
 Use `psa label --n-queries N` when you want a fixed-size batch instead of all available queries. Use `psa label --reset --n-queries 0` to discard existing labels and rebuild from scratch.
