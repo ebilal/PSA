@@ -311,6 +311,41 @@ Once you have ~200+ memories, `psa atlas build` runs spherical k-means (k=224 le
 
 **What an anchor card is.** Each card is an LLM-generated semantic description of one cluster, written at atlas build time by analyzing the memories that fall inside it. It is the anchor's identity — used by the retriever to match incoming queries, by the selector to decide which anchors to open, and by the advertisement-decay system to track which query patterns are still earning attention.
 
+```text
++----------------------------------------------------------------------------------+
+| AnchorCard                                                                       |
++----------------------------------------------------------------------------------+
+| anchor_id: 42                                                                    |
+| name: "schema-decisions"                                                         |
+|                                                                                  |
+| meaning:                                                                         |
+|   Covers schema choices, migration tradeoffs, and why the project settled        |
+|   on Postgres.                                                                   |
+|                                                                                  |
+| memory_types: ["semantic", "procedural"]                                         |
+| include_terms: ["migration", "schema", "postgres", "ddl"]                        |
+| exclude_terms: ["ui", "css", "frontend"]                                         |
+|                                                                                  |
+| prototype_examples:                                                              |
+|   - JWT setup                                                                    |
+|   - Postgres migration plan                                                      |
+|   - Backfill strategy for user table                                             |
+|                                                                                  |
+| near_but_different:                                                              |
+|   - API auth middleware                                                          |
+|   - Admin UI workflow                                                            |
+|                                                                                  |
+| generated_query_patterns  <-- advertisements this anchor uses to attract queries |
+|   - What did we decide about migrations?                                         |
+|   - Why Postgres instead of SQLite?                                              |
+|   - How do tokens expire?                                                        |
++----------------------------------------------------------------------------------+
+
+Retriever: uses the full card text for BM25 + dense anchor matching
+Selector: scores the stable card text to decide which anchors to open
+Advertisement decay: reinforces or prunes stale generated_query_patterns over time
+```
+
 A card contains:
 
 | Field | Purpose |
