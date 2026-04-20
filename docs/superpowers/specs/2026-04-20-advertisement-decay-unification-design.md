@@ -84,6 +84,12 @@ Fresh installs and default config should behave as follows:
 - advertisement removal is enabled by default
 - `trace_queries` remains required because ledger accumulation depends on trace-first success
 
+This must be true in every default source the product exposes:
+
+- the runtime defaults in `AdvertisementDecayConfig`
+- the generated `~/.psa/config.json` written by config initialization
+- the documented install/config examples in `README.md`
+
 This means a default system will:
 
 - collect advertisement signals during normal searches
@@ -106,6 +112,13 @@ It is no longer a prerequisite for enabling automatic removals.
 
 Since advertisements are cheap and intentionally written, the system should bias toward keeping them unless there is sustained evidence they are stale.
 
+A core policy constraint is:
+
+- dormancy alone is not enough to remove a pattern
+- lack of recent use is weak evidence, not dispositive evidence
+- automated removal requires sustained negative evidence, not just elapsed time
+- absence of queries for a niche but valid pattern must bias toward retention
+
 Conservatism should come from:
 
 - longer grace periods
@@ -119,6 +132,7 @@ The product guarantee should be:
 - stale patterns disappear automatically
 - borderline patterns stay longer than memories would
 - no human intervention is needed
+- long-unused but still plausible patterns are retained unless the system accumulates negative evidence against them
 
 ## Detailed Design
 
@@ -132,6 +146,11 @@ The Stage 2 design is already the correct operational shape:
 - direct mutation of the refined card surface
 
 This path should remain and become the sole supported implementation.
+
+Important behavioral constraint:
+
+- exponential decay and age are ranking signals for risk, not sufficient removal conditions by themselves
+- actual removal requires the negative-evidence threshold (`sustained_cycles`) to be crossed after grace and floor/shield checks
 
 ### B. Remove Stage 1 as an advertisement product feature
 
@@ -168,12 +187,12 @@ Recommendation:
 
 ### D. Keep provenance metadata only if it serves autonomous policy
 
-`pattern_metadata.json` currently exists to support provenance and pinning. This should be retained only if it materially supports the single automated policy.
+`pattern_metadata.json` currently exists to support provenance and pinning. It remains part of the single automated policy.
 
-Recommended rule:
+Required rule:
 
-- keep provenance timestamps/source metadata if needed for migration or diagnostics
-- keep `pinned` only if it is treated as a narrow expert override, not as part of a review workflow
+- keep provenance timestamps/source metadata for migration and diagnostics
+- keep `pinned` as a narrow expert override, not as part of a review workflow
 - do not keep metadata solely to support candidate-file promotion
 
 If the metadata file remains, it becomes passive policy/provenance state, not part of a separate advertisement-decay mode.
@@ -182,16 +201,23 @@ If the metadata file remains, it becomes passive policy/provenance state, not pa
 
 The new single default-on path should use safer defaults than the current Stage 2 rollout assumed.
 
-Directional changes:
+Fixed changes:
 
 - `tracking_enabled`: default `true`
 - `removal_enabled`: default `true`
-- `grace_days`: increase above 21 days
-- `sustained_cycles`: increase above 14
-- `min_patterns_floor`: increase if needed so anchors retain a healthy baseline
-- shadow policy: keep only if useful for diagnostics, not rollout gating
+- `tau_days`: keep `45`
+- `grace_days`: change from `21` to `30`
+- `sustained_cycles`: change from `14` to `21`
+- `min_patterns_floor`: change from `3` to `5`
+- shadow policy: retain for diagnostics only; it does not gate whether automated removal is enabled
 
-Exact numbers should be finalized during implementation after checking the existing test assumptions and lifecycle cadence, but the policy should be clearly more conservative than current defaults.
+These values are part of the product behavior, not implementation-time tuning. The implementation should update code defaults, generated config, tests, and README to match these exact values.
+
+Interpretation requirement:
+
+- `tau_days` and `grace_days` may reduce ledger confidence over time
+- but a pattern is not removable solely because enough time passed
+- removal still requires sustained negative cycles plus all shared protections passing
 
 ### F. Lifecycle semantics
 
@@ -220,9 +246,15 @@ README changes:
 
 CLI changes:
 
-- remove `psa atlas decay` from help and dispatch if it exists only for advertisement decay
+- remove `psa atlas decay` from help, dispatch, and supported CLI surface
 - keep `psa advertisement status|diff|rebuild-ledger|purge` if they remain useful for introspection and maintenance
 - update help text for `psa lifecycle run` and config defaults
+
+This is an explicit product decision, not an implementation choice:
+
+- `psa atlas decay` is removed as a user-facing command
+- tests dedicated to `psa atlas decay` are removed
+- `psa atlas promote-refinement` stays only for non-advertisement refinement flows such as `refine` and `curate`
 
 ## Migration
 
@@ -242,6 +274,18 @@ Migration behavior must be safe and automatic:
 - if a tenant explicitly disabled advertisement decay, their explicit config should still win
 - existing ledger rows should continue to work
 - existing metadata should be tolerated
+- environment variables are not part of the supported configuration model for this feature; the canonical source of truth is `~/.psa/config.json`
+
+### Supported configuration model
+
+The supported operator-facing configuration surface for advertisement decay is `~/.psa/config.json`.
+
+Implementation requirements:
+
+- all advertisement-decay settings used in normal operation must be represented in `~/.psa/config.json`
+- the installation guide in `README.md` must document the full JSON block needed to run the system
+- environment-variable overrides for advertisement-decay settings are removed; the JSON config is the only supported configuration surface
+- documentation must treat the JSON config as authoritative
 
 ### Candidate artifacts
 
@@ -254,10 +298,12 @@ Tests must cover the new product contract, not just preserve old behavior.
 Required test coverage:
 
 - config defaults now produce tracking enabled and removal enabled
+- config initialization writes the advertisement-decay JSON block with the new default values
 - lifecycle applies advertisement decay by default when using default config
 - lifecycle still respects explicit config disablement
 - removal path does not depend on Stage 1 helper imports
-- CLI no longer advertises `psa atlas decay` as a supported advertisement-decay path
+- CLI no longer exposes `psa atlas decay`
+- README documents the complete JSON config required for a full install
 - README/config docs match the new defaults and single-mechanism model
 
 Regression coverage to retain:
@@ -265,6 +311,7 @@ Regression coverage to retain:
 - trace-first ordering for ledger writes
 - graceful behavior when trace is disabled but tracking is requested
 - min-pattern-floor and shielding protections
+- dormancy alone does not create removal candidates
 - rebuild-ledger and purge maintenance commands
 
 ## Risks
@@ -292,11 +339,19 @@ This work is complete when all of the following are true:
 - user-facing docs no longer describe advertisement decay as a staged rollout with manual sign-off
 - tests enforce the new default-on and single-mechanism behavior
 
-## Open Implementation Choices
+## Final Decisions
 
-These should be resolved in the implementation plan:
+These decisions are fixed for implementation:
 
-- final conservative values for `grace_days`, `sustained_cycles`, and `min_patterns_floor`
-- whether to keep shadow-policy reporting as diagnostics
-- whether to keep `pinned` metadata as an expert override
-- whether to delete Stage 1 source files immediately or first remove only the supported CLI/docs surface
+- advertisement decay is default-on in runtime defaults, generated config, and README examples
+- the supported configuration surface is `~/.psa/config.json`
+- `tracking_enabled=true`
+- `removal_enabled=true`
+- `tau_days=45`
+- `grace_days=30`
+- `sustained_cycles=21`
+- `min_patterns_floor=5`
+- shadow-policy reporting remains as diagnostics only
+- `pinned` metadata remains as a narrow expert override and is not tied to any human review workflow
+- `psa atlas decay` is removed from the supported CLI surface and its dedicated tests are removed
+- `psa atlas promote-refinement` remains only for non-advertisement refinement flows
