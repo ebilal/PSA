@@ -32,7 +32,7 @@ If you only need one sentence: PSA is a persistent memory layer for AI agents, w
 
 ## Installation Guide
 
-This is the full setup path for an interactive, continuously maintained PSA install. If you only want the minimum path to a first query, you can stop after Step 5.
+This is the full setup path for a PSA install that can ingest data, answer queries, and maintain itself over time through the lifecycle job. If you only want the minimum path to a first query, you can stop after Step 6.
 
 ### 1. Install dependencies
 
@@ -62,7 +62,36 @@ If you plan to train selector models, also install the training extras:
 uv sync --extra training
 ```
 
-### 2. Choose an LLM backend
+### 2. Create the PSA config
+
+PSA can run with just defaults, but the install guide should leave you with a complete working setup, not an implicit one. Create `~/.psa/config.json` and make the lifecycle behavior explicit:
+
+```json
+{
+  "tenant_id": "default",
+  "psa_mode": "primary",
+  "token_budget": 6000,
+  "max_memories": 50000,
+  "anchor_memory_budget": 100,
+  "trace_queries": true,
+  "nightly_hour": 0,
+  "advertisement_decay": {
+    "tracking_enabled": true,
+    "removal_enabled": true,
+    "tau_days": 45,
+    "grace_days": 21,
+    "sustained_cycles": 14
+  }
+}
+```
+
+Why this matters:
+
+- `trace_queries` is the source of truth for query activity and is required for advertisement-ledger accumulation.
+- the lifecycle job handles both memory forgetting and advertisement decay
+- without an explicit config file, the current code falls back to defaults that are harder to understand from the outside
+
+### 3. Choose an LLM backend
 
 By default, PSA expects a local model through Ollama for memory extraction and oracle labeling.
 
@@ -82,7 +111,7 @@ If you want to use a cloud model instead, create or edit `~/.psa/llm.json`:
 
 Set `"provider": "local"` if you want PSA to stay fully local.
 
-### 3. Ingest some data
+### 4. Ingest some data
 
 You need memories before PSA can answer anything useful.
 
@@ -96,7 +125,7 @@ uv run psa mine ~/projects/my_app
 
 Re-running `mine` is safe. PSA deduplicates against `raw_sources`.
 
-### 4. Build the atlas
+### 5. Build the atlas
 
 Once you have roughly 200 memories, build the atlas:
 
@@ -109,7 +138,7 @@ uv run psa atlas health
 
 If the corpus is too small, `psa atlas build` will fail with `AtlasCorpusTooSmall`. Mine more data, then rerun it.
 
-### 5. Run your first query
+### 6. Run your first query
 
 ```bash
 uv run psa search "how does the atlas work"
@@ -121,7 +150,7 @@ For a deeper debug view of what happened during retrieval:
 uv run psa inspect "how does the atlas work" --verbose
 ```
 
-### 6. Label queries and train the selector
+### 7. Label queries and train the selector
 
 For full Level 1 behavior, you should generate oracle labels and train the selector models.
 
@@ -150,7 +179,7 @@ The current training defaults were selected from a bounded local sweep on real t
 
 If you are still developing locally and do not have enough labels yet, you can defer this step. PSA will continue to work in the baseline retrieval mode.
 
-### 7. Install the lifecycle job
+### 8. Install the lifecycle job
 
 PSA is designed to keep itself healthy over time. Install the nightly lifecycle job once the initial atlas is working.
 
@@ -165,6 +194,19 @@ You can also run the lifecycle manually:
 uv run psa lifecycle run
 ```
 
+On a healthy install, lifecycle is where the system keeps itself current:
+
+- memory forgetting archives low-value memories and enforces caps
+- advertisement decay prunes stale `generated_query_patterns` on anchor cards
+- atlas rebuilds, labeling, and retraining run only when health signals warrant them
+
+Use these commands to inspect the advertisement side of lifecycle:
+
+```bash
+uv run psa advertisement status
+uv run psa advertisement diff
+```
+
 ## First Week Checklist
 
 If this is your first time using PSA, this is the practical path:
@@ -175,7 +217,7 @@ If this is your first time using PSA, this is the practical path:
 4. Use `uv run psa search "..."` for normal lookups.
 5. Use `uv run psa inspect "..." --verbose` when a retrieval looks wrong.
 6. Generate labels and train the selector once you have enough real queries.
-7. Install the lifecycle job so pruning, rebuilds, and retraining can run automatically.
+7. Install the lifecycle job so memory forgetting and advertisement decay can run automatically.
 8. Add the MCP server once the CLI flow makes sense and you want low-latency interactive use.
 
 ## Using With Claude
@@ -285,7 +327,7 @@ The `generated_query_patterns` are the anchor's **advertisements** — the queri
 
 **Anchor identity is durable across rebuilds.** When `psa atlas build` runs again, new clusters are matched to existing anchor IDs by centroid similarity. Only genuinely novel clusters get new IDs. This means trained selector models and ledger history stay valid across rebuilds.
 
-**The refined card surface.** Once the atlas is built, operators (or the decay system) can improve cards without a full rebuild. `anchor_cards_refined.json` is the live surface that the retriever and ledger read from. Stage 1 decay produces a candidate file for operator review; `psa atlas promote-refinement` swaps it in after a SHA-256 hash-gate check. Stage 2 decay can mutate it directly (when `removal_enabled=true`).
+**The refined card surface.** Once the atlas is built, `anchor_cards_refined.json` becomes the live surface that the retriever and advertisement ledger read from. Lifecycle-based advertisement decay mutates this refined surface directly. Separate refinement workflows such as `psa atlas refine`, `psa atlas curate`, and `psa atlas promote-refinement` still exist for manual card improvement, but they are not the normal advertisement-decay path.
 
 ### Query pipeline
 
@@ -347,7 +389,7 @@ PackedContext (6000 tokens by default, failure-first ordering)
 Fast path:
   1. Mine new sessions (dedup against raw_sources)
   2. Clean up archived memories (hard-delete > 90 days old)
-  3. Advertisement decay pass (stage 2, if tracking_enabled)
+  3. Advertisement decay pass (ledger-based pattern pruning)
   4. Prune overloaded anchors to per-anchor budget
   5. Enforce global memory cap (default 50k)
 
@@ -377,17 +419,17 @@ An anchor card is not the same as an advertisement. The **card** is the anchor's
 
 Anchor cards accumulate `generated_query_patterns` over time. Those patterns are the "ads" a card uses to attract queries. Stale or misleading ads should fade.
 
-**Stage 1 (shipped, operator-driven).** `psa atlas decay` runs an R1 substring reinforcement check against the trace log, produces a candidate file, operator reviews, then promotes via `psa atlas promote-refinement`. Protections: P1 low-activation shield, P3 pinned-pattern exemption. Nothing mutates live state until promotion.
+Operationally, advertisement decay belongs to the lifecycle path, not as an afterthought:
 
-**Stage 2 (shipped, default-off).** A persistent `pattern_ledger` SQLite table with exponential decay, inline per-query attribution via BM25 argmax, and a shadow-policy counterfactual. When `advertisement_decay.tracking_enabled=true`, every `psa search` writes ledger signals trace-first (trace → ledger; ledger skipped if trace fails). When `removal_enabled=true`, `psa lifecycle run` mutates `anchor_cards_refined.json` directly — but **never** without explicit operator sign-off after calibration.
+- every `psa search` can append per-pattern signals into the persistent `pattern_ledger` when `advertisement_decay.tracking_enabled=true`
+- `psa lifecycle run` decays ledger state, evaluates stale patterns, and can remove them from `anchor_cards_refined.json` when `advertisement_decay.removal_enabled=true`
+- `psa advertisement status` and `psa advertisement diff` are the inspection surface for that lifecycle state
 
-The **shadow-policy counterfactual** means two decay policies run in parallel for every pattern: policy B (primary, τ=45d) that may remove patterns when `removal_enabled=true`, and policy A (shadow, stricter) that only logs what it would do. `psa advertisement diff` shows the disagreement — patterns the shadow would remove that the primary wouldn't, and vice versa. This disagreement rate is the calibration signal: if B and A largely agree, removal can be enabled with confidence.
+The ledger uses exponential decay plus per-pattern attribution. A shadow-policy counterfactual also runs so you can inspect how a stricter policy would behave, but the primary operational model is still the lifecycle-integrated one above.
 
 `tracking_enabled` and `trace_queries` are coupled: the ledger write only fires when trace succeeds (trace → ledger ordering). Setting `tracking_enabled=true` without `trace_queries=true` is a no-op — the config loader enforces this at load time.
 
-Stage 1 and stage 2 coexist via a refined-hash gate: candidate meta records the refined file's SHA-256 at generation time, and `psa atlas promote-refinement` refuses stale candidates whose recorded hash no longer matches.
-
-Current rollout: tracking is **on** in the default tenant's config, removal is **off**. See [Current rollout status](#current-rollout-status).
+There are also manual card-refinement commands elsewhere in the product, but for a normal installation you should think of advertisement decay as part of lifecycle in the same way memory forgetting is.
 
 ---
 
@@ -491,33 +533,17 @@ psa benchmark longmemeval score --results <path>     # score answers
 psa benchmark longmemeval oracle-label --results <path> --mode fast
 ```
 
-See [Current rollout status](#current-rollout-status) for the current LongMemEval issue.
+LongMemEval currently has a known regression path unrelated to advertisement decay; treat benchmark issues separately from lifecycle behavior.
 
-### Advertisement calibration flow
+### Advertisement maintenance
 
-Stage 2 advertisement decay is opt-in. To run in tracking-only mode (safe, no live state mutation):
+Advertisement decay is maintained through normal query traffic plus lifecycle. The commands you actually need day-to-day are:
 
 ```bash
-# 1. Enable tracking in ~/.psa/config.json (see Configuration section)
-#    "advertisement_decay": { "tracking_enabled": true, "removal_enabled": false }
-#    Requires "trace_queries": true (the default).
-
-# 2. Run normal queries for 1–2 weeks. Every psa search writes ledger signals inline.
-
-# 3. Periodically inspect
-psa advertisement status    # ledger distribution, grace, at-risk, shadow-only-at-risk
-psa advertisement diff      # B-vs-A counterfactual (primary vs shadow policy)
-
-# 4. Reassess after grace expires (default 21 days) and shadow data accumulates.
-#    Reassessment inputs: shadow agreement rate, count of removal-eligible patterns,
-#    5–10 manually inspected would-be removals, recommendation.
-
-# 5. Only then — and only with explicit sign-off — flip removal_enabled=true.
-#    Nightly lifecycle will then start removing patterns from anchor_cards_refined.json.
-
-# Maintenance
-psa advertisement rebuild-ledger --dry-run  # regenerate ledger from trace (dry-run)
-psa advertisement purge --older-than-days 90  # hard-delete archived rows past retention
+psa advertisement status                     # ledger distribution + grace/risk counts
+psa advertisement diff                       # compare primary vs shadow policy
+psa advertisement rebuild-ledger --dry-run   # regenerate ledger from trace (dry-run)
+psa advertisement purge --older-than-days 90 # hard-delete archived rows past retention
 ```
 
 ---
@@ -556,7 +582,7 @@ psa advertisement purge --older-than-days 90  # hard-delete archived rows past r
 | `psa atlas rebuild` | Force rebuild (preserves anchor identity) |
 | `psa atlas refine --miss-log PATH` | Stage 1 ngram refinement from miss log |
 | `psa atlas curate` | Stage 1 production-signal curation (oracle + fingerprints) |
-| `psa atlas decay` | Stage 1 advertisement forgetting dry-run/candidate |
+| `psa atlas decay` | Legacy/manual advertisement candidate flow; not part of the normal lifecycle path |
 | `psa atlas promote-refinement` | Promote the current candidate to live refined cards |
 
 All atlas commands take `--tenant <name>` (default: `default`).
@@ -596,7 +622,7 @@ All atlas commands take `--tenant <name>` (default: `default`).
 
 Uses the dedicated `longmemeval_bench` tenant.
 
-### Advertisement decay (stage 2)
+### Advertisement decay
 
 | Command | Purpose |
 |---|---|
@@ -633,13 +659,13 @@ claude mcp add psa -- uv run --project /path/to/memnexus python -m psa.mcp_serve
 
 Exposed tools: `psa_atlas_search`, `psa_store_memory`, `psa_status`, `psa_atlas_status`, `psa_atlas_health`, `psa_list_anchors`, `psa_rebuild_atlas`, `psa_search`, `psa_check_duplicate`.
 
-`psa_atlas_search` is the primary tool — it runs the full Level 1 pipeline (embed → anchor scoring → selector → packer) and returns packed context. Stage 2 advertisement tracking fires inline if `tracking_enabled=true`. Atlas reloads triggered by `psa advertisement` removals are picked up automatically between queries without restarting the server.
+`psa_atlas_search` is the primary tool — it runs the full Level 1 pipeline (embed → anchor scoring → selector → packer) and returns packed context. Advertisement tracking fires inline if `tracking_enabled=true`. Atlas reloads triggered by `psa advertisement` removals are picked up automatically between queries without restarting the server.
 
 ---
 
 ## Operational guidance
 
-Which commands are safe to run, which mutate live state, which are research-only, and what's default-off.
+Which commands are safe to run, which mutate live state, which are research-only, and which settings you still need to opt into explicitly.
 
 ### Safe (read-only, no state mutation)
 
@@ -667,12 +693,12 @@ Any of these can run against your live `default` tenant without side effects (be
 | `psa migrate` | Writes memories from ChromaDB palace; source palace untouched |
 | `psa repair` | Rebuilds palace vector index |
 
-### Default-off / opt-in
+### Explicitly configured / opt-in
 
 | Setting | Default | Impact |
 |---|---|---|
-| `advertisement_decay.tracking_enabled` | `false` | When off, `psa search` skips all ledger writes — zero overhead |
-| `advertisement_decay.removal_enabled` | `false` | When off, `psa lifecycle run` decays/evaluates but never mutates `anchor_cards_refined.json` |
+| `advertisement_decay.tracking_enabled` | `false` in code defaults | The installation guide above recommends setting this to `true` so query traffic updates the advertisement ledger |
+| `advertisement_decay.removal_enabled` | `false` in code defaults | The installation guide above recommends setting this to `true` if you want fully automated lifecycle-based advertisement decay |
 | Cloud LLM | off (uses local Ollama) | Set `provider: "cloud"` in `~/.psa/llm.json` to enable |
 
 ### Research-only
@@ -697,8 +723,9 @@ These paths exist but are not recommended for day-to-day use:
 | `max_memories` | `50000` | Global memory cap |
 | `anchor_memory_budget` | `100` | Per-anchor memory limit |
 | `trace_queries` | `true` | Emit per-query trace to `query_trace.jsonl` |
-| `advertisement_decay.tracking_enabled` | `false` | Stage 2 ledger writes (requires `trace_queries=true`) |
-| `advertisement_decay.removal_enabled` | `false` | Stage 2 live removals in lifecycle |
+| `nightly_hour` | `0` | Hour (0-23) used by the installed lifecycle job |
+| `advertisement_decay.tracking_enabled` | `false` in code defaults | Advertisement ledger writes during `psa search` (requires `trace_queries=true`) |
+| `advertisement_decay.removal_enabled` | `false` in code defaults | Advertisement removals during `psa lifecycle run` |
 | `advertisement_decay.tau_days` | `45` | Exponential decay half-life |
 | `advertisement_decay.grace_days` | `21` | Fresh-pattern grace period |
 | `advertisement_decay.sustained_cycles` | `14` | Primary removal threshold |
@@ -717,22 +744,6 @@ See env var overrides: `PSA_MODE`, `PSA_TENANT_ID`, `PSA_AD_DECAY_TRACKING_ENABL
 | `local_model` | Local model (default `"qwen2.5:7b"`) |
 | `local_endpoint` | Ollama endpoint |
 | `local_fallback` | If `true`, falls back to local when cloud fails |
-
----
-
-## Current rollout status
-
-As of 2026-04-18:
-
-- **Stage 2 advertisement-forgetting is merged on `main`** (merge `5776cfb`, Level 1 integration fix `c82f2a8`).
-- **Tracking is ON** in the `default` tenant's `~/.psa/config.json` (operator-set; the code default is `false`). Every `psa search` writes ledger signals inline.
-- **Removal is OFF** and stays off until calibration completes. Re-enabling requires explicit sign-off plus evidence: shadow agreement rate, count of removal-eligible patterns, and 5–10 manually inspected would-be removals.
-- **LongMemEval regression path is blocked** by a pre-existing model-dimensionality mismatch in the selector artifact (`linear(): input and weight.T shapes cannot be multiplied (65x11 and 16x32)`). Same error fires with stage 2 disabled, so it's unrelated to stage 2. Treated as separate follow-up work; not the gate for stage 2 rollout.
-
-**Tripwires to watch** during the calibration window:
-- `psa log` showing `Advertisement decay pass failed` or `AdvertisementDecayConfigError`
-- `psa advertisement status` showing `n_active=0` after real query activity (means the inline wiring broke)
-- Unexpected shadow disagreement patterns in `psa advertisement diff`
 
 ---
 
@@ -761,9 +772,9 @@ psa/
   mcp_server.py             # MCP server for Claude Code
   config.py                 # MempalaceConfig
   health.py                 # AtlasHealth monitor
-  advertisement/            # Stage 1 + Stage 2 advertisement forgetting
-    metadata.py, reinforcement.py, decay.py, writer.py   # Stage 1
-    config.py, attribution.py, ledger.py, reload.py, cli.py  # Stage 2
+  advertisement/            # Advertisement decay + ledger + maintenance CLI
+    metadata.py, reinforcement.py, decay.py, writer.py
+    config.py, attribution.py, ledger.py, reload.py, cli.py
   training/
     oracle_labeler.py, data_generator.py, data_split.py
     train_selector.py, train_coactivation.py, train_memory_scorer.py
