@@ -35,10 +35,12 @@ def _make_card(anchor_id: int, is_novelty: bool = False, name: str = "anchor") -
     )
 
 
-def _make_atlas(cards) -> Atlas:
+def _make_atlas(cards, build_skew: float = 0.0) -> Atlas:
     atlas = MagicMock(spec=Atlas)
     atlas.version = 1
     atlas.cards = cards
+    atlas.stats = MagicMock()
+    atlas.stats.build_utilization_skew = build_skew
     return atlas
 
 
@@ -199,6 +201,42 @@ def test_check_health_high_skew():
     report = monitor.check_health(atlas, store, tenant_id="default")
 
     assert report.utilization_skew > UTILIZATION_SKEW_THRESHOLD
+    assert report.should_rebuild is True
+    assert any("utilization_skew" in r for r in report.rebuild_reasons)
+
+
+def test_check_health_skew_matches_build_time_no_rebuild():
+    """High absolute skew is natural for a real corpus. If current skew matches
+    build-time skew, it reflects the data distribution, not atlas decay."""
+    cards = [_make_card(i) for i in range(8)]
+    counts = {cards[0].anchor_id: 100}
+    for c in cards[1:]:
+        counts[c.anchor_id] = 1
+    # Learned counts are [100, 1, 1, 1, 1, 1, 1, 1]; median=1; skew=100.
+    atlas = _make_atlas(cards, build_skew=100.0)
+    store = _make_store(counts)
+
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="default")
+
+    assert report.utilization_skew == pytest.approx(100.0)
+    assert report.should_rebuild is False
+    assert not any("utilization_skew" in r for r in report.rebuild_reasons)
+
+
+def test_check_health_skew_drifted_beyond_build_triggers_rebuild():
+    """If current skew > 1.5× the build-time baseline, clustering has decayed."""
+    cards = [_make_card(i) for i in range(8)]
+    counts = {cards[0].anchor_id: 100}
+    for c in cards[1:]:
+        counts[c.anchor_id] = 1
+    # Current skew is 100. Build-time was 20 → drift trigger 30 < 100.
+    atlas = _make_atlas(cards, build_skew=20.0)
+    store = _make_store(counts)
+
+    monitor = AtlasHealthMonitor()
+    report = monitor.check_health(atlas, store, tenant_id="default")
+
     assert report.should_rebuild is True
     assert any("utilization_skew" in r for r in report.rebuild_reasons)
 

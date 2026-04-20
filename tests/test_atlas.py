@@ -273,6 +273,27 @@ def test_atlas_save_and_load(tmp_dir, small_k):
     assert loaded.tenant_id == "test"
     assert loaded.anchor_index.size == 12
     assert loaded.stats.n_memories == 80
+    assert loaded.stats.build_utilization_skew >= 1.0
+
+
+def test_atlas_load_tolerates_missing_build_skew(tmp_dir, small_k):
+    """Old atlas_meta.json files predate build_utilization_skew — load must default to 0.0."""
+    import json as _json
+
+    store = _make_store_with_memories(tmp_dir, n=80, dim=64)
+    builder = AtlasBuilder(store=store, tenant_id="test")
+    atlas_dir = os.path.join(tmp_dir, "atlas_v1")
+    builder.build_atlas(version=1, output_dir=atlas_dir)
+
+    meta_path = os.path.join(atlas_dir, "atlas_meta.json")
+    with open(meta_path) as f:
+        meta = _json.load(f)
+    meta["stats"].pop("build_utilization_skew", None)
+    with open(meta_path, "w") as f:
+        _json.dump(meta, f)
+
+    loaded = atlas_mod.Atlas.load(atlas_dir)
+    assert loaded.stats.build_utilization_skew == 0.0
 
 
 # ── AtlasManager ──────────────────────────────────────────────────────────────

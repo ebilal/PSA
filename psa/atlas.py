@@ -71,6 +71,7 @@ class AtlasStats:
     max_cluster_size: int
     stability_score: float  # fraction of memories with consistent assignment across seeds
     built_at: str
+    build_utilization_skew: float = 0.0  # max/median learned-cluster size at build time
 
 
 @dataclass
@@ -160,6 +161,7 @@ class Atlas:
                 "max_cluster_size": self.stats.max_cluster_size,
                 "stability_score": self.stats.stability_score,
                 "built_at": self.stats.built_at,
+                "build_utilization_skew": self.stats.build_utilization_skew,
             },
         }
         with open(os.path.join(self.anchor_dir, "atlas_meta.json"), "w") as f:
@@ -721,6 +723,20 @@ class AtlasBuilder:
 
         # Step 6: Compute stats
         cluster_sizes = [len(cluster_memories.get(i, [])) for i in range(k)]
+        build_skew = 1.0
+        if len(cluster_sizes) >= 2:
+            sorted_sizes = sorted(cluster_sizes)
+            mid = len(sorted_sizes) // 2
+            median = (
+                (sorted_sizes[mid - 1] + sorted_sizes[mid]) / 2
+                if len(sorted_sizes) % 2 == 0
+                else sorted_sizes[mid]
+            )
+            max_count = sorted_sizes[-1]
+            if median > 0:
+                build_skew = max_count / median
+            elif max_count > 0:
+                build_skew = float(max_count)
         stats = AtlasStats(
             n_memories=len(memories),
             n_anchors_learned=k,
@@ -730,6 +746,7 @@ class AtlasBuilder:
             max_cluster_size=int(np.max(cluster_sizes)) if cluster_sizes else 0,
             stability_score=stability,
             built_at=datetime.now(timezone.utc).isoformat(),
+            build_utilization_skew=build_skew,
         )
 
         # Step 7: Update anchor assignments in memory store (single transaction)

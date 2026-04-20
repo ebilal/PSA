@@ -31,7 +31,8 @@ logger = logging.getLogger("psa.health")
 # ── Rebuild thresholds ────────────────────────────────────────────────────────
 
 NOVELTY_RATE_THRESHOLD = 0.08  # >8% novelty → rebuild
-UTILIZATION_SKEW_THRESHOLD = 3.0  # max/median utilization > 3× → rebuild
+UTILIZATION_SKEW_THRESHOLD = 3.0  # absolute floor — skew below this never triggers rebuild
+UTILIZATION_SKEW_DRIFT_MULTIPLIER = 1.5  # current > 1.5× build-time skew → rebuild
 
 
 # ── HealthReport ──────────────────────────────────────────────────────────────
@@ -189,7 +190,15 @@ class AtlasHealthMonitor:
             rebuild_reasons.append(
                 f"novelty_rate {novelty_rate:.1%} > {NOVELTY_RATE_THRESHOLD:.0%}"
             )
-        if utilization_skew > UTILIZATION_SKEW_THRESHOLD:
+        build_skew = atlas.stats.build_utilization_skew
+        if build_skew > 0:
+            drift_trigger = build_skew * UTILIZATION_SKEW_DRIFT_MULTIPLIER
+            if utilization_skew > drift_trigger and utilization_skew > UTILIZATION_SKEW_THRESHOLD:
+                rebuild_reasons.append(
+                    f"utilization_skew {utilization_skew:.2f}x > {drift_trigger:.2f}x "
+                    f"(build-time {build_skew:.2f}x)"
+                )
+        elif utilization_skew > UTILIZATION_SKEW_THRESHOLD:
             rebuild_reasons.append(
                 f"utilization_skew {utilization_skew:.2f}x > {UTILIZATION_SKEW_THRESHOLD:.0f}x"
             )
