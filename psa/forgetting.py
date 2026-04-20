@@ -102,13 +102,13 @@ def forgetting_score(
     target_per_anchor: int = ANCHOR_MEMORY_BUDGET,
     now: Optional[datetime] = None,
     *,
-    low_usage_pressure: float = 0.0,
+    usage_pressure: float = 0.0,
 ) -> float:
     """
     Compute a forgetting score for a memory. Higher = more disposable.
 
     Four terms, no tunable weights:
-      + low_usage_pressure:   rank-based, precomputed by caller (range [0, 1])
+      + usage_pressure:   rank-based, precomputed by caller (range [0, 1])
       + crowding pressure:    min(overflow / target, 1.0)
       - usage protection:     min(log(1 + pack_count) / 3.0, 1.0)
       - quality protection:   quality_score
@@ -126,7 +126,7 @@ def forgetting_score(
     usage = log(1 + memory.pack_count) / 3.0
 
     return (
-        low_usage_pressure
+        usage_pressure
         + min(overflow, 1.0)
         - min(usage, 1.0)
         - memory.quality_score
