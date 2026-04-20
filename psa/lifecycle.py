@@ -618,28 +618,21 @@ def advertisement_decay_pass(
         return {"stage": "advertisement_decay", "skipped": True}
 
     if shielded_anchor_fn is None:
-        # Default shielded_fn is the stage 1 P1 helper. The stage 1 module
-        # exposes this via decay.shielded_anchors when available; otherwise
-        # default to no shielding.
         def shielded_anchor_fn(tenant_id, anchor_ids):
-            try:
-                from psa.advertisement.decay import shielded_anchors as _sh
+            from psa.advertisement.guards import shielded_anchor_ids
 
-                return _sh(tenant_id, anchor_ids)
-            except (ImportError, AttributeError, TypeError):
-                return set()
+            return shielded_anchor_ids(
+                tenant_id=tenant_id,
+                atlas=atlas_or_loader,
+                anchor_ids=anchor_ids,
+            )
 
     if pinned_fn is None:
-        # Default pinned_fn reads from stage 1's pattern_metadata.json.
         def pinned_fn(anchor_id, pattern_text):
-            try:
-                from psa.advertisement.metadata import load_metadata, metadata_key
+            from psa.advertisement.guards import is_pattern_pinned
 
-                meta = load_metadata(atlas_or_loader.anchor_dir)
-                entry = meta.get(metadata_key(anchor_id, pattern_text), {})
-                return bool(entry.get("pinned", False))
-            except Exception:
-                return False
+            atlas_dir = getattr(atlas_or_loader, "anchor_dir", None)
+            return is_pattern_pinned(atlas_dir, anchor_id, pattern_text)
 
     from psa.advertisement.ledger import (
         apply_decay,

@@ -51,7 +51,7 @@ def test_exponential_decay_multiplies_ledger(tmp_path):
     assert abs(row[0] - expected) < 1e-6
 
 
-def test_decay_increments_consecutive_when_below_threshold(tmp_path):
+def test_decay_does_not_advance_negative_cycles_without_new_signals(tmp_path):
     from psa.advertisement.ledger import apply_decay
 
     db = _seed(tmp_path, ledger=-0.1, cnc=3)
@@ -59,10 +59,10 @@ def test_decay_increments_consecutive_when_below_threshold(tmp_path):
     row = db.execute(
         "SELECT consecutive_negative_cycles FROM pattern_ledger"
     ).fetchone()
-    assert row[0] == 4
+    assert row[0] == 3
 
 
-def test_decay_resets_consecutive_when_at_or_above_threshold(tmp_path):
+def test_decay_does_not_reset_negative_cycles_without_new_signals(tmp_path):
     from psa.advertisement.ledger import apply_decay
 
     db = _seed(tmp_path, ledger=1.0, cnc=5)
@@ -70,7 +70,7 @@ def test_decay_resets_consecutive_when_at_or_above_threshold(tmp_path):
     row = db.execute(
         "SELECT consecutive_negative_cycles FROM pattern_ledger"
     ).fetchone()
-    assert row[0] == 0
+    assert row[0] == 5
 
 
 def test_decay_applies_shadow_independently(tmp_path):
@@ -85,7 +85,7 @@ def test_decay_applies_shadow_independently(tmp_path):
         "SELECT shadow_ledger, shadow_consecutive FROM pattern_ledger"
     ).fetchone()
     assert row[0] < 0  # still negative after decay
-    assert row[1] == 3  # incremented
+    assert row[1] == 2  # decay alone does not increment
 
 
 def test_evaluate_removal_requires_grace_expired(tmp_path):
@@ -147,6 +147,30 @@ def test_evaluate_removal_requires_sustained_cycles(tmp_path):
     assert result.removal_candidates == []
     # shadow sustained_cycles=7 also not met
     assert result.shadow_candidates == []
+
+
+def test_dormancy_alone_does_not_create_removal_candidate(tmp_path):
+    """A negative ledger without sustained negative signal history is retained."""
+    from psa.advertisement.ledger import evaluate_removal
+    from unittest.mock import MagicMock
+
+    db = _seed(tmp_path, ledger=-2.0, cnc=0)
+    config = MagicMock(
+        removal_threshold=0.0, sustained_cycles=21, min_patterns_floor=5,
+        shadow=MagicMock(sustained_cycles=7),
+    )
+    atlas = MagicMock()
+    atlas.get_anchor = lambda aid: MagicMock(
+        generated_query_patterns=["p1", "p2", "p3", "p4", "p5", "pattern"]
+    )
+    shielded_fn = lambda tenant_id, anchor_ids: set()
+    pinned_fn = lambda anchor_id, pattern_text: False
+
+    result = evaluate_removal(
+        db=db, atlas=atlas, tenant_id="default", config=config,
+        shielded_anchor_fn=shielded_fn, pinned_fn=pinned_fn,
+    )
+    assert result.removal_candidates == []
 
 
 def test_evaluate_removal_respects_min_patterns_floor(tmp_path):

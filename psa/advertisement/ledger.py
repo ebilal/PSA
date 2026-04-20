@@ -83,6 +83,7 @@ def upsert_ledger(
 
     On insert, stamps `grace_expires_at = now + grace_days`.
     `created_at` is set once; `last_updated_at` is always refreshed.
+    Negative-cycle counters advance only when fresh query signals arrive.
     """
     now = _now_iso()
     grace = (datetime.now(timezone.utc) + timedelta(days=grace_days)).isoformat()
@@ -91,11 +92,20 @@ def upsert_ledger(
         INSERT INTO pattern_ledger
             (pattern_id, anchor_id, pattern_text,
              ledger, shadow_ledger,
+             consecutive_negative_cycles, shadow_consecutive,
              grace_expires_at, created_at, last_updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(pattern_id) DO UPDATE SET
             ledger = ledger + excluded.ledger,
             shadow_ledger = shadow_ledger + excluded.shadow_ledger,
+            consecutive_negative_cycles = CASE
+                WHEN ledger + excluded.ledger < 0 THEN consecutive_negative_cycles + 1
+                ELSE 0
+            END,
+            shadow_consecutive = CASE
+                WHEN shadow_ledger + excluded.shadow_ledger < 0 THEN shadow_consecutive + 1
+                ELSE 0
+            END,
             last_updated_at = excluded.last_updated_at
         """,
         (
@@ -104,6 +114,8 @@ def upsert_ledger(
             pattern_text,
             ledger_delta,
             shadow_delta,
+            1 if ledger_delta < 0 else 0,
+            1 if shadow_delta < 0 else 0,
             grace,
             now,
             now,
@@ -206,11 +218,13 @@ def record_query_signals(
 
 
 def apply_decay(db: sqlite3.Connection, tau_days: int, removal_threshold: float = 0.0) -> None:
-    """Apply exponential decay to active rows + update consecutive counters.
+    """Apply exponential decay to active rows.
 
     ledger ← ledger · exp(−1/tau)   (shadow_ledger likewise)
-    consecutive_negative_cycles ← (ledger<threshold) ? prev+1 : 0
-    shadow_consecutive ← (shadow_ledger<threshold) ? prev+1 : 0
+
+    Negative-cycle counters are intentionally NOT updated here. Dormancy alone
+    is not enough to advance a pattern toward removal; only fresh query signals
+    can advance or reset the streak counters.
 
     Operates on unarchived rows only.
     """
@@ -221,18 +235,10 @@ def apply_decay(db: sqlite3.Connection, tau_days: int, removal_threshold: float 
         SET
             ledger = ledger * ?,
             shadow_ledger = shadow_ledger * ?,
-            consecutive_negative_cycles = CASE
-                WHEN ledger * ? < ? THEN consecutive_negative_cycles + 1
-                ELSE 0
-            END,
-            shadow_consecutive = CASE
-                WHEN shadow_ledger * ? < ? THEN shadow_consecutive + 1
-                ELSE 0
-            END,
             last_updated_at = ?
         WHERE removed_at IS NULL
         """,
-        (factor, factor, factor, removal_threshold, factor, removal_threshold, _now_iso()),
+        (factor, factor, _now_iso()),
     )
     db.commit()
 
