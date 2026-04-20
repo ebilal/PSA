@@ -192,7 +192,7 @@ class LifecyclePipeline:
                     try:
                         from .full_atlas_scorer import FullAtlasScorer
                         from .training.coactivation_data import generate_coactivation_data
-                        from .training.train_coactivation import CoActivationTrainer
+                        from .training.train_coactivation import run_training_subprocess
                         from .embeddings import EmbeddingModel
 
                         labels_path = os.path.join(
@@ -215,9 +215,11 @@ class LifecyclePipeline:
                             coact_output = os.path.join(
                                 tenant.root_dir, "models", "coactivation_latest"
                             )
-                            CoActivationTrainer(output_dir=coact_output).train(
+                            run_training_subprocess(
+                                output_dir=coact_output,
                                 data_dir=coact_data_dir,
                                 n_anchors=len(atlas.cards),
+                                centroid_dim=768,
                             )
                             summary["coactivation_trained"] = True
                             print("        Co-activation model trained.")

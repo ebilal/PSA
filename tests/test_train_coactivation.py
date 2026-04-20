@@ -8,6 +8,7 @@ Two tests:
 
 import os
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -230,3 +231,46 @@ def test_train_accepts_weight_decay(tmp_path):
     assert optimizer_calls["weight_decay"] == 0.05
     assert optimizer_calls["lr"] == 1e-3
     assert meta["weight_decay"] == 0.05
+
+
+def test_run_training_subprocess_invokes_module_and_checks_artifacts(tmp_path, monkeypatch):
+    """Inference-contaminated callers should be able to isolate training in a fresh process."""
+    from psa.training.train_coactivation import run_training_subprocess
+
+    calls = {}
+    data_dir = str(tmp_path / "data")
+    output_dir = str(tmp_path / "output")
+    os.makedirs(data_dir)
+    os.makedirs(output_dir)
+
+    def fake_run(cmd, check):
+        calls["cmd"] = cmd
+        calls["check"] = check
+        with open(os.path.join(output_dir, "coactivation_model.pt"), "wb") as handle:
+            handle.write(b"ok")
+        with open(os.path.join(output_dir, "coactivation_version.json"), "w") as handle:
+            json.dump({"validation_loss": 0.1}, handle)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    run_training_subprocess(
+        data_dir=data_dir,
+        output_dir=output_dir,
+        n_anchors=256,
+        centroid_dim=768,
+        epochs=8,
+        batch_size=16,
+        learning_rate=1e-4,
+        weight_decay=0.01,
+    )
+
+    assert calls["check"] is True
+    assert calls["cmd"][:4] == [
+        sys.executable,
+        "-m",
+        "psa.training.train_coactivation",
+        "--data-dir",
+    ]
+    assert "--output-dir" in calls["cmd"]
+    assert "--epochs" in calls["cmd"]
+    assert "--weight-decay" in calls["cmd"]

@@ -15,12 +15,68 @@ Requirements: torch (install via psa[training])
 import json
 import logging
 import os
+import subprocess
+import sys
+import argparse
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 import numpy as np
 
 logger = logging.getLogger("psa.training.train_coactivation")
+
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 0.01
+EPOCHS = 8
+BATCH_SIZE = 16
+
+
+def run_training_subprocess(
+    *,
+    data_dir: str,
+    output_dir: str,
+    n_anchors: int = 256,
+    centroid_dim: int = 768,
+    epochs: int = EPOCHS,
+    batch_size: int = BATCH_SIZE,
+    learning_rate: float = LEARNING_RATE,
+    weight_decay: float = WEIGHT_DECAY,
+) -> None:
+    """Run co-activation training in a fresh Python process.
+
+    This isolates the trainer from sentence-transformers inference state in the
+    parent process, which otherwise segfaults on some Apple Silicon setups when
+    training follows full-atlas scoring in the same interpreter.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "psa.training.train_coactivation",
+        "--data-dir",
+        data_dir,
+        "--output-dir",
+        output_dir,
+        "--n-anchors",
+        str(n_anchors),
+        "--centroid-dim",
+        str(centroid_dim),
+        "--epochs",
+        str(epochs),
+        "--batch-size",
+        str(batch_size),
+        "--learning-rate",
+        str(learning_rate),
+        "--weight-decay",
+        str(weight_decay),
+    ]
+    subprocess.run(cmd, check=True)
+
+    model_path = os.path.join(output_dir, "coactivation_model.pt")
+    version_path = os.path.join(output_dir, "coactivation_version.json")
+    if not (os.path.exists(model_path) and os.path.exists(version_path)):
+        raise RuntimeError(
+            f"Co-activation subprocess completed without writing expected artifacts in {output_dir}"
+        )
 
 
 class CoActivationTrainer:
@@ -39,8 +95,8 @@ class CoActivationTrainer:
     def __init__(
         self,
         output_dir: str,
-        learning_rate: float = 1e-4,
-        weight_decay: float = 0.01,
+        learning_rate: float = LEARNING_RATE,
+        weight_decay: float = WEIGHT_DECAY,
     ):
         self.output_dir = output_dir
         self.learning_rate = learning_rate
@@ -51,8 +107,8 @@ class CoActivationTrainer:
         data_dir: str,
         n_anchors: int = 256,
         centroid_dim: int = 768,
-        epochs: int = 8,
-        batch_size: int = 16,
+        epochs: int = EPOCHS,
+        batch_size: int = BATCH_SIZE,
         val_split: float = 0.15,
         return_losses: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None,
@@ -281,3 +337,37 @@ class CoActivationTrainer:
         _report(f"Co-activation model saved to {self.output_dir}")
 
         return epoch_losses if return_losses else None
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Train the PSA co-activation model")
+    parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--n-anchors", type=int, default=256)
+    parser.add_argument("--centroid-dim", type=int, default=768)
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
+    parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY)
+    return parser
+
+
+def main() -> None:
+    args = _build_arg_parser().parse_args()
+    trainer = CoActivationTrainer(
+        output_dir=args.output_dir,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+    trainer.train(
+        data_dir=args.data_dir,
+        n_anchors=args.n_anchors,
+        centroid_dim=args.centroid_dim,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        progress_callback=print,
+    )
+
+
+if __name__ == "__main__":
+    main()

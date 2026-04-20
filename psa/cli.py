@@ -1005,7 +1005,7 @@ def cmd_train(args):
             from .embeddings import EmbeddingModel
             from .full_atlas_scorer import FullAtlasScorer
             from .training.coactivation_data import generate_coactivation_data
-            from .training.train_coactivation import CoActivationTrainer
+            from .training.train_coactivation import run_training_subprocess
 
             fas = FullAtlasScorer.from_model_path(sv.model_path, atlas)
             emb = EmbeddingModel()
@@ -1020,12 +1020,11 @@ def cmd_train(args):
             print(f"  Generated {n_coact} co-activation training examples.")
 
             coact_output = os.path.join(tenant.root_dir, "models", "coactivation_latest")
-            coact_trainer = CoActivationTrainer(output_dir=coact_output)
-            _progress = lambda message: print(f"  {message}", flush=True)
-            coact_trainer.train(
+            run_training_subprocess(
+                output_dir=coact_output,
                 data_dir=coact_data_dir,
                 n_anchors=len(atlas.cards),
-                progress_callback=_progress,
+                centroid_dim=768,
             )
             model_path = os.path.join(coact_output, "coactivation_model.pt")
             version_path = os.path.join(coact_output, "coactivation_version.json")
