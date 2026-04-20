@@ -22,6 +22,8 @@ logger = logging.getLogger("psa.forgetting")
 
 ANCHOR_MEMORY_BUDGET = 100
 MAX_MEMORIES = 50_000
+GLOBAL_CAP_ANCHOR_WEIGHT = 0.7
+GLOBAL_CAP_TENANT_WEIGHT = 0.3
 
 
 # ── Forgetting score ─────────────────────────────────────────────────────────
@@ -41,41 +43,112 @@ def _days_since(iso_timestamp: Optional[str], now: datetime) -> float:
         return 0.0
 
 
+# ── Low-usage pressure (anchor-relative) ─────────────────────────────────────
+
+SMALL_ANCHOR_THRESHOLD = 5
+
+
+def _timestamp_for_sort(iso: Optional[str]) -> float:
+    if not iso:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _usage_sort_key(m: MemoryObject) -> tuple:
+    """Ascending sort key: least-used (and weakest on tiebreaks) sorts first.
+
+    Tiebreak order: pack_count, select_count, quality_score, then older created_at first.
+    A memory that sorts earlier gets HIGHER pressure.
+    """
+    return (
+        m.pack_count,
+        m.select_count,
+        m.quality_score,
+        _timestamp_for_sort(m.created_at),
+    )
+
+
+def low_usage_pressure(memory: MemoryObject, peers: list) -> float:
+    """
+    Rank-based pressure within a peer set. Higher = more disposable.
+
+    - Small anchors (< SMALL_ANCHOR_THRESHOLD peers): returns 0.0 (too noisy).
+    - All-zero usage population: returns 0.0 (no signal; defer to crowding/quality).
+    - Otherwise: bottom-ranked returns 1.0; top returns 0.0; linear between.
+    """
+    n = len(peers)
+    if n < SMALL_ANCHOR_THRESHOLD:
+        return 0.0
+    if all(p.pack_count == 0 and p.select_count == 0 for p in peers):
+        return 0.0
+
+    ordered = sorted(peers, key=_usage_sort_key)
+    try:
+        rank = next(
+            i for i, p in enumerate(ordered) if p.memory_object_id == memory.memory_object_id
+        )
+    except StopIteration:
+        return 0.0
+    if n == 1:
+        return 0.0
+    return 1.0 - rank / (n - 1)
+
+
+def low_usage_pressure_map(peers: list) -> dict:
+    """
+    Compute low_usage_pressure for every peer in one pass.
+
+    Returns a dict keyed by memory_object_id. Equivalent to calling
+    low_usage_pressure(m, peers) for each m, but O(n log n) instead of O(n² log n).
+    """
+    n = len(peers)
+    if n < SMALL_ANCHOR_THRESHOLD:
+        return {p.memory_object_id: 0.0 for p in peers}
+    if all(p.pack_count == 0 and p.select_count == 0 for p in peers):
+        return {p.memory_object_id: 0.0 for p in peers}
+    if n == 1:
+        return {peers[0].memory_object_id: 0.0}
+
+    ordered = sorted(peers, key=_usage_sort_key)
+    return {p.memory_object_id: 1.0 - i / (n - 1) for i, p in enumerate(ordered)}
+
+
 def forgetting_score(
     memory: MemoryObject,
     anchor_size: int,
     target_per_anchor: int = ANCHOR_MEMORY_BUDGET,
     now: Optional[datetime] = None,
+    *,
+    usage_pressure: float = 0.0,
 ) -> float:
     """
     Compute a forgetting score for a memory. Higher = more disposable.
 
     Four terms, no tunable weights:
-      + idle pressure:    min(idle_days / 90, 1.0)
-      + crowding pressure: min(overflow / target, 1.0)
-      - usage protection:  min(log(1 + pack_count) / 3.0, 1.0)
-      - quality protection: quality_score
+      + usage_pressure:   rank-based, precomputed by caller (range [0, 1])
+      + crowding pressure:    min(overflow / target, 1.0)
+      - usage protection:     min(log(1 + pack_count) / 3.0, 1.0)
+      - quality protection:   quality_score
 
-    Range is roughly [-1, 2].
+    Range is roughly [-2, 2]. Dormancy alone is NOT a disposal signal.
     """
     if now is None:
         now = datetime.now(timezone.utc)
 
-    # Grace period: memories created in the last 24 hours are never pruned
     age_days = _days_since(memory.created_at, now)
     if age_days < 1.0:
-        return -10.0  # strongly protect new memories
+        return -10.0
 
-    idle_days = _days_since(memory.last_packed or memory.created_at, now)
     overflow = max(0, anchor_size - target_per_anchor) / max(target_per_anchor, 1)
-    usage = log(1 + memory.pack_count) / 3.0  # 20 packs ~ 1.0
+    usage = log(1 + memory.pack_count) / 3.0
 
-    return (
-        min(idle_days / 90.0, 1.0)  # idle pressure (caps at 90 days)
-        + min(overflow, 1.0)  # crowding pressure
-        - min(usage, 1.0)  # usage protection
-        - memory.quality_score  # quality protection
-    )
+    return usage_pressure + min(overflow, 1.0) - min(usage, 1.0) - memory.quality_score
 
 
 # ── Per-anchor pruning ───────────────────────────────────────────────────────
@@ -89,7 +162,8 @@ def prune_anchor(
     now: Optional[datetime] = None,
 ) -> int:
     """
-    If an anchor exceeds its memory budget, archive the lowest-value memories.
+    If an anchor exceeds its memory budget, archive the lowest-value memories
+    using anchor-relative low-usage pressure as the primary disposal signal.
 
     Returns the number of memories archived.
     """
@@ -101,12 +175,27 @@ def prune_anchor(
         now = datetime.now(timezone.utc)
 
     anchor_size = len(memories)
-    scored = sorted(
-        memories,
-        key=lambda m: forgetting_score(m, anchor_size, budget, now),
-        reverse=True,
-    )
+    pressure_by_id = low_usage_pressure_map(memories)
+
+    def score(m: MemoryObject) -> float:
+        return forgetting_score(
+            m,
+            anchor_size,
+            budget,
+            now,
+            usage_pressure=pressure_by_id[m.memory_object_id],
+        )
+
+    scored = sorted(memories, key=score, reverse=True)
     to_archive = scored[: len(memories) - budget]
+    for m in to_archive:
+        logger.info(
+            "forgetting.shadow anchor=%d mo=%s archived=1 pressure=%.3f score=%.3f",
+            anchor_id,
+            m.memory_object_id,
+            pressure_by_id[m.memory_object_id],
+            score(m),
+        )
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)
 
@@ -133,19 +222,18 @@ def enforce_global_cap(
     Enforce a global memory cap for a tenant.
 
     Phase 1: hard-delete memories archived > archived_ttl_days ago.
-    Phase 2: if still over cap, archive the lowest-scoring active memories.
+    Phase 2: if still over cap, archive the lowest-scoring active memories
+             using a hybrid (anchor-relative + tenant-wide) pressure score.
 
     Returns a dict with counts of actions taken.
     """
     result = {"hard_deleted": 0, "archived": 0}
 
-    # Phase 1: hard-delete old archived memories
     deleted = store.delete_old_archived(tenant_id, older_than_days=archived_ttl_days)
     result["hard_deleted"] = deleted
     if deleted:
         logger.info("Global cap: hard-deleted %d old archived memories", deleted)
 
-    # Phase 2: check if still over cap
     active_count = store.count(tenant_id)
     if active_count <= max_memories:
         return result
@@ -153,17 +241,43 @@ def enforce_global_cap(
     excess = active_count - max_memories
     now = datetime.now(timezone.utc)
 
-    # Get all active memories with embeddings, score them, archive the worst
     all_memories = store.get_all_with_embeddings(tenant_id)
     if not all_memories:
         return result
 
-    scored = sorted(
-        all_memories,
-        key=lambda m: forgetting_score(m, len(all_memories), max_memories // 256, now),
-        reverse=True,
-    )
+    by_anchor: dict = {}
+    for m in all_memories:
+        by_anchor.setdefault(m.primary_anchor_id, []).append(m)
+
+    anchor_pressure: dict = {}
+    for peers in by_anchor.values():
+        anchor_pressure.update(low_usage_pressure_map(peers))
+    tenant_pressure = low_usage_pressure_map(all_memories)
+
+    def score(m: MemoryObject) -> float:
+        hybrid = (
+            GLOBAL_CAP_ANCHOR_WEIGHT * anchor_pressure[m.memory_object_id]
+            + GLOBAL_CAP_TENANT_WEIGHT * tenant_pressure[m.memory_object_id]
+        )
+        return forgetting_score(
+            m,
+            active_count,
+            ANCHOR_MEMORY_BUDGET,
+            now,
+            usage_pressure=hybrid,
+        )
+
+    scored = sorted(all_memories, key=score, reverse=True)
     to_archive = scored[:excess]
+    for m in to_archive:
+        logger.info(
+            "forgetting.shadow global mo=%s anchor=%d anchor_p=%.3f tenant_p=%.3f score=%.3f",
+            m.memory_object_id,
+            m.primary_anchor_id,
+            anchor_pressure[m.memory_object_id],
+            tenant_pressure[m.memory_object_id],
+            score(m),
+        )
     archive_ids = [m.memory_object_id for m in to_archive]
     store.archive_memories(archive_ids)
     result["archived"] = len(archive_ids)

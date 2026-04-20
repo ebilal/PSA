@@ -708,7 +708,11 @@ def _load_queries_from_sessions(
     queries: List[Tuple[str, str]] = []
     seen: set = set()
 
-    for fpath in _glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True):
+    # Newest sessions first so max_queries caps don't starve recent queries.
+    session_files = _glob.glob(os.path.join(sessions_dir, "**", "*.jsonl"), recursive=True)
+    session_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
+
+    for fpath in session_files:
         if len(queries) >= max_queries:
             break
         try:

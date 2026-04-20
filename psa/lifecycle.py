@@ -173,10 +173,17 @@ class LifecyclePipeline:
 
             # Label queries for selector training (runs every time, not just on rebuild)
             print("  [6/6] Labeling queries for selector training...")
-            labeled = self._label_queries(
-                tenant, store, atlas, sessions_dir, batch_size=label_batch_size
-            )
-            summary["queries_labeled"] = labeled
+            try:
+                labeled = self._label_queries(
+                    tenant, store, atlas, sessions_dir, batch_size=label_batch_size
+                )
+                summary["queries_labeled"] = labeled
+            except Exception as e:
+                import traceback
+                print(f"        Labeling failed: {e}")
+                traceback.print_exc()
+                logger.error("Labeling failed: %s", e, exc_info=True)
+                labeled = 0
 
             # Retrain selector if training gates are met
             if labeled > 0 or summary["atlas_rebuilt"]:
@@ -413,9 +420,16 @@ class LifecyclePipeline:
         # batch_size=0 means label all available queries
         effective_batch = batch_size if batch_size > 0 else 10_000
 
+        # Hard cap on candidate queries considered for pre-scoring.
+        # Prevents 30k-query stalls; _load_queries_from_sessions returns
+        # newest-first, so this keeps the most recent candidates.
+        PRESCORE_CANDIDATE_CAP = 500
+
         # Load real user queries from sessions
         if sessions_dir:
-            queries = _load_queries_from_sessions(sessions_dir, max_queries=effective_batch * 3)
+            queries = _load_queries_from_sessions(
+                sessions_dir, max_queries=PRESCORE_CANDIDATE_CAP * 2
+            )
         else:
             queries = []
 
@@ -436,7 +450,8 @@ class LifecyclePipeline:
                             labeled_ids.add(json.loads(line).get("query_id", ""))
                         except Exception:
                             pass
-        queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids][:effective_batch]
+        queries = [(qid, qt) for qid, qt in queries if qid not in labeled_ids]
+        queries = queries[: min(effective_batch, PRESCORE_CANDIDATE_CAP)]
 
         if not queries:
             return 0
@@ -468,26 +483,75 @@ class LifecyclePipeline:
             return 0
 
         # Pre-score queries to classify as successful vs poor-performing.
-        # A query is "successful" when the top selector score is >= 0.6;
-        # "poor" when the pipeline returns no anchors or a low top score.
-        # This ensures oracle labels contain both positive and negative signal.
+        # Results are cached on disk so re-runs skip already-classified queries.
         _SUCCESS_THRESHOLD = 0.6
+        prescore_cache_path = os.path.join(
+            tenant.root_dir, "training", "prescore_cache.jsonl"
+        )
+        prescore_cache: dict = {}
+        if os.path.exists(prescore_cache_path):
+            import json
+            with open(prescore_cache_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        prescore_cache[rec["query_id"]] = float(rec["top_score"])
+                    except Exception:
+                        pass
+
         successful_queries: List = []
         poor_queries: List = []
-        for qid, query_text in queries:
-            try:
-                result = pipeline.query(query_text, top_k_candidates=8)
-                top_score = (
-                    max(a.selector_score for a in result.selected_anchors)
-                    if result.selected_anchors
-                    else 0.0
-                )
+        n_queries = len(queries)
+        to_score = [(qid, qt) for qid, qt in queries if qid not in prescore_cache]
+        n_cached = n_queries - len(to_score)
+
+        # Classify cache hits immediately
+        for qid, qt in queries:
+            if qid in prescore_cache:
+                if prescore_cache[qid] >= _SUCCESS_THRESHOLD:
+                    successful_queries.append((qid, qt))
+                else:
+                    poor_queries.append((qid, qt))
+
+        print(
+            f"        Pre-scoring {len(to_score)} candidate queries "
+            f"({n_cached} cached from prior runs)...",
+            flush=True,
+        )
+
+        import time
+        t0 = time.time()
+        n_to_score = len(to_score)
+        with open(prescore_cache_path, "a") as cache_f:
+            for i, (qid, query_text) in enumerate(to_score, 1):
+                top_score = 0.0
+                try:
+                    result = pipeline.query(query_text, top_k_candidates=8)
+                    top_score = (
+                        max(a.selector_score for a in result.selected_anchors)
+                        if result.selected_anchors
+                        else 0.0
+                    )
+                except Exception:
+                    pass
                 if top_score >= _SUCCESS_THRESHOLD:
                     successful_queries.append((qid, query_text))
                 else:
                     poor_queries.append((qid, query_text))
-            except Exception:
-                poor_queries.append((qid, query_text))
+                cache_f.write(
+                    json.dumps({"query_id": qid, "top_score": top_score}) + "\n"
+                )
+                if i == 1 or i % 50 == 0 or i == n_to_score:
+                    elapsed = time.time() - t0
+                    rate = i / elapsed if elapsed > 0 else 0
+                    eta = (n_to_score - i) / rate if rate > 0 else 0
+                    print(
+                        f"        Pre-score [{i}/{n_to_score}] {rate:.1f} q/s, ETA {eta:.0f}s",
+                        flush=True,
+                    )
 
         # Sample successful queries for balanced oracle labels (1:2 ratio)
         sampled_success: List = []
