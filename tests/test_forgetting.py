@@ -104,3 +104,33 @@ def test_low_usage_pressure_tiebreak_by_quality_then_age():
     filler = [make_memory(pack_count=i + 10) for i in range(8)]
     peers = [older, newer] + filler
     assert low_usage_pressure(older, peers) > low_usage_pressure(newer, peers)
+
+
+def test_grace_period_preserved():
+    fresh = make_memory(created_at=now_utc() - timedelta(hours=1))
+    assert forgetting_score(fresh, anchor_size=1, now=now_utc()) == -10.0
+
+
+def test_heavy_usage_reduces_score():
+    light = make_memory(pack_count=0, created_at=old(10))
+    heavy = make_memory(pack_count=50, created_at=old(10))
+    s_light = forgetting_score(light, anchor_size=10, now=now_utc(), low_usage_pressure=1.0)
+    s_heavy = forgetting_score(heavy, anchor_size=10, now=now_utc(), low_usage_pressure=0.0)
+    assert s_heavy < s_light
+
+
+def test_high_quality_reduces_score():
+    low_q = make_memory(pack_count=0, quality_score=0.1, created_at=old(10))
+    high_q = make_memory(pack_count=0, quality_score=0.9, created_at=old(10))
+    s_low = forgetting_score(low_q, anchor_size=10, now=now_utc(), low_usage_pressure=1.0)
+    s_high = forgetting_score(high_q, anchor_size=10, now=now_utc(), low_usage_pressure=1.0)
+    assert s_high < s_low
+
+
+def test_score_range_bounds():
+    m = make_memory(pack_count=0, quality_score=0.0, created_at=old(10))
+    upper = forgetting_score(m, anchor_size=10_000, now=now_utc(), low_usage_pressure=1.0)
+    assert upper <= 2.0 + 1e-9
+    strong = make_memory(pack_count=500, quality_score=1.0, created_at=old(10))
+    lower = forgetting_score(strong, anchor_size=1, now=now_utc(), low_usage_pressure=0.0)
+    assert lower >= -2.0 - 1e-9

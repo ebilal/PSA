@@ -101,35 +101,35 @@ def forgetting_score(
     anchor_size: int,
     target_per_anchor: int = ANCHOR_MEMORY_BUDGET,
     now: Optional[datetime] = None,
+    *,
+    low_usage_pressure: float = 0.0,
 ) -> float:
     """
     Compute a forgetting score for a memory. Higher = more disposable.
 
     Four terms, no tunable weights:
-      + idle pressure:    min(idle_days / 90, 1.0)
-      + crowding pressure: min(overflow / target, 1.0)
-      - usage protection:  min(log(1 + pack_count) / 3.0, 1.0)
-      - quality protection: quality_score
+      + low_usage_pressure:   rank-based, precomputed by caller (range [0, 1])
+      + crowding pressure:    min(overflow / target, 1.0)
+      - usage protection:     min(log(1 + pack_count) / 3.0, 1.0)
+      - quality protection:   quality_score
 
-    Range is roughly [-1, 2].
+    Range is roughly [-2, 2]. Dormancy alone is NOT a disposal signal.
     """
     if now is None:
         now = datetime.now(timezone.utc)
 
-    # Grace period: memories created in the last 24 hours are never pruned
     age_days = _days_since(memory.created_at, now)
     if age_days < 1.0:
-        return -10.0  # strongly protect new memories
+        return -10.0
 
-    idle_days = _days_since(memory.last_packed or memory.created_at, now)
     overflow = max(0, anchor_size - target_per_anchor) / max(target_per_anchor, 1)
-    usage = log(1 + memory.pack_count) / 3.0  # 20 packs ~ 1.0
+    usage = log(1 + memory.pack_count) / 3.0
 
     return (
-        min(idle_days / 90.0, 1.0)  # idle pressure (caps at 90 days)
-        + min(overflow, 1.0)  # crowding pressure
-        - min(usage, 1.0)  # usage protection
-        - memory.quality_score  # quality protection
+        low_usage_pressure
+        + min(overflow, 1.0)
+        - min(usage, 1.0)
+        - memory.quality_score
     )
 
 
