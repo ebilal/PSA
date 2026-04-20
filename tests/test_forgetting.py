@@ -52,3 +52,55 @@ def test_fixture_builds_memory():
     m = make_memory(pack_count=3, created_at=old(10))
     assert m.pack_count == 3
     assert m.primary_anchor_id == 1
+
+
+def test_age_alone_does_not_raise_score():
+    """Two memories identical except created_at must score identically."""
+    young = make_memory(pack_count=0, quality_score=0.5, created_at=old(30))
+    ancient = make_memory(pack_count=0, quality_score=0.5, created_at=old(365))
+
+    s_young = forgetting_score(young, anchor_size=10, now=now_utc(), low_usage_pressure=0.5)
+    s_ancient = forgetting_score(ancient, anchor_size=10, now=now_utc(), low_usage_pressure=0.5)
+
+    assert s_young == pytest.approx(s_ancient)
+
+
+from psa.forgetting import low_usage_pressure  # noqa: E402
+
+
+def test_low_usage_pressure_small_anchor_returns_zero():
+    peers = [make_memory(pack_count=i) for i in range(4)]  # N=4 < 5
+    assert low_usage_pressure(peers[0], peers) == 0.0
+    assert low_usage_pressure(peers[-1], peers) == 0.0
+
+
+def test_low_usage_pressure_all_zero_returns_zero():
+    peers = [make_memory(pack_count=0, select_count=0) for _ in range(10)]
+    for p in peers:
+        assert low_usage_pressure(p, peers) == 0.0
+
+
+def test_low_usage_pressure_ranks_bottom_highest():
+    peers = [make_memory(pack_count=i) for i in range(10)]  # 0..9
+    bottom = peers[0]
+    top = peers[-1]
+    p_bottom = low_usage_pressure(bottom, peers)
+    p_top = low_usage_pressure(top, peers)
+    assert p_bottom == pytest.approx(1.0)
+    assert p_top == pytest.approx(0.0)
+    assert p_bottom > p_top
+
+
+def test_low_usage_pressure_monotonic_with_rank():
+    peers = [make_memory(pack_count=i) for i in range(10)]
+    pressures = [low_usage_pressure(p, peers) for p in peers]
+    assert pressures == sorted(pressures, reverse=True)
+
+
+def test_low_usage_pressure_tiebreak_by_quality_then_age():
+    """Identical pack/select: older (older created_at) sorts below → higher pressure."""
+    older = make_memory(pack_count=5, quality_score=0.3, created_at=old(100))
+    newer = make_memory(pack_count=5, quality_score=0.3, created_at=old(1))
+    filler = [make_memory(pack_count=i + 10) for i in range(8)]
+    peers = [older, newer] + filler
+    assert low_usage_pressure(older, peers) > low_usage_pressure(newer, peers)

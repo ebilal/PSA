@@ -41,6 +41,61 @@ def _days_since(iso_timestamp: Optional[str], now: datetime) -> float:
         return 0.0
 
 
+# ── Low-usage pressure (anchor-relative) ─────────────────────────────────────
+
+SMALL_ANCHOR_THRESHOLD = 5
+
+
+def _timestamp_for_sort(iso: Optional[str]) -> float:
+    if not iso:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _usage_sort_key(m: MemoryObject) -> tuple:
+    """Ascending sort key: least-used (and weakest on tiebreaks) sorts first.
+
+    Tiebreak order: pack_count, select_count, quality_score, then older created_at first.
+    A memory that sorts earlier gets HIGHER pressure.
+    """
+    return (
+        m.pack_count,
+        m.select_count,
+        m.quality_score,
+        _timestamp_for_sort(m.created_at),
+    )
+
+
+def low_usage_pressure(memory: MemoryObject, peers: list) -> float:
+    """
+    Rank-based pressure within a peer set. Higher = more disposable.
+
+    - Small anchors (< SMALL_ANCHOR_THRESHOLD peers): returns 0.0 (too noisy).
+    - All-zero usage population: returns 0.0 (no signal; defer to crowding/quality).
+    - Otherwise: bottom-ranked returns 1.0; top returns 0.0; linear between.
+    """
+    n = len(peers)
+    if n < SMALL_ANCHOR_THRESHOLD:
+        return 0.0
+    if all(p.pack_count == 0 and p.select_count == 0 for p in peers):
+        return 0.0
+
+    ordered = sorted(peers, key=_usage_sort_key)
+    try:
+        rank = next(i for i, p in enumerate(ordered) if p.memory_object_id == memory.memory_object_id)
+    except StopIteration:
+        return 0.0
+    if n == 1:
+        return 0.0
+    return 1.0 - rank / (n - 1)
+
+
 def forgetting_score(
     memory: MemoryObject,
     anchor_size: int,
